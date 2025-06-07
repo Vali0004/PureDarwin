@@ -70,6 +70,17 @@ extern void (*record_startup_extensions_function)(void);
 extern void (*load_security_extensions_function)(void);
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+__attribute__((weak))
+int __cxa_atexit(void (*func)(void)) {
+    return 0;
+}
+#ifdef __cplusplus
+}
+#endif
+
 static void bootstrapRecordStartupExtensions(void);
 static void bootstrapLoadSecurityExtensions(void);
 

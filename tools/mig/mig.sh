@@ -63,6 +63,8 @@ realpath()
 	return 1
 }
 
+UNAME_S="$(uname -s)"
+
 scriptPath=$(realpath "$0")
 scriptRoot=$(dirname "$scriptPath")
 migcomPath=$(realpath "${scriptRoot}/../libexec/migcom")
@@ -71,17 +73,27 @@ if [ -n "${SDKROOT}" ]; then
 	sdkRoot="${SDKROOT}";
 fi
 
-if [ -z "${MIGCC}" ]; then
-  xcrunPath="/usr/bin/xcrun"
-  if [ -x "${xcrunPath}" ]; then
-    MIGCC=`"${xcrunPath}" -sdk "$sdkRoot" -find cc`
-  else
-    MIGCC=$(realpath "${scriptRoot}/cc")
-  fi
+if [ "$UNAME_S" = "Linux" ]; then
+	xcrunPath="/usr/local/osxcross/bin/xcrun"
+else
+	xcrunPath="/usr/bin/xcrun"
 fi
 
-C=${MIGCC}
-M=${MIGCOM-${migcomPath}}
+if [ -z "${MIGCC}" ]; then
+	if [ -x "${xcrunPath}" ]; then
+		MIGCC=`"${xcrunPath}" -sdk "$sdkRoot" -find cc`
+	else
+		MIGCC=$(realpath "${scriptRoot}/cc")
+	fi
+fi
+
+if [ "$UNAME_S" = "Linux" ]; then
+	C=${MIGCC}
+	M=`"${xcrunPath}" -sdk "$sdkRoot" -find migcom`
+else
+	C=${MIGCC}
+	M=${MIGCOM-${migcomPath}}
+fi
 
 if [ $# -eq 1 ] && [ "$1" = "-version" ] ; then
 	"$M" "$@"
@@ -91,13 +103,20 @@ fi
 cppflags="-D__MACH30__"
 
 files=
-arch=`/usr/bin/arch`
 
-WORKTMP=`/usr/bin/mktemp -d "${TMPDIR:-/tmp}/mig.XXXXXX"`
+if [ "$UNAME_S" = "Linux" ] || [ "$UNAME_S" = "Darwin" ]; then
+    arch="$(uname -m)"
+else
+    echo "Unsupported OS: $UNAME_S"
+    exit 1
+fi
+
+# Create a temporary directory
+WORKTMP="$(mktemp -d "${TMPDIR:-/tmp}/mig.XXXXXX")"
 if [ $? -ne 0 ]; then
-      echo "Failure creating temporary work directory: ${WORKTMP}"
-      echo "Exiting..."
-      exit 1
+    echo "Failure creating temporary work directory: ${WORKTMP}"
+    echo "Exiting..."
+    exit 1
 fi
 
 # parse out the arguments until we hit plain file name(s)

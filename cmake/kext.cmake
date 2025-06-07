@@ -12,8 +12,13 @@ function(add_kext_bundle name)
 
     target_compile_definitions(${name} PRIVATE TARGET_OS_OSX KERNEL)
     target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fapple-kext>)
-    target_link_options(${name} PRIVATE "LINKER:-bundle")
-    target_link_options(${name} PRIVATE "SHELL:-undefined dynamic_lookup")
+    
+    if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(${name} PRIVATE "LINKER:-bundle")
+        target_link_options(${name} PRIVATE "SHELL:-undefined dynamic_lookup")
+    else()
+        target_link_options(${name} PRIVATE -Wl,-kext -undefined dynamic_lookup)
+    endif()
 
     if(SL_KERNEL_PRIVATE)
         target_compile_definitions(${name} PRIVATE KERNEL_PRIVATE)

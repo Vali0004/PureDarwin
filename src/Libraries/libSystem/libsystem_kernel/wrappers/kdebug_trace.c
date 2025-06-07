@@ -59,6 +59,10 @@ static int kdebug_signpost_internal(uint32_t debugid, uintptr_t arg1,
  * is intentional.
  */
 
+#ifndef atomic_compare_exchange_strong
+#define atomic_compare_exchange_strong(object, expected, desired) __c11_atomic_compare_exchange_strong(object, expected, desired, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
+#endif
+
 void *
 kdebug_typefilter(void)
 {

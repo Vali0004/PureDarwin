@@ -58,7 +58,7 @@ function(mig filename)
     endif()
 
     if(NOT MIG_ARCH)
-        set(MIG_ARCH i386)
+        set(MIG_ARCH x86_64)
     endif()
 
     get_filename_component(basename ${filename} NAME_WE)

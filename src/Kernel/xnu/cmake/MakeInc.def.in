@@ -306,7 +306,6 @@ CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
 	-fno-builtin \
 	-fno-common \
 	-ftrivial-auto-var-init=zero \
-	-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang \
 	-fsigned-bitfields \
 	-fmerge-all-constants \
 	-fno-c++-static-destructors \
@@ -501,7 +500,11 @@ SFLAGS	= $(SFLAGS_GEN) \
 #
 # Linker command
 #
-LD	= $(KC++) -nostdlib -fuse-ld=@LD_PATH@
+ifeq ($(UNAME_S),Linux)
+LD	= $(KC++) -fuse-ld=$(shell xcrun --find ld)
+else
+LD	= $(KC++) -fuse-ld=@LD_PATH@
+endif
 
 #
 # Default LDFLAGS
@@ -852,17 +855,25 @@ endif
 #
 export VPATH = .:$(SOURCE)
 
-
+# Host OS type
+UNAME_S := $(shell uname -s)
 
 #
 # Macros that control installation of kernel and its header files
 #
 # install flags for header files
 #
-INSTALL_FLAGS = -c -S -m 0444
-DATA_INSTALL_FLAGS = -c -S -m 0644
-DATA_INSTALL_FLAGS_RO = -c -S -m 0444
-EXEC_INSTALL_FLAGS = -c -S -m 0755
+ifeq ($(UNAME_S),Linux)
+	INSTALL_FLAGS = -m 0444
+	DATA_INSTALL_FLAGS = -m 0644
+	DATA_INSTALL_FLAGS_RO = -m 0444
+	EXEC_INSTALL_FLAGS = -m 0755
+else
+	INSTALL_FLAGS = -c -S -m 0444
+	DATA_INSTALL_FLAGS = -c -S -m 0644
+	DATA_INSTALL_FLAGS_RO = -c -S -m 0444
+	EXEC_INSTALL_FLAGS = -c -S -m 0755
+endif
 
 #
 # Header file destinations
