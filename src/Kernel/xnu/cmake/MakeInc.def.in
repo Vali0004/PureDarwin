@@ -302,6 +302,7 @@ BUILD_DSYM := 1
 # probes from the kernel.
 #
 CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
+	-fblocks \
 	-ferror-limit=10000 \
 	-fno-builtin \
 	-fno-common \
@@ -460,7 +461,7 @@ CFLAGS	= $(CFLAGS_GEN) \
 
 OTHER_CXXFLAGS	=
 
-CXXFLAGS_GEN  = -std=gnu++1z -fsized-deallocation -fapple-kext $(OTHER_CXXFLAGS)
+CXXFLAGS_GEN  = -std=gnu++1z -fblocks -fsized-deallocation -fapple-kext $(OTHER_CXXFLAGS)
 
 CXXFLAGS      = $(CXXFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG),CXXFLAGS_)) \
