@@ -9,22 +9,10 @@
 #define _IOKIT_ApplePIODMADefinitions_H
 #include <IOKit/IOTypes.h>
 
-constexpr uint32_t SafeBitRange32(uint32_t start, uint32_t end) {
-    if (start >= 32 || end >= 32 || start > end) return 0;
-    uint32_t high_mask = (end == 31) ? 0xFFFFFFFFu : ((1u << (end + 1)) - 1), low_mask  = (1u << start) - 1;
-    return high_mask & ~low_mask;
-}
-
-constexpr uint64_t SafeBitRange64(uint32_t start, uint32_t end) {
-    if (start >= 64 || end >= 64 || start > end) return 0;
-    uint64_t high_mask = (end == 63) ? ~0ull : ((1ull << (end + 1)) - 1), low_mask  = (1ull << start) - 1;
-    return high_mask & ~low_mask;
-}
-
-constexpr uint32_t APIODMABit(uint32_t bit) { return (bit < 32) ? (1u << bit) : 0u; }
-constexpr uint32_t APIODMABitRange32(uint32_t start, uint32_t end) { return SafeBitRange32(start, end); }
-constexpr uint64_t APIODMABitRange64(uint32_t start, uint32_t end) { return SafeBitRange64(start, end); }
-constexpr uint32_t APIODMABitRangePhase(uint32_t start, uint32_t /*end*/) { return start; }
+#define APIODMABit(bit)                  (1u << bit)
+#define APIODMABitRange32(start, end)    ((uint32_t)~((1ull << start) - 1) & ((1ull << end) | ((1ull << end) - 1)))
+#define APIODMABitRange64(start, end)    (~((1ull  << start) - 1) & ((1ull << end) | ((1ull << end) - 1)))
+#define APIODMABitRangePhase(start, end) (start)
 
 #define  kApplePIODMAID "piodma-id"
 
