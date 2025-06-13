@@ -30,7 +30,7 @@
 #include <libc.h>
 #include <mach-o/swap.h>
 #else
-#include "mach_compat.h"
+#include "../mach_compat.h"
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
