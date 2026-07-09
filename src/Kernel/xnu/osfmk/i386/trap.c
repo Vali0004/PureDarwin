@@ -1090,6 +1090,9 @@ user_trap(
 		 * EXC_BAD_INSTRUCTION which is more accurate. We just can't
 		 * win!
 		 */
+		printf("PD-DIAG: user #GP -> SIGSEGV: rip=0x%llx err=0x%x rsp=0x%llx (non-canonical deref?)\n",
+		    (unsigned long long)rip, err,
+		    (unsigned long long)(is_saved_state64(saved_state) ? saved_state64(saved_state)->isf.rsp : 0));
 		exc = EXC_BAD_ACCESS;
 		code = EXC_I386_GPFLT;
 		subcode = err;
@@ -1144,6 +1147,8 @@ user_trap(
 
 		/* PAL debug hook (empty on x86) */
 		pal_dbg_page_fault(thread, vaddr, kret);
+		printf("PD-DIAG: FATAL user #PF -> SIGSEGV: rip=0x%llx fault_addr=0x%llx err=0x%x kret=%d\n",
+		    (unsigned long long)rip, (unsigned long long)vaddr, err, kret);
 		exc = EXC_BAD_ACCESS;
 		code = kret;
 		subcode = vaddr;

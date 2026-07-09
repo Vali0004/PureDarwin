@@ -56,7 +56,7 @@ foreach(file IN LISTS HEADERS)
     set(OUTPUT_FILE ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage/${file})
     add_custom_command(OUTPUT ${OUTPUT_FILE}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage
-        COMMAND ${UNIFDEF_PATH} -UKERNEL -o ${OUTPUT_FILE}.tmp ${CMAKE_CURRENT_SOURCE_DIR}/include/IOKit/storage/${file} || cp ${CMAKE_CURRENT_SOURCE_DIR}/include/IOKit/storage/${file} ${OUTPUT_FILE}.tmp
+        COMMAND xcrun unifdef -UKERNEL -o ${OUTPUT_FILE}.tmp ${CMAKE_CURRENT_SOURCE_DIR}/include/IOKit/storage/${file} || cp ${CMAKE_CURRENT_SOURCE_DIR}/include/IOKit/storage/${file} ${OUTPUT_FILE}.tmp
         COMMAND mv ${OUTPUT_FILE}.tmp ${OUTPUT_FILE}
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/include/IOKit/storage/${file}
         COMMENT "unifdef ${file} (fallback to copy if needed)"

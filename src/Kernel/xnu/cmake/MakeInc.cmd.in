@@ -285,7 +285,7 @@ SUPPORTED_SIMULATOR_PLATFORMS := iPhoneSimulator iPhoneNanoSimulator tvSimulator
 SUPPORTED_PLATFORMS := MacOSX DriverKit $(SUPPORTED_SIMULATOR_PLATFORMS) $(SUPPORTED_EMBEDDED_PLATFORMS)
 
 # Platform-specific tools
-EDM_DBPATH ?= $(PLATFORMPATH)/usr/local/standalone/firmware/device_map.db
+EDM_DBPATH ?= $(PLATFORMPATH)/usr/locfl/standalone/firmware/device_map.db
 
 # Scripts or tools we build ourselves
 #
@@ -324,11 +324,7 @@ TOUCH = /usr/bin/touch
 SLEEP = /bin/sleep
 AWK = /usr/bin/awk
 SED = /usr/bin/sed
-ifeq ($(UNAME_S),Linux)
-	PLUTIL = /usr/bin/plistutil
-else
-	PLUTIL = /usr/bin/plutil
-endif
+PLUTIL = /usr/bin/plutil
 
 #
 # Command to generate host binaries. Intentionally not

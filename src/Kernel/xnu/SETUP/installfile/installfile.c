@@ -38,7 +38,6 @@
 #ifdef __APPLE__
 #include <copyfile.h>
 #include <sys/types.h>
-#include <sys/mode.h>
 #else
 #include <sys/sendfile.h>
 #endif

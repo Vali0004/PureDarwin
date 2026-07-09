@@ -90,6 +90,21 @@ pmap_pcid_configure(void)
 		pmap_pcid_disabled = TRUE;
 	}
 #endif
+
+	/*
+	 * PureDarwin bring-up override: the stock DEBUG logic above forces
+	 * no_shared_cr3=TRUE when PCID is unavailable (as on QEMU's IvyBridge,
+	 * which reports no PCID), enabling KPTI-style separate kernel/user CR3s.
+	 * That path relies on the __HIB doublemap user->kernel fault trampoline
+	 * switching CR3, which is broken in this environment: the first CPL3
+	 * fault (dyld demand-paging its own __TEXT) reaches ks_dispatch while CR3
+	 * is still the user pmap (which excludes the kernel high-half) ->
+	 * instruction-fetch #PF -> #GP -> #DF storm. RELEASE builds default
+	 * no_shared_cr3=FALSE (shared CR3, kernel mapped in every pmap), which
+	 * sidesteps the trampoline entirely. Force that here so DEBUG behaves
+	 * like RELEASE for this.
+	 */
+	no_shared_cr3 = FALSE;
 	if (pmap_pcid_disabled || no_shared_cr3) {
 		unsigned i;
 		/* Reset PCID status, as we may have picked up

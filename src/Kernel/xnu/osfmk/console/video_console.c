@@ -1261,6 +1261,30 @@ vcputc(__unused int l, __unused int u, int c)
 }
 
 /*
+ * vc_serial_putc: render a character to the graphics console as soon as it is
+ * initialized (gc_initialize, during PE_create_console), WITHOUT requiring the
+ * console to have been "enabled" (gc_enabled) by the later IOKit acquire path.
+ *
+ * This is used to mirror early kprintf/serial output onto the framebuffer so
+ * boot progress is visible on real hardware that has no serial port.  It runs
+ * under the kprintf_lock with interrupts disabled on the single boot CPU, so
+ * it deliberately takes no additional locks.
+ */
+void vc_serial_putc(char c);
+void
+vc_serial_putc(char c)
+{
+	if (gc_initialized) {
+		gc_hide_cursor(gc_x, gc_y);
+		gc_putchar(c);
+		if (c == '\n') {
+			gc_putchar('\r');
+		}
+		gc_show_cursor(gc_x, gc_y);
+	}
+}
+
+/*
  * Video Console (Back-End)
  * ------------------------
  */

@@ -214,30 +214,43 @@ tsc_init(void)
 		break;
 	}
 	default: {
-		uint64_t msr_flex_ratio;
-		uint64_t msr_platform_info;
-
-		/* See if FLEX_RATIO is being used */
-		msr_flex_ratio = rdmsr64(MSR_FLEX_RATIO);
-		msr_platform_info = rdmsr64(MSR_PLATFORM_INFO);
-		flex_ratio_min = (uint32_t)bitfield(msr_platform_info, 47, 40);
-		flex_ratio_max = (uint32_t)bitfield(msr_platform_info, 15, 8);
-		/* No BIOS-programed flex ratio. Use hardware max as default */
-		tscGranularity = flex_ratio_max;
-		if (msr_flex_ratio & bit(16)) {
-			/* Flex Enabled: Use this MSR if less than max */
-			flex_ratio = (uint32_t)bitfield(msr_flex_ratio, 15, 8);
-			if (flex_ratio < flex_ratio_max) {
-				tscGranularity = flex_ratio;
-			}
-		}
-
 		busFreq = EFI_get_frequency("FSBFrequency");
-		/* If EFI isn't configured correctly, use a constant
-		 * value. See 6036811.
-		 */
 		if (busFreq == 0) {
 			busFreq = BASE_NHM_CLOCK_SOURCE;
+		}
+
+		if (cpuid_vmm_family() == CPUID_VMM_FAMILY_QEMU_TCG) {
+			/*
+			 * QEMU TCG does not emulate MSR_PLATFORM_INFO or
+			 * MSR_FLEX_RATIO — reads return 0, writes are dropped.
+			 * Derive the TSC/bus ratio entirely from DT properties
+			 * provided by the bootloader; never touch the MSRs.
+			 */
+			uint64_t tsc_freq = EFI_get_frequency("TSCFrequency");
+			if (tsc_freq != 0 && busFreq != 0) {
+				tscGranularity = (uint32_t)(tsc_freq / busFreq);
+			}
+			if (tscGranularity == 0) {
+				tscGranularity = 1;
+			}
+		} else {
+			uint64_t msr_flex_ratio;
+			uint64_t msr_platform_info;
+
+			/* See if FLEX_RATIO is being used */
+			msr_flex_ratio = rdmsr64(MSR_FLEX_RATIO);
+			msr_platform_info = rdmsr64(MSR_PLATFORM_INFO);
+			flex_ratio_min = (uint32_t)bitfield(msr_platform_info, 47, 40);
+			flex_ratio_max = (uint32_t)bitfield(msr_platform_info, 15, 8);
+			/* No BIOS-programmed flex ratio. Use hardware max as default */
+			tscGranularity = flex_ratio_max;
+			if (msr_flex_ratio & bit(16)) {
+				/* Flex Enabled: Use this MSR if less than max */
+				flex_ratio = (uint32_t)bitfield(msr_flex_ratio, 15, 8);
+				if (flex_ratio < flex_ratio_max) {
+					tscGranularity = flex_ratio;
+				}
+			}
 		}
 
 		break;

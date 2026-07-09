@@ -37,6 +37,10 @@ extern "C" {
 
 #include "AppleI386PlatformExpert.h"
 
+// kprintf writes straight to the serial console, bypassing os_log (which drops
+// IOLog output from prelinked kexts that aren't fully OSKext-registered).
+extern "C" void kprintf(const char *fmt, ...);
+
 enum {
 	kIRQAvailable   = 0,
 	kIRQExclusive   = 1,
@@ -79,8 +83,8 @@ IOService *AppleI386PlatformExpert::probe(IOService *provider, SInt32 *score) {
 	return this;
 }
 
-bool AppleI386PlatformExpert::init(OSDictionary *properties) {
-	if (!super::init()) return false;
+bool AppleI386PlatformExpert::init(OSDictionary *properties) {\
+	if (!super::init(properties)) return false;
 
 	OSString *name = (OSString *)getProperty("InterruptControllerName");
 	if (name == 0) name = OSString::withCStringNoCopy("AppleI386CPUInterruptController");
@@ -92,7 +96,9 @@ bool AppleI386PlatformExpert::init(OSDictionary *properties) {
 bool AppleI386PlatformExpert::start(IOService *provider) {
 	setBootROMType(kBootROMTypeNewWorld);
 
-	if (!super::start(provider)) return false;
+	bool superOK = super::start(provider);
+	kprintf(">>> AppleI386PlatformExpert::start super::start=%d\n", superOK);
+	if (!superOK) return false;
 	PE_halt_restart = handlePEHaltRestart;
 	registerService();
 
@@ -113,17 +119,22 @@ bool AppleI386PlatformExpert::configure(IOService *provider) {
 	IOService *nub;
 
 	topLevel = OSDynamicCast(OSArray, getProperty("top-level"));
+	kprintf(">>> configure: top-level=%p count=%u\n",
+	        topLevel, topLevel ? topLevel->getCount() : 0);
 
 	if (topLevel) {
-		while ((dict = OSDynamicCast(OSDictionary, topLevel->getObject(0)))) {
-			dict->retain();
-			topLevel->removeObject(0);
-			nub = createNub(dict);
-			if (nub == 0) continue;
+		unsigned int count = topLevel->getCount();
+		for (unsigned int i = 0; i < count; i++) {
+			dict = OSDynamicCast(OSDictionary, topLevel->getObject(i));
+			if (dict == 0) continue;
 
-			dict->release();
+			nub = createNub(dict);
+			if (nub == 0) { kprintf(">>>   createNub -> NULL\n"); continue; }
+
 			nub->attach(this);
 			nub->registerService();
+			kprintf(">>>   registered nub '%s'\n", nub->getName());
+			nub->release();
 		}
 	}
 
@@ -266,7 +277,17 @@ bool AppleI386PlatformExpert::setNubInterruptVectors(IOService *nub, const UInt3
 	if (!specifier || !controller) goto done;
 
 	for (UInt32 i = 0; i < vectorCount; i++) {
-		OSData *data = OSData::withBytes(&vectors[i], sizeof(vectors[i]));
+		// The interrupt specifier must be an 8-byte blob: word[0] = vector/IRQ
+		// number (IOAPIC input pin), word[1] = interrupt flags.  AppleAPIC's
+		// IOAPIC controller (AppleAPICInterruptController::getInterruptType)
+		// rejects any specifier shorter than sizeof(UInt64), which is why a
+		// bare 4-byte UInt32 caused every device interrupt registration to
+		// fail with kIOReturnNotFound.  Legacy ISA IRQs (e.g. IDE 14/15) are
+		// edge-triggered, active-high, non-shareable -> flags = 0.
+		UInt32 spec[2];
+		spec[0] = vectors[i];
+		spec[1] = 0;  // kInterruptTriggerModeEdge | kInterruptPolarityHigh | kInterruptNotShareable
+		OSData *data = OSData::withBytes(spec, sizeof(spec));
 		specifier->setObject(data);
 		controller->setObject(_interruptControllerName);
 		if (data) data->release();

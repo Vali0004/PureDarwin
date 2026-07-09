@@ -70,17 +70,6 @@ extern void (*record_startup_extensions_function)(void);
 extern void (*load_security_extensions_function)(void);
 };
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-__attribute__((weak))
-int __cxa_atexit(void (*func)(void)) {
-    return 0;
-}
-#ifdef __cplusplus
-}
-#endif
-
 static void bootstrapRecordStartupExtensions(void);
 static void bootstrapLoadSecurityExtensions(void);
 
@@ -384,7 +373,9 @@ KLDBootstrap::readBooterExtensions(void)
 	    kOSKextLogDirectoryScanFlag | kOSKextLogKextBookkeepingFlag,
 	    "Reading startup extensions from booter memory.");
 
+	kprintf("XNUDBG: readBooterExtensions entered\n");
 	booterMemoryMap = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane);
+	kprintf("XNUDBG: booterMemoryMap=%p\n", booterMemoryMap.get());
 
 	if (!booterMemoryMap) {
 		OSKextLog(/* kext */ NULL,
@@ -484,6 +475,8 @@ KLDBootstrap::readBooterExtensions(void)
 		 * Any creation/registration failures are already logged for us.
 		 */
 		OSSharedPtr<OSKext> newKext = OSKext::withBooterData(deviceTreeName, booterData.get());
+		kprintf("XNUDBG: withBooterData(%s) -> %p\n",
+		    devTreeNameCString, newKext.get());
 
 		booterMemoryMap->removeProperty(deviceTreeName);
 	} /* while ( (deviceTreeName = OSDynamicCast(OSString, ...) ) ) */

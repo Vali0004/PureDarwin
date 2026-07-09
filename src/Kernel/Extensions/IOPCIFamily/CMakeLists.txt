@@ -15,6 +15,7 @@ target_link_libraries(IOPCIFamily PRIVATE IOPCIFamilyHeaders)
 install(TARGETS IOPCIFamily DESTINATION System/Library/Extensions COMPONENT BaseSystem)
 
 add_library(IOPCIFamilyHeaders INTERFACE)
-target_include_directories(IOPCIFamilyHeaders INTERFACE include)
-
+target_include_directories(IOPCIFamilyHeaders INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_subdirectory(ApplePIODMA)

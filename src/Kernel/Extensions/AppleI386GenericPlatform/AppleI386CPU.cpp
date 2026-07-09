@@ -22,6 +22,8 @@
  */
 
 #include "AppleI386CPU.h"
+#include <IOKit/IOLib.h>
+#include <IOKit/IOPlatformExpert.h>
 
 #undef super
 #define super IOCPU

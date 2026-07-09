@@ -1365,6 +1365,9 @@ cpuid_vmm_family_string(void)
 	case CPUID_VMM_FAMILY_KVM:
 		return "KVM";
 
+	case CPUID_VMM_FAMILY_QEMU_TCG:
+		return "QEMU TCG";
+
 	case CPUID_VMM_FAMILY_UNKNOWN:
 	/*FALLTHROUGH*/
 	default:
@@ -1431,6 +1434,9 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_KVM, 12)) {
 		/* KVM identification string */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_KVM;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_QEMU_TCG, 12)) {
+		/* QEMU TCG identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_QEMU_TCG;
 	} else {
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_UNKNOWN;
 	}

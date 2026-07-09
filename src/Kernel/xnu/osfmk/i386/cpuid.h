@@ -55,6 +55,7 @@
 #define CPUID_VMM_ID_HYVE       "bhyve bhyve "
 #define CPUID_VMM_ID_HVF        "HVFHVFHVFHVF"
 #define CPUID_VMM_ID_KVM        "KVMKVMKVM\0\0\0"
+#define CPUID_VMM_ID_QEMU_TCG   "TCGTCGTCGTCG"
 
 #define CPUID_STRING_UNKNOWN    "Unknown CPU Typ"
 
@@ -287,6 +288,7 @@
 #define CPUID_VMM_FAMILY_HYVE           0x4
 #define CPUID_VMM_FAMILY_HVF            0x5
 #define CPUID_VMM_FAMILY_KVM            0x6
+#define CPUID_VMM_FAMILY_QEMU_TCG       0x7
 
 
 #if DEBUG || DEVELOPMENT

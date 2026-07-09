@@ -79,6 +79,7 @@ bool AppleAPIC::start( IOService * provider )
         goto fail;
     }
     _destinationAddress = num->unsigned32BitValue();
+    kprintf("AppleAPIC: got destAPICID=%u, reading phys addr\n", (unsigned)_destinationAddress);
 
     // Protect access to the indirect APIC registers.
 
@@ -113,8 +114,10 @@ bool AppleAPIC::start( IOService * provider )
 
     // Map in the memory-mapped registers.
 
+    kprintf("AppleAPIC: apicMemory created, preparing+mapping phys=0x%x\n", num->unsigned32BitValue());
     _apicMemory->prepare();
-    _apicMemoryMap = _apicMemory->map( kIOMapInhibitCache );    
+    _apicMemoryMap = _apicMemory->map( kIOMapInhibitCache );
+    kprintf("AppleAPIC: map done, map=%p\n", _apicMemoryMap);
     if ( 0 == _apicMemoryMap )
     {
         APIC_LOG("IOAPIC-%ld: memory mapping failed\n", _vectorBase);
@@ -128,7 +131,9 @@ bool AppleAPIC::start( IOService * provider )
     // Cache the ID register, restored on system wake. We trust the BIOS
     // to assign an unique APIC ID for each I/O APIC. Can we?
 
+    kprintf("AppleAPIC: baseAddr=0x%lx, about to indexRead(ID)\n", _apicBaseAddr);
     _apicIDRegister = indexRead( kIndexID );
+    kprintf("AppleAPIC: indexRead(ID)=0x%lx OK, reading VER\n", _apicIDRegister);
 
     // With the registers mapped in, find out how many interrupt table
     // entries are supported.
@@ -205,6 +210,20 @@ bool AppleAPIC::start( IOService * provider )
     getPlatform()->registerInterruptController( (OSSymbol *) sym, this );
     sym->release();
 
+    getPlatform()->setCPUInterruptProperties( provider );
+    {
+        IOInterruptAction primaryHandler = getInterruptHandlerAddress();
+        if ( provider->registerInterrupt( 0, this, primaryHandler, 0 )
+             != kIOReturnSuccess )
+        {
+            kprintf("AppleAPIC-%ld: FAILED to install primary interrupt handler\n",
+                    _vectorBase);
+            goto fail;
+        }
+        provider->enableInterrupt( 0 );
+        kprintf("AppleAPIC-%ld: primary interrupt handler installed\n", _vectorBase);
+    }
+
     registerService();
 
     APIC_LOG("IOAPIC-%ld: start success\n", _vectorBase);
@@ -212,6 +231,7 @@ bool AppleAPIC::start( IOService * provider )
 
 fail:
     /* probably fatal */
+    kprintf("AppleAPIC::start FAILED (vectorBase=%ld)\n", _vectorBase);
     return false;
 }
 
@@ -405,13 +425,23 @@ IOReturn AppleAPIC::registerInterrupt( IOService *        nub,
     vectorData       = interruptSources[source].vectorData;
     vectorNumber     = DATA_TO_VECTOR( vectorData );
 
+    kprintf("IOAPIC-%ld: registerInterrupt nub='%s' source=%d vectorNumber=%u vectorCount=%ld dataLen=%u\n",
+            _vectorBase, nub ? nub->getName() : "(null)", source,
+            (unsigned)vectorNumber, _vectorCount,
+            (unsigned)(vectorData ? vectorData->getLength() : 0));
+
     // Check that the vectorNumber is within bounds.
     // Proceed to the superclass method if valid.
 
-    if ( vectorNumber >= (UInt32) _vectorCount )
+    if ( vectorNumber >= (UInt32) _vectorCount ) {
+        kprintf("IOAPIC-%ld: registerInterrupt REJECT (vector %u >= count %ld)\n",
+                _vectorBase, (unsigned)vectorNumber, _vectorCount);
         return kIOReturnBadArgument;
+    }
 
-    return super::registerInterrupt( nub, source, target, handler, refCon );
+    IOReturn rr = super::registerInterrupt( nub, source, target, handler, refCon );
+    kprintf("IOAPIC-%ld: super::registerInterrupt -> 0x%x\n", _vectorBase, rr);
+    return rr;
 }
 
 //---------------------------------------------------------------------------

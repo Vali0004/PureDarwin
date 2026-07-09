@@ -51,6 +51,22 @@ __BEGIN_DECLS
 #include <libkern/prelink.h>
 #include <stdarg.h>
 
+/*
+ * Resident (permanent kernel text) __cxa_atexit stub.  Kexts and the kernel's
+ * own C++ static constructors reference __cxa_atexit to register static
+ * destructors; we never tear those objects down individually, so a no-op that
+ * returns success is sufficient.  This MUST live in permanent text (not the
+ * __KLD segment, which is freed by OSKextRemoveKextBootstrap), otherwise a kext
+ * whose constructors run after bootstrap teardown would call a freed page.
+ */
+__attribute__((weak))
+int
+__cxa_atexit(void (*func)(void))
+{
+	(void)func;
+	return 0;
+}
+
 #if KASAN
 #include <san/kasan.h>
 #endif

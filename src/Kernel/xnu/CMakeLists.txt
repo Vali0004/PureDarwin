@@ -1,5 +1,15 @@
 find_program(dsymutil_path NAMES dsymutil llvm-dsymutil REQUIRED)
 
+# XNU build arch. x86_64 installs the i386/ machine headers (machine/types.h
+# includes "i386/types.h"); arm64 installs arm/ and needs a MACHINE_CONFIGS.
+if(PUREDARWIN_ARM64)
+    set(XNU_ARCH_CONFIGS ARM64)
+    set(XNU_MACHINE_CONFIGS MACHINE_CONFIGS=BCM2837)
+else()
+    set(XNU_ARCH_CONFIGS X86_64)
+    set(XNU_MACHINE_CONFIGS "")
+endif()
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install)
 externalproject_add(xnu_headers.extproj
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_build
@@ -25,8 +35,8 @@ externalproject_add(xnu_headers.extproj
             -D DSYMUTIL_PATH=${dsymutil_path}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/preprocess_files.cmake
     COMMAND
-        make -C <SOURCE_DIR> installhdrs ARCH_CONFIGS=X86_64 BUILD_LTO=0
-            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=RELEASE
+        make -C <SOURCE_DIR> installhdrs ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
+            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
             DSTROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install
     INSTALL_COMMAND true # installed during build
@@ -92,11 +102,13 @@ externalproject_add(xnu
             -D PTHREAD_HEADER_PATH=$<TARGET_PROPERTY:pthread_common_headers,INTERFACE_INCLUDE_DIRECTORIES>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/preprocess_files.cmake
     COMMAND
-        make -C <SOURCE_DIR> install ARCH_CONFIGS=X86_64 BUILD_LTO=0
-            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=RELEASE
+        make -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
+            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
             SYMROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu_sym DSTROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu
     INSTALL_COMMAND true # installed during build
+    # Ensure it always rebuilds XNU on changes so you don't feel schizo
+    BUILD_ALWAYS TRUE
     USES_TERMINAL_CONFIGURE TRUE
     USES_TERMINAL_BUILD TRUE
 )

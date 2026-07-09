@@ -12,11 +12,24 @@ function(add_kext_bundle name)
 
     target_compile_definitions(${name} PRIVATE TARGET_OS_OSX KERNEL)
     target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fapple-kext>)
-    
+
+    # Kernel code runs in an environment where the System V red zone is unsafe:
+    # interrupts (and the kernel's own exception entry) push onto the current
+    # stack without honoring the 128-byte red zone, so any leaf function that
+    # keeps live data below %rsp will be corrupted the moment an IRQ lands in
+    # it (observed as random frame/register smashes, e.g. HFS buildthreadkey).
+    # The XNU kernel proper is built with -mno-red-zone; kexts must match.
+    # The red zone is an x86-64 SysV ABI feature; -mno-red-zone is x86-only
+    # (clang rejects it on arm64, which has no red zone to disable).
+    if(NOT PUREDARWIN_ARM64)
+        target_compile_options(${name} PRIVATE -mno-red-zone)
+    endif()
+
+    target_link_options(${name} PRIVATE "LINKER:-bundle")
     if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
-        target_link_options(${name} PRIVATE -Wl,-kext)
-    else()
-        target_link_options(${name} PRIVATE "LINKER:-bundle")
+        # ld64 requires libSystem to accept -bundle; the SDK .tbd stub satisfies
+        # the check without adding a real runtime dependency.
+        target_link_options(${name} PRIVATE -lSystem)
     endif()
     target_link_options(${name} PRIVATE "SHELL:-undefined dynamic_lookup")
 

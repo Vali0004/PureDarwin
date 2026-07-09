@@ -301,7 +301,8 @@ BUILD_DSYM := 1
 # We must not use -fno-keep-inline-functions, or it will remove the dtrace
 # probes from the kernel.
 #
-CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
+CFLAGS_COMMON = \
+	$(DEBUG_CFLAGS) -nostdinc \
 	-fblocks \
 	-ferror-limit=10000 \
 	-fno-builtin \
@@ -311,6 +312,16 @@ CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
 	-fmerge-all-constants \
 	-fno-c++-static-destructors \
 	$(OTHER_CFLAGS)
+
+CFLAGS_LINUX =
+CFLAGS_DARWIN =
+CFLAGS_CLANG_EXTRA =
+
+ifeq ($(UNAME_S),Darwin)
+CFLAGS_CLANG_EXTRA = -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang
+endif
+
+CFLAGS_GEN = $(CFLAGS_COMMON) $(CFLAGS_LINUX) $(CFLAGS_DARWIN) $(CFLAGS_CLANG_EXTRA)
 
 CFLAGS_RELEASE	=
 CFLAGS_DEVELOPMENT	=
@@ -556,6 +567,7 @@ KERNEL_TEXT_BASE        = $(shell printf "0x%016x" \
 			  $$[ $(KERNEL_HIB_SECTION_BASE) + 0x100000 ])
 
 LDFLAGS_KERNEL_RELEASEX86_64 = \
+	-Wl,-kernel \
 	-Wl,-pie \
 	-Wl,-segaddr,__HIB,$(KERNEL_HIB_SECTION_BASE) \
 	-Wl,-image_base,$(KERNEL_TEXT_BASE) \

@@ -1005,6 +1005,8 @@ exec_mach_imgact(struct image_params *imgp)
 	os_reason_t             exec_failure_reason = OS_REASON_NULL;
 	boolean_t               reslide = FALSE;
 
+	printf("PD-DIAG: exec_mach_imgact ENTER magic=0x%x\n", mach_header->magic);
+
 	/*
 	 * make sure it's a Mach-O 1.0 or Mach-O 2.0 binary; the difference
 	 * is a reserved field on the end, so for the most part, we can
@@ -1162,6 +1164,7 @@ grade:
 	 * Actually load the image file we previously decided to load.
 	 */
 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
+	printf("PD-DIAG: exec_mach_imgact load_machfile returned lret=%d\n", lret);
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 
@@ -1409,11 +1412,16 @@ grade:
 	 * than current task, thus swap_task_map is used instead of
 	 * vm_map_switch.
 	 */
+	printf("PD-DIAG: about to swap_task_map task=%p thread=%p new_map=%p\n", task, thread, map);
 	old_map = swap_task_map(task, thread, map);
+	printf("PD-DIAG: swap_task_map returned old_map=%p (survived)\n", old_map);
 	vm_map_deallocate(old_map);
 	old_map = NULL;
+	printf("PD-DIAG: about to activate_exec_state\n");
 
 	lret = activate_exec_state(task, p, thread, &load_result);
+	printf("PD-DIAG: activate_exec_state returned lret=%d (survived) entry_point=0x%llx validentry=%d dynlinker=%d\n",
+	    lret, (unsigned long long)load_result.entry_point, load_result.validentry, load_result.dynlinker);
 	if (lret != KERN_SUCCESS) {
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_ACTV_THREADSTATE, 0, 0);
@@ -1716,6 +1724,7 @@ done:
 	}
 
 bad:
+	printf("PD-DIAG: exec_mach_imgact EXIT error=%d (survived)\n", error);
 	/* If we hit this, we likely would have leaked an exit reason */
 	assert(exec_failure_reason == OS_REASON_NULL);
 	return error;
@@ -1780,6 +1789,9 @@ exec_activate_image(struct image_params *imgp)
 	int i;
 	int itercount = 0;
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
+
+	printf("PD-DIAG: exec_activate_image ENTER fname=%s\n",
+	    imgp->ip_user_fname ? "(set)" : "(null)");
 
 	error = execargs_alloc(imgp);
 	if (error) {
