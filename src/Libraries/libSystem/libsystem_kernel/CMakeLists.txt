@@ -293,6 +293,30 @@ target_sources(libsystem_kernel_static PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/internal_include/mach/vm_map.c
 )
 
+# voucher_mach_msg_{adopt,revert,set,clear}: mach/mach_msg.c's mach_msg_server(_once)
+# calls these (real Darwin: registered by libdispatch's voucher backend via
+# __libkernel_voucher_init; falls back to VOUCHER_MACH_MSG_STATE_UNCHANGED/no-op
+# via _libkernel_voucher_functions_empty when nothing has registered -- exactly
+# our situation, no voucher subsystem yet). Previously only in the libsystem_kernel
+# SHARED target's source list, not this static one, so anything statically linking
+# mach_msg.c (dyld, libdyld) got dangling refs to these.
+target_sources(libsystem_kernel_static PRIVATE
+    wrappers/_libkernel_init.c
+    wrappers/_libc_funcptr.c
+    # _libc_funcptr.c's file-scope _libkernel_generic_string_functions table
+    # initializer references these 8 unconditionally (regardless of whether the
+    # table is ever consulted), so they must be defined wherever _libc_funcptr.c
+    # is compiled in, same as the voucher functions above.
+    wrappers/string/index.c      # _libkernel_strchr
+    wrappers/string/memcpy.c     # _libkernel_memmove (+ memcpy)
+    wrappers/string/memset.c     # _libkernel_memset + _libkernel_bzero
+    wrappers/string/strcmp.c     # _libkernel_strcmp
+    wrappers/string/strcpy.c     # _libkernel_strcpy
+    wrappers/string/strlcpy.c    # _libkernel_strlcpy
+    wrappers/string/strlen.c     # _libkernel_strlen
+    wrappers/system-version-compat.c  # __system_version_compat_{check_path_suffix,open_shim}
+)
+
 # We need to add these as sources to ensure they're built before the c files below,
 #   as they are generated dependencies. It's a bit messy, but it all works out just fine.
 target_sources(libsystem_kernel_static PRIVATE
@@ -394,19 +418,16 @@ install(TARGETS libsystem_kernel_static DESTINATION usr/local/lib/dyld_stub COMP
 add_darwin_shared_library(libsystem_kernel INSTALL_NAME_DIR /usr/lib/system)
 set_property(TARGET libsystem_kernel PROPERTY OUTPUT_NAME system_kernel)
 
-target_sources(libsystem_kernel PRIVATE
-    wrappers/string/index.c
-    wrappers/string/memcpy.c
-    wrappers/string/memset.c
-    wrappers/string/strcmp.c
-    wrappers/string/strcpy.c
-    wrappers/string/strlcpy.c
-    wrappers/string/strlen.c
-    wrappers/string/strsep.c
-    wrappers/_libkernel_init.c
-    wrappers/_libc_funcptr.c
-    wrappers/system-version-compat.c
-)
+target_sources(libsystem_kernel PRIVATE empty.c)
+
+# NB: no wrapper sources here -- every one of them is already compiled
+# into libsystem_kernel_static (see the target_sources(libsystem_kernel_static
+# ...) blocks earlier in this file); this target's own PUBLIC headers plus
+# -all_load'ing that static archive below is what produces the real .dylib.
+# A prior version of this file re-compiled the same sources into THIS target
+# directly (as well as linking the static lib that already contains them),
+# which -- once this target was actually built for the first time -- failed
+# with 45 duplicate-symbol errors (___bzero, __libkernel_strchr, etc).
 
 target_include_directories(libsystem_kernel PUBLIC include ${CMAKE_CURRENT_BINARY_DIR}/public_include)
 target_include_directories(libsystem_kernel PRIVATE wrappers/string)

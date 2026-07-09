@@ -43,7 +43,7 @@
 #define __ARM64_PMAP_SUBPAGE_L1__            1
 #endif
 
-//#define APPLE_ARM64_ARCH_FAMILY              1
+#define APPLE_ARM64_ARCH_FAMILY              1
 #define ARM_ARCH_TIMER
 #define ARM_BOARD_WFE_TIMEOUT_NS             1000
 

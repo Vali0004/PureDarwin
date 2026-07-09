@@ -1,0 +1,28 @@
+# Symbols /usr/lib/system/libdyld.dylib imports and expects to resolve in
+# /usr/lib/libSystem.B.dylib. Listing them as exported roots makes ld64 pull
+# their defining members (and transitive closure) out of the static libsystem_*
+# archives, so this umbrella actually PROVIDES them -- matching real Darwin,
+# where libSystem.B.dylib re-exports libsystem_c/pthread/kernel/malloc.
+# Expand this list as more of userland (launchd, etc.) comes online.
+___assert_rtn
+___cxa_atexit
+___cxa_finalize
+___cxa_finalize_ranges
+___memmove_chk
+_abort
+_exit
+_free
+_getpid
+_malloc
+_malloc_size
+_mmap
+_pthread_getspecific
+_pthread_key_create
+_pthread_mutex_lock
+_pthread_mutex_unlock
+_pthread_setspecific
+_strcmp
+_strlen
+_strncmp
+_strrchr
+_vm_allocate

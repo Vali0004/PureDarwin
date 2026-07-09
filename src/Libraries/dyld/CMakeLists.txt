@@ -1,18 +1,10 @@
-# Builds the runtime dynamic linker /usr/lib/dyld (dyld-832, dyld2 path).
-#
-# The dyld source lives in a sibling checkout (github.com/.../dyld). Point
-# DYLD_SOURCE_DIR at it; defaults to ../dyld next to the PureDarwin checkout.
-set(DYLD_SOURCE_DIR "${CMAKE_SOURCE_DIR}/../dyld" CACHE PATH "Path to the dyld source checkout")
+set(DYLD_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/upstream" CACHE PATH "Path to the dyld source tree")
 
 if(NOT EXISTS "${DYLD_SOURCE_DIR}/src/dyld2.cpp")
     message(WARNING "dyld source not found at ${DYLD_SOURCE_DIR}; skipping dyld target")
     return()
 endif()
 
-# Runtime linker sources: the src/ dyld2 family plus the non-cache-builder
-# dyld3 support code it depends on. The shared-cache *builder* sources
-# (CacheBuilder, Optimizer*, AppCache*, update_*, dsc_*) are deliberately
-# excluded -- they belong to the cache tooling, not the runtime linker.
 set(DYLD_SRCS
     src/dyld2.cpp
     src/dyldAPIs.cpp
@@ -20,9 +12,6 @@ set(DYLD_SRCS
     src/dyldNew.cpp
     src/dyldExceptions.c
     src/dyldLock.cpp
-    # dyld_debugger.cpp: the all_image_infos / GDB-notification management
-    # (addImagesToAllImages, allImagesCount, gProcessInfo, notifyGDB,
-    # removeImageFromAllImages, addNonSharedCacheImageUUID). No dispatch/ObjC deps.
     src/dyld_debugger.cpp
     src/glue.c
     src/threadLocalVariables.c
@@ -67,21 +56,11 @@ set(DYLD_SRCS
 list(TRANSFORM DYLD_SRCS PREPEND "${DYLD_SOURCE_DIR}/")
 
 add_darwin_executable(dyld MACOSX_VERSION_MIN 11.0)
-# WIP: dyld does not link yet (still ~113 undefined: C++ runtime, libc, pthread).
-# Keep it out of the default build so `ninja all` stays green; build it explicitly
-# with `ninja dyld` when working the link down.
-set_target_properties(dyld PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_sources(dyld PRIVATE ${DYLD_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/pd_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pd_fileutils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pd_dyld_internal_stubs.cpp)
 
-# add_darwin_executable forces -nostdinc to build against PD's own headers, but
-# dyld pulls libc++ STL (vector/atomic/...) whose wrapper headers #include_next
-# into the C library; under -nostdinc that chain is broken and unrecoverable.
-# dyld links nothing (self-contained), so compiling against the SDK's coherent
-# libc/libc++ is correct -- and is how Apple builds dyld. PD's headers still take
-# priority via -I. Keep -nostdlib (no default libs linked); drop only -nostdinc.
 get_target_property(_dyld_copts dyld COMPILE_OPTIONS)
 list(REMOVE_ITEM _dyld_copts -nostdinc)
 set_target_properties(dyld PROPERTIES COMPILE_OPTIONS "${_dyld_copts}")
@@ -103,12 +82,6 @@ target_include_directories(dyld PRIVATE
     ${DYLD_SOURCE_DIR}/dyld3/shared-cache
     ${CMAKE_SOURCE_DIR}/src/Libraries/libSystem/corecrypto/include
     ${CMAKE_SOURCE_DIR}/src/Libraries/CrashReporterClient/include
-    # NB: do NOT add libsystem_kernel/mach or /include here -- their root holds a
-    # minimal internal string.h (memcpy-only) that shadows the C library's, and
-    # their mach/* entries are broken symlinks. The SDK sysroot (-isysroot) already
-    # provides a complete, coherent mach/* header set.
-    # Headers no source interface target ships: userspace mach-o/* and top-level
-    # pthread.h. Committed under compat-include/ so the build is reproducible.
     ${CMAKE_CURRENT_SOURCE_DIR}/compat-include
 )
 
@@ -161,10 +134,6 @@ target_link_libraries(dyld PRIVATE
     xnu_private_headers
 )
 
-# Actual code archives to satisfy dyld's -nostdlib symbol needs. Link them by
-# file path (not as CMake targets) so their INTERFACE include dirs -- which carry
-# XNU Kernel.framework headers that shadow the SDK's mach-o/* -- do NOT leak onto
-# dyld's compile line. add_dependencies keeps build ordering.
 add_dependencies(dyld libsystem_kernel_static corecrypto_static CrashReporterClient libplatform_static libc_static libc_internal_static pthread_static)
 target_link_libraries(dyld PRIVATE
     $<TARGET_FILE:libsystem_kernel_static>   # Mach RPC + higher-level wrappers
@@ -200,18 +169,6 @@ if(TARGET libunwind_static)
     target_link_libraries(dyld PRIVATE $<TARGET_FILE:libunwind_static>)
 endif()
 
-# dyld is the dynamic linker: MH_DYLINKER, custom entry point, self-relative.
-#
-# REVERTED an explicit -segaddr __TEXT base (tried 0x7fff5fc00000, then
-# 0x200000000, to dodge a suspected page-zero collision): mach_loader.c's
-# LC_SEGMENT pass explicitly checks `is_dyld && scp->vmaddr == 0 &&
-# scp->fileoff == 0` to set dyld_no_load_addr -- vmaddr==0 is the shape the
-# kernel's loader EXPECTS from a dylinker (matching real Apple dyld, which
-# always links at 0 and is placed by the kernel's own slide computation at
-# load time). Forcing a nonzero link-time base defeats that detection and
-# pushes dyld onto a different, apparently untested kernel code path -- and
-# rebooting with the forced base did NOT change the crash signature at all,
-# ruling out the page-zero theory. Back to the default (vmaddr 0).
 target_link_options(dyld PRIVATE
     -e __dyld_start
     -Wl,-dylinker
@@ -221,7 +178,7 @@ target_link_options(dyld PRIVATE
     # dyld is normally dead-stripped. It also lets the linker drop the dead code
     # inside the monolithic pthread.o (workqueue/bsdthread_init/qos, pulled in
     # only because pthread_self et al share the TU) along with its undefined refs
-    # to thread_start/start_wqthread/_pthread_qos_*/_pthread_set_main_qos -- none
+    # to thread_start/start_wqthread/_pthread_qos_*/_pthread_set_main_qos - none
     # of which dyld's used call graph reaches.
     -Wl,-dead_strip
 )

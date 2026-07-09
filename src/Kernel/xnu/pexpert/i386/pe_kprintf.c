@@ -66,20 +66,6 @@ SECURITY_READ_ONLY_LATE(unsigned int) disable_serial_output = TRUE;
 
 static SIMPLE_LOCK_DECLARE(kprintf_lock, 0);
 
-/*
- * Mirror every serial character onto the graphics console (framebuffer) so
- * boot progress is visible on real hardware with no serial port.  vc_serial_putc
- * is a no-op until the graphics console is initialized (PE_create_console).
- */
-extern void vc_serial_putc(char c);
-
-static void
-pal_serial_and_video_putc(char c)
-{
-	pal_serial_putc(c);
-	vc_serial_putc(c);
-}
-
 __startup_func
 static void
 PE_init_kprintf(void)
@@ -98,7 +84,7 @@ PE_init_kprintf(void)
 	 * call pal_serial_init() if our previous state was
 	 * not enabled */
 	if (!new_disable_serial_output && (!disable_serial_output || pal_serial_init())) {
-		PE_kputc = pal_serial_and_video_putc;
+		PE_kputc = pal_serial_putc;
 	} else {
 		PE_kputc = cnputc_unbuffered;
 	}

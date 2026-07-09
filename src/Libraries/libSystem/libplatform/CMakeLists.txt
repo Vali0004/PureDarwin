@@ -49,6 +49,9 @@ target_sources(libplatform_static PRIVATE
     src/os/lock.c
     src/os/alloc_once.c
     src/os/semaphore.c
+    src/setjmp/generic/sigaction.c   # __platform_sigaction (libc's sigaction.c wrapper)
+    src/setjmp/x86_64/_sigtramp.s    # real signal-delivery trampoline (Apple's own asm, was just unwired)
+    src/setjmp/generic/sigtramp.c    # ___in_sigtramp storage + _sigunaltstack (the C _sigtramp body is #ifdef'd out on x86_64, asm above owns it)
     ${_libplatform_atomics}
 )
 # VARIANT_STATIC: emit the plain C names (memcpy/memmove/strlen/strcmp/...) as

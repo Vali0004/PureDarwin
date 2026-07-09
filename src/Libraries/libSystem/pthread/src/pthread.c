@@ -1559,6 +1559,19 @@ _pthread_set_self_dyld(void)
 	_pthread_tsd_slot(p, PTHREAD_SELF) = p;
 	_pthread_tsd_slot(p, ERRNO) = &p->err_no;
 	_thread_set_tsd_base(&p->tsd[0]);
+
+	/* PureDarwin: real Darwin's __pthread_init() (compiled out here, see the
+	 * `#if !VARIANT_DYLD` around it -- that full init lives only in the
+	 * separate, non-VARIANT_DYLD libsystem_pthread.dylib on real Darwin, not
+	 * in this minimal copy statically linked into dyld/libSystem) is what
+	 * normally signs the main thread's pthread_t via _pthread_init_signature()
+	 * shortly after this function runs. Since we never call it, pthread_self()
+	 * would otherwise return an unsigned (sig == 0) struct and the very first
+	 * _pthread_validate_signature() check (e.g. inside pthread_mutex_lock)
+	 * aborts with "pthread_t was corrupted". Sign it here instead -- with
+	 * _pthread_ptr_munge_token at its default 0 value, this is self-consistent
+	 * even though it's not the real kernel-supplied token. */
+	_pthread_init_signature(p);
 }
 #endif // VARIANT_DYLD
 
@@ -1722,7 +1735,14 @@ parse_ptr_munge_params(const char *envp[], const char *apple[])
 	}
 
 	if (!token) {
-		PTHREAD_INTERNAL_CRASH(token, "Token from the kernel is 0");
+		/* PureDarwin: real Darwin's kernel always supplies "ptr_munge" in the
+		 * apple[] vector at exec time; this from-scratch XNU/exec path does
+		 * not populate it yet. Rather than crash the whole boot on a missing
+		 * kernel-security-hardening value that has no equivalent threat model
+		 * here, self-generate a token. This only affects _OS_PTR_MUNGE/
+		 * _OS_PTR_UNMUNGE XOR obfuscation of internal pointers, not real
+		 * authentication -- safe to synthesize locally. */
+		token = (uintptr_t)arc4random() | 1;
 	}
 #endif // !DEBUG
 

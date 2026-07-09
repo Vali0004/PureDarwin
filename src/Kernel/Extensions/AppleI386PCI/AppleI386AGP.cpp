@@ -2,13 +2,13 @@
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * The contents of this file constitute Original Code as defined in and
  * are subject to the Apple Public Source License Version 1.1 (the
  * "License").  You may not use this file except in compliance with the
  * License.  Please obtain a copy of the License at
  * http://www.apple.com/publicsource and read it before using this file.
- * 
+ *
  * This Original Code and all software distributed under the License are
  * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -16,10 +16,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
- 
+
 #include <IOKit/system.h>
 
 #include <libkern/c++/OSContainers.h>
@@ -96,12 +96,12 @@ IOPCIDevice * AppleI386AGP::createNub( OSDictionary * from )
     IOPCIAddressSpace	space;
     bool		isAGP;
     UInt8		masterAGPRegisters;
-    
+
     spaceFromProperties( from, &space);
 
     isAGP = ( /* (space.s.deviceNum != getBridgeSpace().s.deviceNum)
 	    && */ findPCICapability( space, kIOPCIAGPCapability, &masterAGPRegisters ));
-    
+
     if( isAGP) {
 	nub = new IOAGPDevice;
         if( nub)
@@ -115,16 +115,16 @@ IOPCIDevice * AppleI386AGP::createNub( OSDictionary * from )
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-IOReturn AppleI386AGP::createAGPSpace( IOAGPDevice * master, 
+IOReturn AppleI386AGP::createAGPSpace( IOAGPDevice * master,
 				      IOOptionBits options,
-				      IOPhysicalAddress * address, 
+				      IOPhysicalAddress * address,
 				      IOPhysicalLength * length )
 {
     IOReturn		err;
     IOPCIAddressSpace 	target = getBridgeSpace();
     IOPhysicalLength	agpLength;
     UInt32		agpCtrl;
-    
+
     enum { agpSpacePerPage = 4 * 1024 * 1024 };
     enum { agpBytesPerGartByte = 1024 };
     enum { alignLen = 4 * 1024 * 1024 - 1 };
@@ -138,7 +138,7 @@ IOReturn AppleI386AGP::createAGPSpace( IOAGPDevice * master,
     {
 	// There's an nVidia NV11 ROM (revision 1017) that says that it can do fast writes,
 	// but can't, and can often lock the machine up when fast writes are enabled.
-	
+
 	#define kNVIDIANV11EntryName	"NVDA,NVMac"
 	#define kNVROMRevPropertyName 	"rom-revision"
 	#define kNVBadRevision			'1017'
@@ -207,8 +207,8 @@ if (systemLength > agpLength)
 	//agpCtrl |= (1 << 7);
 	configWrite32( target, kiAGPCTRL, agpCtrl ); 		// b7 gtlb ena
 
-	DEBG("kiAGPCTRL %08lx, kiATTBASE %08lx\n", 
-	    configRead32( target, kiAGPCTRL ), 
+	DEBG("kiAGPCTRL %08lx, kiATTBASE %08lx\n",
+	    configRead32( target, kiAGPCTRL ),
 	    configRead32( target, kiATTBASE ));
 
         err = kIOReturnSuccess;
@@ -224,7 +224,7 @@ if (systemLength > agpLength)
 }
 
 IOReturn AppleI386AGP::getAGPSpace( IOAGPDevice * master,
-                                  IOPhysicalAddress * address, 
+                                  IOPhysicalAddress * address,
 				  IOPhysicalLength * length )
 {
     if( systemLength) {
@@ -279,7 +279,7 @@ IOOptionBits AppleI386AGP::getAGPStatus( IOAGPDevice * master,
 #endif
 }
 
-IOReturn AppleI386AGP::commitAGPMemory( IOAGPDevice * master, 
+IOReturn AppleI386AGP::commitAGPMemory( IOAGPDevice * master,
 				      IOMemoryDescriptor * memory,
 				      IOByteCount agpOffset,
 				      IOOptionBits options )
@@ -289,7 +289,7 @@ IOReturn AppleI386AGP::commitAGPMemory( IOAGPDevice * master,
     UInt32		offset = 0, tmp, agpCtrl;
     IOPhysicalAddress	physAddr;
     IOByteCount		len;
-    
+
 //    ok = agpRange->allocate( memory->getLength(), &agpOffset );
 
     agpCtrl = configRead32(target, kiAGPCTRL);
@@ -301,7 +301,7 @@ IOReturn AppleI386AGP::commitAGPMemory( IOAGPDevice * master,
 	assert( agpOffset < systemLength );
 	agpOffset /= (page_size / 4);
 	while( (physAddr = memory->getPhysicalSegment( offset, &len ))) {
-	
+
 	    offset += len;
 	    len = (len + 0xfff) & ~0xfff;
 	    while( len > 0) {
@@ -312,10 +312,10 @@ IOReturn AppleI386AGP::commitAGPMemory( IOAGPDevice * master,
 		len -= page_size;
 	    }
 	}
-	
+
 	// Read back from last entry written to flush entry to main memory.
 	tmp = OSReadLittleInt32(gartArray, agpOffset-4);
-	
+
 	#if 1
 	// Deal with stupid Pentium 4 8-deeps store queue crap.
 	for(offset = 0; offset < 64*16; offset += 64)
@@ -325,7 +325,7 @@ IOReturn AppleI386AGP::commitAGPMemory( IOAGPDevice * master,
 	}
 	#endif
     }
-    
+
     agpCtrl = configRead32(target, kiAGPCTRL);
     agpCtrl |= (1 << 7);
     configWrite32( target, kiAGPCTRL, agpCtrl ); 		// b7 gtlb ena
@@ -342,7 +342,7 @@ IOReturn AppleI386AGP::releaseAGPMemory( IOAGPDevice * master,
     IOReturn		err = kIOReturnSuccess;
     IOByteCount		length;
     UInt32 agpCtrl;
-    
+
     if( !memory)
 	return( kIOReturnBadArgument );
 
@@ -364,7 +364,7 @@ IOReturn AppleI386AGP::releaseAGPMemory( IOAGPDevice * master,
 	gartArray[ agpOffset++ ] = 0;
 	length -= page_size;
     }
-    
+
     agpCtrl = configRead32(target, kiAGPCTRL);
     agpCtrl |= (1 << 7);
     configWrite32( target, kiAGPCTRL, agpCtrl ); 		// b7 gtlb ena

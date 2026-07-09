@@ -190,7 +190,7 @@ extern void     *last_kernel_symbol;
 #define RESET_FRAG(r) (((r)->alloc_frag_up = 1), ((r)->alloc_frag_down = 0))
 
 boolean_t       memmap = FALSE;
-#if     1
+#if     DEBUG || DEVELOPMENT
 static void
 kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount)
 {

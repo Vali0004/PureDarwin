@@ -7874,19 +7874,14 @@ IOService::registerInterrupt(int source, OSObject *target,
 	IOReturn              ret;
 
 	ret = lookupInterrupt(source, true, &interruptController);
-	kprintf("REGINT: nub='%s' source=%d lookupInterrupt ret=0x%x controller=%p class='%s'\n",
-	    getName(), source, ret, interruptController,
-	    interruptController ? interruptController->getMetaClass()->getClassName() : "(null)");
 	if (ret != kIOReturnSuccess) {
 		return ret;
 	}
 
 	/* Register the source */
-	ret = interruptController->registerInterrupt(this, source, target,
+	return interruptController->registerInterrupt(this, source, target,
 	           (IOInterruptHandler)handler,
 	           refCon);
-	kprintf("REGINT: nub='%s' controller->registerInterrupt ret=0x%x\n", getName(), ret);
-	return ret;
 }
 
 static void

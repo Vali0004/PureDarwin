@@ -92,11 +92,6 @@
 
 #include <os/overflow.h>
 
-/* PD-DIAG: kprintf's real declaration lives inside an #if 0 block in
- * bsd/sys/kauth.h; forward-declare it locally for the diagnostic kprintfs
- * below (remove once instrumentation is removed). */
-extern void kprintf(const char *fmt, ...);
-
 /*
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
  * when KERNEL is defined.

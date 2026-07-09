@@ -192,11 +192,9 @@ InitIOKit(void *dtTop)
 	/* If the bootstrap segment set up a function to record startup
 	 * extensions, call it now.
 	 */
-	kprintf("XNUDBG: record_startup_extensions_function=%p\n", record_startup_extensions_function);
 	if (record_startup_extensions_function) {
 		record_startup_extensions_function();
 	}
-	kprintf("XNUDBG: record_startup_extensions done\n");
 }
 
 void

@@ -26,8 +26,6 @@
 #include <mach-o/dyld_priv.h>
 #include "dyld3/AllImages.h"
 
-// ---- dyld-monitor hooks (no-op) --------------------------------------------
-
 void setNotifyMonitoringDyldMain(void (*)()) { }
 void setNotifyMonitoringDyld(void (*)(bool unloading, unsigned imageCount,
                                       const struct mach_header* loadAddresses[],
@@ -39,8 +37,6 @@ void AllImages::notifyMonitorLoads(const Array<LoadedImage>&) { }
 void AllImages::notifyMonitorUnloads(const Array<LoadedImage>&) { }
 }
 
-// ---- libdyld API globals (bring-up) ----------------------------------------
-
 dyld_platform_t dyld_get_active_platform(void) { return PLATFORM_MACOS; }
 
 extern "C" void* _NSGetMachExecuteHeader(void) { return nullptr; }
@@ -49,7 +45,6 @@ bool _dyld_shared_cache_contains_path(const char*) { return false; }
 
 void* _dyld_fast_stub_entry(void*, long) { return nullptr; }
 
-// ---- public dlopen: the real thing, wired to dyld3::dlopen_internal ----------
 // The C dlopen entry normally lives in dyldAPIsInLibSystem.cpp (the libdyld side,
 // not the dyld binary). dyld3/APIs.cpp puts &dlopen in its API function-pointer
 // table, so the dyld binary needs the symbol. Provide it here, forwarding to the

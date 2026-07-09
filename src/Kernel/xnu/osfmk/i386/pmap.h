@@ -609,22 +609,7 @@ static inline void
 set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu)
 {
 	int ccpu = my_cpu;
-	/*
-	 * PureDarwin bring-up: use the full kernel+user CR3 (pm_cr3) as the
-	 * "user" CR3 instead of the Meltdown-isolated pm_ucr3 (which maps only
-	 * the user low-half + the __HIB doublemap trampoline). The isolated-ucr3
-	 * return-to-user path (idt64.s loads CPU_UCR3) plus the doublemap fault
-	 * trampoline that must switch CR3 back to the kernel is broken in this
-	 * environment: the first CPL3 fault (dyld demand-paging its __TEXT)
-	 * reaches ks_dispatch while CR3 is still an isolated user CR3 that lacks
-	 * the kernel high-half -> instruction-fetch #PF -> #GP -> #DF storm.
-	 * pm_cr3 (pm_pml4) already maps BOTH the kernel high-half and this
-	 * process's user low-half, so using it as CPU_UCR3 keeps the kernel
-	 * reachable from userspace faults. This disables Meltdown page-table
-	 * isolation (acceptable for a QEMU bring-up target). See also the
-	 * no_shared_cr3=FALSE override in pmap_pcid.c.
-	 */
-	uint64_t pcr3 = tpmap->pm_cr3, ucr3 = tpmap->pm_cr3;
+	uint64_t pcr3 = tpmap->pm_cr3, ucr3 = tpmap->pm_ucr3;
 	cpu_datap(ccpu)->cpu_task_cr3 = pcr3;
 	cpu_shadowp(ccpu)->cpu_shadowtask_cr3 = pcr3;
 

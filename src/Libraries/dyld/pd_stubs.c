@@ -45,13 +45,6 @@ void voucher_mach_msg_revert(mach_voucher_t voucher)
 	(void)voucher;
 }
 
-/* aligned_alloc: pulled by libc++abi's over-aligned operator new
- * (operator new(size, align_val_t)). dyld supplies its own malloc/free (a pool
- * allocator in dyldNew.cpp) whose blocks are already max_align_t (16-byte)
- * aligned, which covers every alignment dyld's own C++ objects request. Route
- * to it so the result is freeable by dyld's free(). (Alignments > 16 are not
- * exercised during bring-up; guard against them so a future over-aligned type
- * fails loudly rather than silently mis-aligning.) */
 #include <stddef.h>
 extern void *malloc(size_t);
 extern void abort(void);
@@ -62,182 +55,52 @@ void *aligned_alloc(size_t alignment, size_t size)
 	return malloc(size);
 }
 
-/* ---- tiny libc leaves for the standalone dyld bring-up ------------------- */
+/* arc4random/arc4random_buf: real getentropy()-backed implementation, same
+ * approach as libc's darwin/pd_arc4random.c (real corecrypto-based
+ * arc4random.c is deferred -- see that file's comment for why). The
+ * previous version here was a fixed-seed xorshift PRNG: deterministic
+ * across every boot, not real randomness -- a genuine correctness gap for
+ * anything security-adjacent (ASLR-adjacent pointer obfuscation, hash
+ * seeding) that dyld uses these for. */
+extern int getentropy(void *buf, size_t buflen);
 
-void __chk_fail_overflow(void)
-{
-	abort();
-}
-
-void __chk_fail_overlap(void)
-{
-	abort();
-}
-
-int sysctl(int *name, unsigned int namelen, void *oldp, size_t *oldlenp,
-    void *newp, size_t newlen)
-{
-	(void)name; (void)namelen; (void)newp; (void)newlen;
-	if (oldlenp)
-		*oldlenp = 0;
-	if (oldp)
-		return -1;
-	return 0;
-}
-
-static uint32_t pd_arc4_state = 0x9e3779b9u;
 uint32_t arc4random(void)
 {
-	uint32_t x = pd_arc4_state;
-	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
-	pd_arc4_state = x ? x : 0x9e3779b9u;
-	return pd_arc4_state;
+	uint32_t v = 0;
+	if (getentropy(&v, sizeof(v)) != 0)
+		v = 0;
+	return v;
 }
 
 void arc4random_buf(void *buf, size_t nbytes)
 {
 	unsigned char *p = (unsigned char *)buf;
-	for (size_t i = 0; i < nbytes; ++i) {
-		if ((i & 3) == 0)
-			(void)arc4random();
-		p[i] = (unsigned char)(pd_arc4_state >> ((i & 3) * 8));
+	/* getentropy() only guarantees up to 256 bytes per call. */
+	while (nbytes > 0) {
+		size_t chunk = nbytes > 256 ? 256 : nbytes;
+		if (getentropy(p, chunk) != 0)
+			break;
+		p += chunk;
+		nbytes -= chunk;
 	}
 }
 
-void arc4random_stir(void) { (void)arc4random(); }
+void arc4random_stir(void) { /* no persistent state to restir */ }
 void arc4random_addrandom(unsigned char *data, int datalen)
 {
-	for (int i = 0; i < datalen; ++i)
-		pd_arc4_state ^= ((uint32_t)data[i] << ((i & 3) * 8));
+	(void)data; (void)datalen;   /* getentropy() needs no caller-supplied entropy */
 }
 
-static void pd_putc(char **out, size_t *remaining, int *count, char c)
+extern void _ZN4dyld4haltEPKc(const char *msg) __attribute__((noreturn));
+
+void *_Block_copy(const void *block)
 {
-	if (*remaining > 1) {
-		**out = c;
-		++*out;
-		--*remaining;
-	}
-	++*count;
+	(void)block;
+	_ZN4dyld4haltEPKc("_Block_copy()");
 }
 
-static void pd_puts(char **out, size_t *remaining, int *count, const char *s)
+void _Block_release(const void *block)
 {
-	if (!s)
-		s = "(null)";
-	while (*s)
-		pd_putc(out, remaining, count, *s++);
+	(void)block;
+	_ZN4dyld4haltEPKc("_Block_release()");
 }
-
-static void pd_putnum(char **out, size_t *remaining, int *count,
-    unsigned long long value, unsigned base, int is_signed, int negative)
-{
-	char buf[32];
-	unsigned i = 0;
-	if (is_signed && negative) {
-		pd_putc(out, remaining, count, '-');
-	}
-	do {
-		unsigned digit = value % base;
-		buf[i++] = (char)((digit < 10) ? ('0' + digit) : ('a' + digit - 10));
-		value /= base;
-	} while (value != 0 && i < sizeof(buf));
-	while (i)
-		pd_putc(out, remaining, count, buf[--i]);
-}
-
-int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
-{
-	char *out = str;
-	size_t remaining = size;
-	int count = 0;
-
-	for (; *fmt; ++fmt) {
-		if (*fmt != '%') {
-			pd_putc(&out, &remaining, &count, *fmt);
-			continue;
-		}
-
-		++fmt;
-		while (*fmt == 'l' || *fmt == 'z' || *fmt == 't')
-			++fmt;
-
-		switch (*fmt) {
-		case '%':
-			pd_putc(&out, &remaining, &count, '%');
-			break;
-		case 'c':
-			pd_putc(&out, &remaining, &count, va_arg(ap, int));
-			break;
-		case 's':
-			pd_puts(&out, &remaining, &count, va_arg(ap, const char *));
-			break;
-		case 'p':
-			pd_puts(&out, &remaining, &count, "0x");
-			pd_putnum(&out, &remaining, &count,
-			    (unsigned long long)(uintptr_t)va_arg(ap, void *), 16, 0, 0);
-			break;
-		case 'd':
-		case 'i': {
-			long long v = va_arg(ap, int);
-			pd_putnum(&out, &remaining, &count,
-			    (v < 0) ? (unsigned long long)-v : (unsigned long long)v, 10, 1, v < 0);
-			break;
-		}
-		case 'u':
-			pd_putnum(&out, &remaining, &count, va_arg(ap, unsigned int), 10, 0, 0);
-			break;
-		case 'x':
-		case 'X':
-			pd_putnum(&out, &remaining, &count, va_arg(ap, unsigned int), 16, 0, 0);
-			break;
-		default:
-			pd_putc(&out, &remaining, &count, '%');
-			if (*fmt)
-				pd_putc(&out, &remaining, &count, *fmt);
-			break;
-		}
-	}
-
-	if (size != 0)
-		*out = '\0';
-	return count;
-}
-
-int snprintf(char *str, size_t size, const char *fmt, ...)
-{
-	va_list ap;
-	va_start(ap, fmt);
-	int result = vsnprintf(str, size, fmt, ap);
-	va_end(ap);
-	return result;
-}
-
-int vsnprintf_l(char *str, size_t size, void *loc, const char *fmt, va_list ap)
-{
-	(void)loc;
-	return vsnprintf(str, size, fmt, ap);
-}
-
-int snprintf_l(char *str, size_t size, void *loc, const char *fmt, ...)
-{
-	(void)loc;
-	va_list ap;
-	va_start(ap, fmt);
-	int result = vsnprintf(str, size, fmt, ap);
-	va_end(ap);
-	return result;
-}
-
-int vfprintf(void *stream, const char *fmt, va_list ap)
-{
-	(void)stream; (void)fmt; (void)ap;
-	return 0;
-}
-
-int fflush(void *stream) { (void)stream; return 0; }
-int fputc(int c, void *stream) { (void)stream; return c; }
-void flockfile(void *stream) { (void)stream; }
-void funlockfile(void *stream) { (void)stream; }

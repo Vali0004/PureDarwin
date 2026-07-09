@@ -278,16 +278,6 @@ firehose_buffer_tracepoint_reserve(firehose_buffer_t fb, uint64_t stamp,
 			if (likely(result > 0)) {
 				uint64_t thread;
 #if KERNEL
-				/*
-				 * thread_t is the 32-bit userspace mach_port_t in this TU (built
-				 * without MACH_KERNEL_PRIVATE), so a plain
-				 * thread_tid(current_thread()) truncates the 64-bit kernel
-				 * thread pointer (mov edi, eax) and faults on an unmapped low
-				 * address during early boot.  Redeclare both routines under
-				 * fresh names with the real 64-bit ABI, aliased to the real
-				 * symbols, so the optimizer cannot fold them back to the wrong
-				 * prototype.  See firehose_buffer.c for the full rationale.
-				 */
 				extern void *fh_current_thread(void) __asm__("_current_thread");
 				extern uint64_t fh_thread_tid(void *thr) __asm__("_thread_tid");
 				thread = fh_thread_tid(fh_current_thread());

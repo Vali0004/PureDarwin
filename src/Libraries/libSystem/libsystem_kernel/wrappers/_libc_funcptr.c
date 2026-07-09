@@ -32,28 +32,39 @@
 extern _libkernel_functions_t _libkernel_functions;
 extern void mig_os_release(void* ptr);
 
-__attribute__((visibility("hidden")))
+/*
+ * PureDarwin: these allocator wrappers dispatch through _libkernel_functions,
+ * which is NULL until __libkernel_init() runs (during libSystem's initializer).
+ * dyld links libsystem_kernel statically but never runs that init, and provides
+ * its OWN malloc/free/realloc (a pre-libSystem pool allocator in dyldNew.cpp).
+ * Marking these weak lets dyld's strong definitions win the link (otherwise this
+ * archive member -- pulled in for the string dispatchers -- shadowed dyld's
+ * malloc, so every dyld allocation dereferenced the NULL table: fault_addr=0x10,
+ * the malloc slot offset). Normal libSystem clients still get these as the only
+ * (weak) definition and route through the initialized table as before.
+ */
+__attribute__((visibility("hidden"), weak))
 void *
 malloc(size_t size)
 {
 	return _libkernel_functions->malloc(size);
 }
 
-__attribute__((visibility("hidden")))
+__attribute__((visibility("hidden"), weak))
 void
 free(void *ptr)
 {
 	return _libkernel_functions->free(ptr);
 }
 
-__attribute__((visibility("hidden")))
+__attribute__((visibility("hidden"), weak))
 void *
 realloc(void *ptr, size_t size)
 {
 	return _libkernel_functions->realloc(ptr, size);
 }
 
-__attribute__((visibility("hidden")))
+__attribute__((visibility("hidden"), weak))
 void *
 reallocf(void *ptr, size_t size)
 {
@@ -103,16 +114,154 @@ pthread_current_stack_contains_np(const void *addr, size_t len)
  * Upcalls to optimized libplatform string functions
  */
 
+/*
+ * PureDarwin: the upstream _libkernel_generic_string_functions table only
+ * populated a subset of the slots -- on a real system the FULL optimized table
+ * is installed by __libkernel_platform_init() (during libSystem's initializer)
+ * before any string function is ever called, so the gaps never mattered. But
+ * dyld links libsystem_kernel statically and NEVER runs platform_init, so it
+ * uses this generic table as-is. Any dispatched string function whose slot was
+ * left NULL (strncmp/strncpy/strnlen/strstr/memchr/memcmp/memccpy/strlcat) then
+ * calls through a NULL pointer -> jump to 0. dyld's __guard_setup() calls
+ * strncmp() during bootstrap, which crashed pid 1 with rip=0 before _main().
+ * Provide portable generic implementations for every remaining slot so the
+ * generic table is self-sufficient, matching what the optimized table supplies.
+ */
+__attribute__((visibility("hidden")))
+static void *
+_libkernel_memchr(const void *s, int c, size_t n)
+{
+	const unsigned char *p = (const unsigned char *)s;
+	while (n--) {
+		if (*p == (unsigned char)c)
+			return (void *)p;
+		p++;
+	}
+	return 0;
+}
+
+__attribute__((visibility("hidden")))
+static int
+_libkernel_memcmp(const void *s1, const void *s2, size_t n)
+{
+	const unsigned char *a = (const unsigned char *)s1;
+	const unsigned char *b = (const unsigned char *)s2;
+	while (n--) {
+		if (*a != *b)
+			return (int)*a - (int)*b;
+		a++; b++;
+	}
+	return 0;
+}
+
+__attribute__((visibility("hidden")))
+static void *
+_libkernel_memccpy(void *__restrict dst, const void *__restrict src, int c, size_t n)
+{
+	unsigned char *d = (unsigned char *)dst;
+	const unsigned char *s = (const unsigned char *)src;
+	while (n--) {
+		unsigned char ch = *s++;
+		*d++ = ch;
+		if (ch == (unsigned char)c)
+			return d;
+	}
+	return 0;
+}
+
+__attribute__((visibility("hidden")))
+static size_t
+_libkernel_generic_strnlen(const char *s, size_t maxlen)
+{
+	size_t i = 0;
+	while (i < maxlen && s[i] != '\0')
+		i++;
+	return i;
+}
+
+__attribute__((visibility("hidden")))
+static int
+_libkernel_strncmp(const char *s1, const char *s2, size_t n)
+{
+	while (n--) {
+		unsigned char c1 = (unsigned char)*s1++;
+		unsigned char c2 = (unsigned char)*s2++;
+		if (c1 != c2)
+			return (int)c1 - (int)c2;
+		if (c1 == '\0')
+			break;
+	}
+	return 0;
+}
+
+__attribute__((visibility("hidden")))
+static char *
+_libkernel_strncpy(char *__restrict dst, const char *__restrict src, size_t maxlen)
+{
+	size_t i = 0;
+	for (; i < maxlen && src[i] != '\0'; i++)
+		dst[i] = src[i];
+	for (; i < maxlen; i++)
+		dst[i] = '\0';
+	return dst;
+}
+
+__attribute__((visibility("hidden")))
+static size_t
+_libkernel_strlcat(char *__restrict dst, const char *__restrict src, size_t maxlen)
+{
+	size_t dlen = _libkernel_generic_strnlen(dst, maxlen);
+	size_t slen = 0;
+	while (src[slen] != '\0')
+		slen++;
+	if (dlen == maxlen)
+		return maxlen + slen;
+	size_t i = 0;
+	while (src[i] != '\0' && dlen + i + 1 < maxlen) {
+		dst[dlen + i] = src[i];
+		i++;
+	}
+	dst[dlen + i] = '\0';
+	return dlen + slen;
+}
+
+__attribute__((visibility("hidden")))
+static char *
+_libkernel_strstr(const char *s, const char *find)
+{
+	if (find[0] == '\0')
+		return (char *)s;
+	for (; *s != '\0'; s++) {
+		const char *a = s;
+		const char *b = find;
+		while (*a != '\0' && *b != '\0' && *a == *b) {
+			a++; b++;
+		}
+		if (*b == '\0')
+			return (char *)s;
+	}
+	return 0;
+}
+
 static const struct _libkernel_string_functions
     _libkernel_generic_string_functions = {
+	.version = 1,
 	.bzero = _libkernel_bzero,
+	.memchr = _libkernel_memchr,
+	.memcmp = _libkernel_memcmp,
 	.memmove = _libkernel_memmove,
+	.memccpy = _libkernel_memccpy,
 	.memset = _libkernel_memset,
 	.strchr = _libkernel_strchr,
 	.strcmp = _libkernel_strcmp,
 	.strcpy = _libkernel_strcpy,
+	.strlcat = _libkernel_strlcat,
 	.strlcpy = _libkernel_strlcpy,
 	.strlen = _libkernel_strlen,
+	.strncmp = _libkernel_strncmp,
+	.strncpy = _libkernel_strncpy,
+	.strnlen = _libkernel_generic_strnlen,
+	.strstr = _libkernel_strstr,
 };
 static _libkernel_string_functions_t _libkernel_string_functions =
     &_libkernel_generic_string_functions;

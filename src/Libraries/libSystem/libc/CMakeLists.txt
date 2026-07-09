@@ -1,8 +1,3 @@
-# Currently, just expose standard headers under include
-
-# We need to generate libc-features.h for even the public headers to work
-# THIS IS NOT TRUE. sys/cdefs.h in the include/ directory here IS NOT the actual public header.
-# We need to exclude it from our search paths.
 add_custom_command(
     OUTPUT
         ${CMAKE_CURRENT_BINARY_DIR}/include/libc-features.h
@@ -20,8 +15,6 @@ target_include_directories(libc_features INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/i
 target_sources(libc_features PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/include/libc-features.h
 )
-
-# END GENERATE libc-features.h
 
 # We install the standard C headers to a skeleton tree here
 set(libc_headers_dir ${CMAKE_CURRENT_BINARY_DIR}/headers)
@@ -87,10 +80,6 @@ target_include_directories(libc_kernel_headers INTERFACE ${libc_headers_dir}/Sys
 
 # END HEADER INTERFACE
 
-# A focused static archive of the libc routines dyld references when linked
-# -nostdlib (strings, dir I/O, stdlib, fortify, subsystem SPI, C-locale rune
-# table). Not the whole of libc -- just the symbols the runtime linker needs.
-# WIP / opt-in (EXCLUDE_FROM_ALL): build with `ninja libc_static`.
 add_darwin_static_library(libc_static)
 target_sources(libc_static PRIVATE
     string/strcat.c
@@ -105,33 +94,46 @@ target_sources(libc_static PRIVATE
     stdlib/FreeBSD/getenv.c      # _getenv/_setenv/_unsetenv
     gen/FreeBSD/sysctlbyname.c   # _sysctlbyname (-> __sysctlbyname syscall)
     sys/crt_externs.c            # _NSGetEnviron/_NSGetArgv/_NSGetArgc/_NSGetProgname
+    stdlib/FreeBSD/exit.c        # _exit/exit (calls __cxa_finalize then the raw syscall)
+    stdlib/FreeBSD/atexit.c      # __cxa_atexit/__cxa_finalize/__cxa_finalize_ranges/atexit
+    stdlib/FreeBSD/abort.c       # _abort
+    gen/FreeBSD/assert.c         # __assert_rtn
+    secure/chk_fail.c            # ___chk_fail_overflow (needs mach-o/dyld_priv.h, now vendored)
+    darwin/pd_os_crash.c         # __os_crash (minimal real report-then-let-caller-trap; see file comment)
+    darwin/pd_arc4random.c       # _arc4random_uniform (real getentropy()-backed impl; see file comment)
+    gen/FreeBSD/signal.c         # _signal (libmalloc's pguard_malloc.c installs a SIGSEGV handler)
+    sys/sigaction.c              # __sigaction_nobind (signal.c's underlying raw syscall wrapper)
+    gen/raise.c                  # _raise (signal.c's SIG_DFL/SIG_IGN cleanup path)
+    gen/FreeBSD/sleep.c          # _sleep (pguard_malloc.c's crash-report-wait path)
+    gen/nanosleep.c              # _nanosleep (sleep.c's underlying wrapper)
+    gen/FreeBSD/isatty.c         # _isatty (pguard_malloc.c's tty-detection for its diagnostic output)
+    sys/OpenBSD/stack_protector.c # __stack_chk_fail (libplatform's string_io.c is built WITH stack protector)
+    stdlib/FreeBSD/strtol.c      # _strtol (libmalloc's env-var parsing, e.g. MallocNanoZone)
+    stdlib/FreeBSD/strtoul.c     # _strtoul/_strtoul_l
+    stdlib/FreeBSD/strtoull.c    # _strtoull/_strtoull_l
+    gen/thread_stack_pcs.c       # _thread_stack_pcs (libmalloc's pguard/debug backtrace capture)
+    gen/FreeBSD/usleep.c         # _usleep
+    gen/FreeBSD/getprogname.c    # _getprogname (malloc_printf.c's diagnostic prefix)
+    secure/memmove_chk.c         # ___memmove_chk
+    gen/FreeBSD/termios.c        # _tcgetattr (isatty.c's underlying check)
     # TODO (need cross-deps beyond the SDK sysroot):
-    #  - secure/chk_fail.c (___chk_fail_overflow) pulls <mach-o/dyld_priv.h> (dyld)
-    #  - gen/FreeBSD/arc4random.c pulls os/assumes.h -> <os/log_private.h> (libkern)
+    #  - gen/FreeBSD/arc4random.c: os/assumes.h -> corecrypto/ccrng.h chain has a
+    #    string.h asm-label redeclaration conflict under our include order; also
+    #    needs real corecrypto RNG wiring, not just headers. Deferred (libc_static
+    #    uses darwin/pd_arc4random.c instead, a real getentropy()-backed impl).
     #  - stdio/FreeBSD/mktemp.c (_mkstemp) needs BSD-internal TRUE/FALSE/bool
-    # all deferred to the full internal libc env.
+    # printf/fprintf/snprintf and the locale/rune chain are NOT deferred anymore
+    # -- resolved for real in libc_internal_static below (findfp.c/vfprintf.c/
+    # xlocale.c/table.c/gdtoa/... the whole "internal libc" stdio+locale
+    # sub-project this comment used to point at).
 )
-# TODO (deferred - need the full -nostdinc PD-libc INTERNAL environment, not the
-# SDK): dir functions opendir/readdir/closedir (internal un-namespaced DIR:
-# dd_lock/dd_fd vs SDK __dd_*), getcwd (apfs/apfs_fsctl.h), arc4random
-# (os/assumes.h), getenv (os/lock_private.h), mktemp (sys-internal TRUE), and
-# locale/FreeBSD/table.c for __maskrune/__DefaultRuneLocale (deep locale chain:
-# xlocale_private -> setlocale.h -> timelocal.h -> ...).
 set_target_properties(libc_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-# Compile against the SDK sysroot (like dyld): the libc *.c definitions build
-# against the SDK's coherent libc/pthread/mach *declarations* (same macOS 11
-# vintage, matching struct layouts), which resolves the whole SDK-assumption
-# header cluster (<pthread.h>, gethostuuid.h, os/lock_private.h, bridgeos
-# availability) in one move. Libc-internal headers still win via -I. So strip
-# add_darwin_static_library's -nostdinc and add -isysroot.
 get_target_property(_libc_copts libc_static COMPILE_OPTIONS)
 list(REMOVE_ITEM _libc_copts -nostdinc)
 set_target_properties(libc_static PROPERTIES COMPILE_OPTIONS "${_libc_copts}")
 target_compile_options(libc_static PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
-# _FORTIFY_SOURCE=0: the *_chk source files (and secure/_string.h) otherwise
-# collide with the compiler's __builtin___strcat_chk etc.
-target_compile_definitions(libc_static PRIVATE _FORTIFY_SOURCE=0)
+target_compile_definitions(libc_static PRIVATE _FORTIFY_SOURCE=0 PR_13085474_CHECK=0)
 # bridgeos availability shim (reuse libplatform's), force-included for C: several
 # private headers (os/lock_private.h) use __API_AVAILABLE(...bridgeos(x)...) which
 # neither the SDK nor PD define.
@@ -143,6 +145,7 @@ target_link_libraries(libc_static PRIVATE xnu_private_headers)
 target_include_directories(libc_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}               # <os/assumes.h> (os/assumes.h), <secure/...>
     ${CMAKE_CURRENT_SOURCE_DIR}/darwin        # libc_private.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/darwin/pd_compat  # abort.c: <pthread_workqueue.h> forwarder
     ${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat     # namespace.h / un-namespace.h
     ${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD   # local.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gen/FreeBSD     # telldir.h
@@ -152,16 +155,26 @@ target_include_directories(libc_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/private   # _simple.h (subsystem.c)
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/private       # pthread/tsd_private.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/private_include  # os/tsd.h
-    # NB: do NOT add libc/include -- its sys/cdefs.h shadows the SDK's and pulls
-    # in the generated libc-features.h; the SDK sysroot provides the std headers.
+    # atexit.c: os/alloc_once_private.h (reconstructed, shared with pthread_static)
+    # + os/base_private.h (vendored from ravynOS's userspace Libsystem copy).
+    ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/compat-include
+    # atexit.c: Block_private.h (libdispatch's userspace BlocksRuntime copy).
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libdispatch/src/BlocksRuntime
+    # chk_fail.c: mach-o/dyld_priv.h (not in the SDK) from the vendored dyld tree.
+    ${CMAKE_SOURCE_DIR}/src/Libraries/dyld/upstream/include
+    # strtol.c/strtoul.c/strtoull.c: os/tsd.h (mach), System/machine/cpu_capabilities.h
+    # redirect (libmalloc's compat-include), stack_logging.h (libmalloc/private,
+    # pulled transitively).
+    ${CMAKE_CURRENT_SOURCE_DIR}/pd-compat-include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libmalloc/private
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libmalloc/compat-include
 )
+set_source_files_properties(stdlib/FreeBSD/exit.c stdlib/FreeBSD/atexit.c
+    stdlib/FreeBSD/abort.c gen/FreeBSD/assert.c gen/FreeBSD/signal.c gen/FreeBSD/sleep.c
+    sys/OpenBSD/stack_protector.c
+    gen/FreeBSD/usleep.c gen/FreeBSD/getprogname.c gen/FreeBSD/termios.c
+    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
 
-# The other half of the libc dyld needs: files that require Libc's INTERNAL
-# headers (un-namespaced internal DIR/FILE structs, the rune-locale tables) and
-# therefore CANNOT use the SDK sysroot like libc_static. Built the way Apple
-# builds libc: -nostdinc against libc/include (the internal std headers) + the
-# generated libc-features.h + fbsdcompat namespace wrappers, with sys/* and
-# mach/* coming from the xnu kernel headers. Opt-in (EXCLUDE_FROM_ALL).
 add_darwin_static_library(libc_internal_static)
 set_target_properties(libc_internal_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_sources(libc_internal_static PRIVATE
@@ -175,8 +188,130 @@ target_sources(libc_internal_static PRIVATE
     stdlib/FreeBSD/merge.c       # _mergesort (pulled by scandir/getcwd)
     locale/FreeBSD/table.c       # ___maskrune / __DefaultRuneLocale (C-locale rune table)
     gen/dirfd.c                  # _dirfd
+    locale/xlocale.c             # __c_locale/__global_locale/__locale_key + newlocale/uselocale family
+    locale/isctype.c             # externs isspace_l & co (ctype.h inlines, extern'd via _EXTERNALIZE_CTYPE_INLINES_TOP_)
+    stdio/FreeBSD/findfp.c        # __sF[]/__stderrp, _finddata, __sinit
+    stdio/FreeBSD/stdio.c         # __sread/__swrite/__sseek/__sclose (fd-backed I/O callbacks)
+    stdio/FreeBSD/makebuf.c       # __swsetup's buffer sizing (fstat-based)
+    stdio/FreeBSD/wsetup.c        # __swsetup (write-mode buffer setup)
+    stdio/FreeBSD/refill.c        # __srefill (read-mode refill; pulled in transitively)
+    stdio/FreeBSD/fvwrite.c       # __sfvwrite (vfprintf's underlying buffered writer)
+    stdio/FreeBSD/fflush.c        # __sflush / fflush (used by exit's stdio-flush + fvwrite)
+    stdio/FreeBSD/fclose.c        # fclose (fwalk's flush-and-close path referenced by findfp.c)
+    stdio/FreeBSD/vfprintf.c      # __vfprintf (the real BSD engine; xprintf variant is #if 0'd out)
+    stdio/FreeBSD/fprintf.c       # _fprintf
+    stdio/FreeBSD/printf.c        # _printf
+    stdio/FreeBSD/vsnprintf.c     # _vsnprintf (snprintf's engine)
+    stdio/FreeBSD/snprintf.c      # _snprintf
+    secure/snprintf_chk.c         # ___snprintf_chk (libmalloc's pguard_malloc.c FORTIFY call)
+    secure/vsnprintf_chk.c        # ___vsnprintf_chk (snprintf_chk's underlying engine)
+    stdio/FreeBSD/_flock_stub.c   # _flockfile/_funlockfile (vfprintf's FILE locking)
+    locale/FreeBSD/setrunelocale.c # __setrunelocale (xlocale's uselocale/newlocale LC_CTYPE switch)
+    locale/FreeBSD/setlocale.c    # __get_locale_env/__detect_path_locale (setlocale's env-var lookup)
+    locale/FreeBSD/collate.c      # __collate_load_tables
+    locale/FreeBSD/lnumeric.c     # __numeric_load_locale
+    locale/FreeBSD/lmonetary.c    # __monetary_load_locale
+    locale/FreeBSD/lmessages.c    # __messages_load_locale
+    stdtime/FreeBSD/timelocal.c   # __time_load_locale
+    locale/FreeBSD/none.c         # __none_{mbrtowc,mbsinit,mbsnrtowcs,wcrtomb,wcsnrtombs} (C-locale "no conversion" charset backend)
+    locale/FreeBSD/tolower.c      # _tolower/_toupper (non-locale-suffixed forms)
+    locale/FreeBSD/toupper.c
+    locale/FreeBSD/nomacros.c     # externs __istype/__maskrune/__isctype (ctype.h base inlines, non-_l)
+    gen/FreeBSD/sysconf.c         # _sysconf (findfp.c's __sinit uses it for buffer sizing)
+    gen/FreeBSD/sysctl.c          # _sysctl (sysconf/getpagesize's underlying syscall wrapper)
+    darwin/pd_ffs.c               # ffs (real __builtin_ffs; see file comment)
+    locale/FreeBSD/rune.c         # _Read_RuneMagi (locale-file rune-table parser)
+    locale/FreeBSD/ascii.c        # __ascii_init
+    locale/FreeBSD/utf2.c         # __UTF2_init
+    locale/FreeBSD/big5.c         # __BIG5_init
+    locale/FreeBSD/gb2312.c       # __GB2312_init
+    locale/FreeBSD/gb18030.c      # __GB18030_init
+    locale/FreeBSD/gbk.c          # __GBK_init
+    locale/FreeBSD/mskanji.c      # __MSKanji_init
+    stdio/FreeBSD/fopen.c         # _fopen (collate/setrunelocale's locale-file open)
+    stdio/FreeBSD/fdopen.c        # _fdopen (fopen's underlying FILE* wrapper)
+    stdio/FreeBSD/fread.c         # _fread (collate table loading)
+    string/FreeBSD/wcsncmp.c      # _wcsncmp (collate's chainsearch)
+    string/FreeBSD/strerror.c     # _strerror (collate's error-message path)
+    locale/FreeBSD/mbrtowc.c      # _mbrtowc_l (collate's equiv-class matching)
+    locale/FreeBSD/mbsrtowcs.c    # _mbsrtowcs_l (collate's mbstowcs)
+    locale/FreeBSD/ldpart.c       # __part_load_locale / __ldpart_free_extra (shared LC_* file-loading engine)
+    locale/FreeBSD/fix_grouping.c # __fix_locale_grouping_str (numeric/monetary grouping)
+    locale/FreeBSD/runetype.c     # __runetype/__runetype_l (nomacros.c's non-cached-rune path)
+    stdio/FreeBSD/xprintf.c       # __xvprintf (vfprintf.c's %n$ positional-arg / xprintf-domain hook)
+    stdio/FreeBSD/fwalk.c         # _fwalk (findfp.c's atexit walk-all-FILEs callback)
+    stdio/FreeBSD/fileno.c        # _fileno (rune.c's Read_RuneMagi uses it to check regular-file-ness)
+    stdio/FreeBSD/rewind.c        # _rewind (Read_RuneMagi's re-read-after-check)
+    stdio/xprintf_domain.c        # __xprintf_domain_{once,init} (xprintf.c's %n$ domain registry)
+    locale/FreeBSD/wcsrtombs.c    # _wcsrtombs_l (vfprintf's wide-string-to-multibyte conversion)
+    locale/FreeBSD/wcrtomb.c      # _wcrtomb_l
+    stdio/FreeBSD/asprintf.c      # _asprintf_l (vfprintf's os_assert_asprintf path)
+    locale/FreeBSD/utf8.c         # __UTF8_init (setrunelocale's charset table)
+    stdio/FreeBSD/printf-pos.c    # __find_arguments (vfprintf's %n$ positional-argument support)
+    gen/errlst.c                  # sys_errlist/sys_nerr (strerror's message table)
+    stdio/FreeBSD/flags.c         # __sflags (fdopen's mode-string parser)
+    locale/FreeBSD/mbsnrtowcs.c   # __mbsnrtowcs_std (setrunelocale's stateless-conversion fallback)
+    gen/FreeBSD/err.c             # _errx/_e_visprintf (xprintf.c's malformed-format-string abort path)
+    stdio/FreeBSD/vasprintf.c     # _vasprintf/_vasprintf_l (asprintf.c + err.c's underlying engine)
+    stdio/FreeBSD/sprintf.c       # _sprintf (err.c's _e_visprintf)
+    stdio/FreeBSD/fputs.c         # _fputs (err.c's _e_visprintf)
+    stdio/FreeBSD/fseek.c         # _fseeko (rewind.c)
+    locale/FreeBSD/localeconv.c   # _localeconv/_localeconv_l (vfprintf's grouping_init)
+    stdio/FreeBSD/xprintf_str.c
+    stdio/FreeBSD/xprintf_int.c    # also chr/ptr
+    stdio/FreeBSD/xprintf_float.c
+    stdio/FreeBSD/xprintf_quote.c
+    stdio/FreeBSD/xprintf_time.c
+    stdio/FreeBSD/xprintf_vis.c
+    stdio/FreeBSD/xprintf_errno.c
+    stdio/FreeBSD/xprintf_hexdump.c
+    locale/pd_legacy_rune.c
+    locale/FreeBSD/euc.c           # __EUC_init (setrunelocale's charset table)
+    locale/FreeBSD/wcsnrtombs.c    # __wcsnrtombs_std (setrunelocale's stateless-conversion fallback)
+    stdio/FreeBSD/puts.c           # __puts_null__ (shared "(null)" string; fputs.c is the extern side)
+    stdio/FreeBSD/fputc.c          # _fputc (dyld's pd_stubs.c had a fake one; real stdio covers it now)
+    stdio/FreeBSD/wbuf.c           # __swbuf (fputc's buffer-full slow path)
+    stdio/FreeBSD/vsprintf.c       # _vsprintf_l (sprintf.c's engine)
+    stdio/FreeBSD/ftell.c          # _ftello (fseek.c's fseeko)
+    gen/FreeBSD/vis.c              # _strvisx (xprintf_vis.c's %V renderer)
+    darwin/pd_fpclassify.c         # __fpclassify{f,d,l} (real; see file comment)
+    locale/iswctype.c              # externs iswgraph/iswspace/iswalnum/iswcntrl & co (wctype.h inlines, same pattern as isctype.c)
+    string/FreeBSD/wcschr.c        # _wcschr (vis.c's multi-byte extra-chars-to-encode scan)
+    string/FreeBSD/wcslen.c        # _wcslen
+    locale/FreeBSD/mbstowcs.c      # _mbstowcs (vis.c's makeextralist)
+    locale/FreeBSD/mbtowc.c        # _mbtowc (vis.c's istrsenvisx)
+    locale/FreeBSD/wctomb.c        # _wctomb
+    string/FreeBSD/wcscpy.c        # _wcscpy (collate.c's __collate_wcsdup)
+    string/FreeBSD/wcsncpy.c       # _wcsncpy (collate.c's substitute/collating-symbol/equiv-value)
+    gdtoa/FreeBSD/gdtoa-dmisc.c
+    gdtoa/FreeBSD/gdtoa-dtoa.c
+    gdtoa/FreeBSD/gdtoa-gdtoa.c
+    gdtoa/FreeBSD/gdtoa-gethex.c
+    gdtoa/FreeBSD/gdtoa-gmisc.c
+    gdtoa/FreeBSD/gdtoa-hd_init.c
+    gdtoa/FreeBSD/gdtoa-hexnan.c
+    gdtoa/FreeBSD/gdtoa-misc.c
+    gdtoa/FreeBSD/gdtoa-smisc.c
+    gdtoa/FreeBSD/gdtoa-strtod.c
+    gdtoa/FreeBSD/gdtoa-strtodg.c
+    gdtoa/FreeBSD/gdtoa-strtof.c
+    gdtoa/FreeBSD/gdtoa-strtopdd.c
+    gdtoa/FreeBSD/gdtoa-strtopx.c
+    gdtoa/FreeBSD/gdtoa-strtord.c
+    gdtoa/FreeBSD/gdtoa-sum.c
+    gdtoa/FreeBSD/gdtoa-ulp.c
+    gdtoa/FreeBSD/glue.c
+    gdtoa/FreeBSD/_hdtoa.c
+    gdtoa/FreeBSD/_ldtoa.c
+    gdtoa/FreeBSD/machdep_ldisd.c
+    gdtoa/FreeBSD/machdep_ldisdd.c
+    gdtoa/FreeBSD/machdep_ldisQ.c
+    gdtoa/FreeBSD/machdep_ldisx.c
 )
-target_compile_definitions(libc_internal_static PRIVATE __DARWIN_UNIX03=1 _FORTIFY_SOURCE=0 NO_FLOATING_POINT PR_13085474_CHECK=0)
+# __LIBC__: tells Apple's FreeBSD-derived sources (collate.h/_ctype.h/...) they
+# are being compiled AS libc itself, not a libc client -- exposes the internal
+# __collate_*/ctype-inline-externalizing declarations these .c files define.
+target_compile_definitions(libc_internal_static PRIVATE __DARWIN_UNIX03=1 _FORTIFY_SOURCE=0 NO_FLOATING_POINT PR_13085474_CHECK=0 __LIBC__=1)
 target_include_directories(libc_internal_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/pd-compat-include   # reconstructed apfs/apfs_fsctl.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/include  # libkern/OSAtomic.h (locale refcounts)
@@ -190,6 +325,8 @@ target_include_directories(libc_internal_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD        # local.h (internal FILE)
     ${CMAKE_CURRENT_SOURCE_DIR}/locale
     ${CMAKE_CURRENT_SOURCE_DIR}/locale/FreeBSD
+    ${CMAKE_CURRENT_SOURCE_DIR}/gdtoa/FreeBSD         # gdtoa.h / gdtoaimp.h (xprintf_float.c's dtoa engine)
+    ${CMAKE_CURRENT_SOURCE_DIR}/gdtoa                 # arith.h (Apple's pre-generated per-arch arithchk.c output)
     ${CMAKE_CURRENT_SOURCE_DIR}/stdtime/FreeBSD       # timelocal.h (locale chain)
     ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/private_include
     ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/mach

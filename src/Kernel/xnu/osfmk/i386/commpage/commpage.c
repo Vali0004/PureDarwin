@@ -516,6 +516,23 @@ commpage_populate_one(
 
 	next = 0;
 	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used, uperm );
+
+	/* PureDarwin/QEMU-TCG: from here until this function returns, commPagePtr32
+	 * (or 64) is non-NULL but the page is only lazily faulted in as the writes
+	 * below actually touch it -- on real hardware that first-touch fault is
+	 * fast enough nobody has ever hit this, but under TCG's much slower
+	 * instruction-by-instruction emulation, the periodic timer interrupt
+	 * (running_timers_expire -> commpage_update_mach_approximate_time, which
+	 * reads through commPagePtr32 unconditionally once it's non-NULL) reliably
+	 * lands inside this window and faults on a mapping this same CPU is mid-
+	 * establishing, panicking the boot. Disable interrupts just for this
+	 * pointer-publish + fault-in-by-writing window (NOT around
+	 * commpage_allocate() above, which calls vm_map_enter -> zalloc and
+	 * *requires* interrupts enabled -- see zalloc.c's
+	 * "interrupts_enabled || ... || startup_phase < STARTUP_SUB_EARLY_BOOT"
+	 * assertion, which an earlier, wider version of this fix tripped). */
+	boolean_t istate = ml_set_interrupts_enabled(FALSE);
+
 	*kernAddressPtr = commPagePtr;                          // save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
 
@@ -558,6 +575,8 @@ commpage_populate_one(
 	if (next > _COMM_PAGE_END) {
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 	}
+
+	ml_set_interrupts_enabled(istate);
 }
 
 

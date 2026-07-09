@@ -950,23 +950,17 @@ cpu_thread_init(void)
 	x86_core_t  *core;
 	static int  initialized     = 0;
 
-	kprintf("cpu_thread_init: my_cpu=%d master_cpu=%d initialized=%d\n",
-        my_cpu, master_cpu, initialized);
-
 	/*
 	 * If we're the boot processor, we do all of the initialization of
 	 * the CPU topology infrastructure.
 	 */
 	if (my_cpu == master_cpu && !initialized) {
-    	kprintf("INITING x86_topo_lock\n");
 		simple_lock_init(&x86_topo_lock, 0);
 
 		/*
 		 * Put this logical CPU into the physical CPU topology.
 		 */
 		cpup->lcpu.core = cpu_thread_alloc(my_cpu);
-    	kprintf("x86_topo_lock initialized\n");
-
 
 		initialized = 1;
 	}

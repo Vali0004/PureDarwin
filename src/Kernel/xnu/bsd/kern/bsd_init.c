@@ -752,17 +752,6 @@ bsd_init(void)
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
 
-	/*
-	 * Load the ext4 root filesystem kext now that vfsinit() has numbered the
-	 * vnode-op descriptors.  Must happen before vfs_mountroot() so ext4 is a
-	 * registered filesystem when the root device is probed.
-	 */
-	{
-		extern void ext4fs_bootstrap_load(void);
-		bsd_init_kprintf("loading ext4 filesystem kext\n");
-		ext4fs_bootstrap_load();
-	}
-
 #if CONFIG_PROC_UUID_POLICY
 	/* Initial proc_uuid_policy subsystem */
 	bsd_init_kprintf("calling proc_uuid_policy_init()\n");

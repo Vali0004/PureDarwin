@@ -15388,19 +15388,3 @@ sysctl_willuserspacereboot
 static SYSCTL_PROC(_kern, OID_AUTO, willuserspacereboot,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     NULL, 0, sysctl_willuserspacereboot, "I", "");
-
-/*
- * ext4fs_bootstrap_load - load & start the ext4 root filesystem kext.
- *
- * Filesystem kexts must register (vfs_fsadd) only AFTER vfsinit() has numbered
- * the vnode-op descriptors, so they cannot use the loadKernelExternalComponents
- * path (which runs during PE_init_iokit, before bsd_init).  bsd_init() calls
- * this right after vfsinit() and before vfs_mountroot() so ext4 is registered
- * in time to serve as the root filesystem.
- */
-extern "C" void
-ext4fs_bootstrap_load(void)
-{
-	(void)OSKext::loadKextWithIdentifier("com.apple.filesystems.ext4",
-	    /* allowDefer */ false);
-}

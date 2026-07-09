@@ -415,9 +415,6 @@ IOPlatformExpert::setConsoleInfo( PE_Video * consoleInfo,
 IOReturn
 IOPlatformExpert::registerInterruptController(OSSymbol *name, IOInterruptController *interruptController)
 {
-	kprintf("INTCTRL: registerInterruptController name='%s'\n",
-	    name ? name->getCStringNoCopy() : "(null)");
-
 	IOLockLock(gIOInterruptControllersLock);
 
 	gIOInterruptControllers->setObject(name, interruptController);
@@ -446,9 +443,6 @@ IOInterruptController *
 IOPlatformExpert::lookUpInterruptController(OSSymbol *name)
 {
 	OSObject              *object;
-
-	kprintf("INTCTRL: lookUpInterruptController WAITING for name='%s'\n",
-	    name ? name->getCStringNoCopy() : "(null)");
 
 	IOLockLock(gIOInterruptControllersLock);
 	while (1) {
