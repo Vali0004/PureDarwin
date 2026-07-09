@@ -1,27 +1,3 @@
-# libc++abi (Itanium C++ ABI) static subset for dyld.
-#
-# dyld links -nostdlib and pulls the C++ ABI runtime in statically: __cxa_throw,
-# __cxa_begin/end_catch, operator new/delete, the personality routine, the
-# std::*_error exception types and their typeinfo/vtables. These are the
-# version-INDEPENDENT half of the C++ runtime (the Itanium ABI is stable), so we
-# build them from the vendored LLVM 21 libc++abi even though dyld's own STL was
-# compiled against the SDK 11.3 libc++. (The version-SENSITIVE STL half -- libc++
-# proper -- is built separately.)
-#
-# The sources are VENDORED in-tree (no external checkout): the libc++abi/libc++/
-# libunwind subtrees live under src/Libraries/{libcxxabi,libcxx,libunwind},
-# committed so the build is reproducible. They must match the toolchain's clang
-# (LLVM 21).
-#
-# Why a hand-rolled custom-command build instead of add_darwin_static_library:
-# the osxcross clang++ *wrapper* unconditionally injects `-isystem
-# <SDK>/usr/include/c++/v1` (the SDK's own libc++ headers). That can't be
-# suppressed with -nostdinc++, and it shadows the vendored LLVM 21 libc++ headers
-# we must compile against (LLVM 21 uses newer internal macros the SDK headers
-# lack). The underlying real clang (same osxcross install, minus the wrapper) does
-# NOT inject the SDK libc++, so we invoke it directly with explicit -target/-isysroot.
-
-# In-tree vendored source roots.
 set(_libcxxabi  "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_libcxx     "${CMAKE_CURRENT_SOURCE_DIR}/../libcxx")
 set(_libunwind  "${CMAKE_CURRENT_SOURCE_DIR}/../libunwind")
@@ -30,8 +6,6 @@ if(NOT EXISTS "${_libcxxabi}/src/cxa_exception.cpp")
 (expected the LLVM 21 libcxxabi subtree checked in here).")
 endif()
 
-# The real clang, bypassing the osxcross wrapper. It lives beside the toolchain's
-# archiver; derive the bin dir from there so we don't hardcode an install prefix.
 get_filename_component(_osxcross_bin "${CMAKE_AR}" DIRECTORY)
 set(_real_clang "${_osxcross_bin}/clang")
 if(NOT EXISTS "${_real_clang}")
@@ -45,7 +19,6 @@ else()
     message(FATAL_ERROR "OSXCROSS_SDK not in environment; cannot locate the macOS SDK.")
 endif()
 
-# Target triple, from the toolchain's tool prefix (…/<triple>-ar).
 get_filename_component(_ar_name "${CMAKE_AR}" NAME)
 string(REGEX REPLACE "-ar$" "" _triple "${_ar_name}")
 
@@ -59,7 +32,7 @@ set(_abi_flags
     -I ${_libcxx}/include
     -I ${_libcxxabi}/include
     -I ${_libcxxabi}/src
-    -I ${_libcxx}/src               # libcxxabi does #include "include/…" relative to here
+    -I ${_libcxx}/src
     -D_LIBCXXABI_BUILDING_LIBRARY
     -D_LIBCPP_BUILDING_LIBRARY
     -DLIBCXX_BUILDING_LIBCXXABI
@@ -88,12 +61,6 @@ set(_abi_srcs
 set(_abi_objs "")
 foreach(s ${_abi_srcs})
     set(_obj "${CMAKE_CURRENT_BINARY_DIR}/${s}.o")
-    # Per-thread C++ exception globals: dyld's libpthread variant (VARIANT_DYLD)
-    # has NO dynamic TLS keys -- pthread_key_create is absent and setspecific
-    # returns ENOTSUP -- so the default pthread-key storage path in
-    # cxa_exception_storage won't link. dyld is single-threaded at startup and
-    # serializes dlopen under a global lock, so a single global __cxa_eh_globals
-    # is correct here. Build just this file with _LIBCXXABI_HAS_NO_THREADS.
     set(_abi_extra "")
     if(s STREQUAL "cxa_exception_storage")
         set(_abi_extra -D_LIBCXXABI_HAS_NO_THREADS)
@@ -126,12 +93,6 @@ set_target_properties(libcxxabi_static PROPERTIES
     IMPORTED_LOCATION "${_abi_archive}")
 add_dependencies(libcxxabi_static libcxxabi_static_build)
 
-# --------------------------------------------------------------------------
-# libunwind: the _Unwind_* level-1/2 EH machinery that libc++abi's personality
-# routine (___gxx_personality_v0) and ___cxa_throw drive. Same LLVM 21 tree,
-# same raw-clang mechanism (the wrapper's SDK libc++ injection is irrelevant
-# here since libunwind is nearly freestanding, but we reuse the raw clang for
-# consistency and to keep -nostdinc++ clean).
 if(NOT EXISTS "${_libunwind}/src/libunwind.cpp")
     message(FATAL_ERROR "vendored libunwind sources missing at ${_libunwind}/src.")
 endif()

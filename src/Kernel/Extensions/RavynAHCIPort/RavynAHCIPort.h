@@ -119,7 +119,7 @@ private:
                      uint32_t    sectorCount,
                      void      * buffer,
                      uint32_t    bufferBytes);
-    
+
     bool writeDMAExt(PortState  &portState,
                      uint64_t    lba,
                      uint32_t    sectorCount,
