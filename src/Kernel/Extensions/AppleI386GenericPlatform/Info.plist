@@ -67,6 +67,10 @@
 				</dict>
 				<dict>
 					<key>IOName</key>
+					<string>ps2controller</string>
+				</dict>
+				<dict>
+					<key>IOName</key>
 					<string>pci</string>
 					<key>pci-bus-info</key>
 					<data>AAIQAAEAAAA=</data>

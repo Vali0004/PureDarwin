@@ -165,6 +165,10 @@ IOService *AppleI386PlatformExpert::createNub(OSDictionary *from) {
 			setupBIOS(nub);
 		} else if (strcmp(name, "8259-pic") == 0) {
 			setupPIC(nub);
+		} else if (strcmp(name, "ps2controller") == 0) {
+			// ApplePS2Controller calls registerInterrupt(1/12) on this nub,
+			// so it needs the same legacy-IRQ specifier table as the PIC.
+			setupPIC(nub);
 		}
 	}
 

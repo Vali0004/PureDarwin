@@ -22,6 +22,7 @@ target_sources(pthread_static PRIVATE
     src/pthread_atfork.c
     src/pthread_dependency.c
     src/pthread_asm.s
+    pd_main_qos.c
     pd_dyld_variant_extras.c    # _pthread_atomic_xchg_ptr + _pthread_qos_class_encode_workqueue
 )
 # __POSIX_LIB__: build the pthread library proper, so struct sched_param comes
@@ -79,7 +80,7 @@ target_compile_options(pthread_static PRIVATE
     -Wno-int-conversion
 )
 set_source_files_properties(src/pthread_asm.s PROPERTIES
-    LANGUAGE ASM COMPILE_FLAGS "-x assembler-with-cpp")
+    LANGUAGE ASM COMPILE_FLAGS "-x assembler-with-cpp -UVARIANT_DYLD")
 # pthread_tsd.c: build WITHOUT VARIANT_DYLD so it provides real dynamic TLS keys
 # (pthread_key_create/delete + a working pthread_setspecific with destructors).
 # dyld's own thread-local-variable support (threadLocalVariables.c) allocates

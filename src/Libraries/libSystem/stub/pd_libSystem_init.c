@@ -83,6 +83,11 @@ extern int _dyld_func_lookup(const char *name, void **address);
 extern void _pthread_set_self(void *p);   /* p == NULL selects the VARIANT_DYLD seed path */
 extern void _program_vars_init(const struct ProgramVars *vars);
 extern void __atexit_init(void);
+extern void _init_clock_port(void);
+extern void __chk_init(void);
+extern void __xlocale_init(void);
+extern void __guard_setup(const char *apple[]);
+extern void _subsystem_init(const char *apple[]);
 extern void __malloc_init(const char *apple[]);
 extern int mach_init(void);
 
@@ -156,6 +161,11 @@ static void pd_libSystem_initializer(int argc, const char *argv[], const char *e
 	mach_init();
 	_pthread_set_self(NULL);
 	__atexit_init();
+	_init_clock_port();
+	__chk_init();
+	__xlocale_init();
+	__guard_setup(apple);
+	_subsystem_init(apple);
 	__malloc_init(apple);
 
 	sHelpers.startGlueToCallExit = pd_libdyld_getStartGlueToCallExit();

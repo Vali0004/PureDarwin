@@ -5,7 +5,6 @@
 # where libSystem.B.dylib re-exports libsystem_c/pthread/kernel/malloc.
 # Expand this list as more of userland (launchd, etc.) comes online.
 #
-# --- init (/sbin/launchd, getty-style) libc surface ---
 _access
 _close
 ___error
@@ -37,7 +36,6 @@ _sync
 _unmount
 _usleep
 _waitpid
-# --- base umbrella (libdyld + earlier userland) ---
 ___assert_rtn
 ___cxa_atexit
 ___cxa_finalize
@@ -68,7 +66,6 @@ _strncmp
 _strrchr
 _vm_allocate
 _write
-# --- BusyBox minimal shell/coreutils surface ---
 ___memcpy_chk
 ___memset_chk
 ___sprintf_chk
@@ -126,8 +123,11 @@ _mknod
 _mkstemp
 _mktime
 _opendir$INODE64
+_opterr
 _optarg
 _optind
+_optopt
+_optreset
 _pipe
 _poll
 _putc
@@ -193,3 +193,37 @@ _uname
 _sysctl
 _sysctlbyname
 _sysctlnametomib
+_dup
+_execvp
+_putenv
+_clock_settime
+_fchmod
+_fchown
+_fputc
+_fsync
+_ftruncate
+_futimens
+_getc
+_getchar
+_getgrgid
+_getgrnam
+_getgrouplist
+_gethostbyname
+_getpwuid
+_getsid
+_h_errno
+_hstrerror
+_inet_ntoa
+_localtime_r
+_memchr
+_regcomp
+_regerror
+_regexec
+_regfree
+_sethostname
+_strcasestr
+___strcat_chk
+_strsep
+_strspn
+_ungetc
+_utimensat

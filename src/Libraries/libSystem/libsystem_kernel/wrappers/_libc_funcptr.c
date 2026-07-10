@@ -287,7 +287,10 @@ __bzero(void *s, size_t n)
 	return _libkernel_string_functions->bzero(s, n);
 }
 
-__attribute__((visibility("hidden")))
+/* Default (not hidden) visibility: libSystem.B exports memchr from here.
+ * libplatform has no dedicated exported copy that gets pulled otherwise --
+ * the -u root resolves to this archive first, so a hidden def would leave
+ * the export list unsatisfiable ("cannot export hidden symbol"). */
 void *
 memchr(const void *s, int c, size_t n)
 {

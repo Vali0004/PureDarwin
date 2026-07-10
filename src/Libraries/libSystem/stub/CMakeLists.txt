@@ -31,10 +31,7 @@ target_sources(libSystem_B_stub PRIVATE
     empty.c
     pd_libSystem_init.c
     pd_libSystem_compat.c
-    pd_libSystem_memset.c
-    pd_libSystem_process.c
-    pd_libSystem_stack_chk.c
-    pd_pthread_umbrella_stubs.c)
+    pd_libSystem_process.c)
 
 # Match launchd-dummy's LC_LOAD_DYLIB expectation (from otool -L) so dyld's
 # compatibility-version check accepts this as a satisfying match.

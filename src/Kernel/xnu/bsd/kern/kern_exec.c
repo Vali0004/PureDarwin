@@ -6334,10 +6334,6 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
 				return kr;
 			}
 		}
-		printf("PD-DIAG: stack region [0x%llx..0x%llx) size=0x%llx user_stack=0x%llx rlim=0x%llx prot=0x%llx\n",
-		    (uint64_t)addr, (uint64_t)(addr + size), (uint64_t)size,
-		    (uint64_t)user_stack, (uint64_t)load_result->user_stack_size,
-		    (uint64_t)prot_size);
 	}
 
 	return KERN_SUCCESS;

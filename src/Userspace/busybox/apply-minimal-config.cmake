@@ -14,6 +14,8 @@ endfunction()
 
 foreach(symbol IN ITEMS
     BUSYBOX
+    SHOW_USAGE
+    FEATURE_VERBOSE_USAGE
     CAT
     CHMOD
     CP
@@ -24,12 +26,40 @@ foreach(symbol IN ITEMS
     MKDIR
     MV
     PWD
+    REBOOT
     RM
     RMDIR
+    SHUTDOWN
     SLEEP
     TEST
     TRUE
     UNAME
+    BASENAME
+    DIRNAME
+    HEAD
+    TAIL
+    WC
+    CUT
+    TR
+    SORT
+    UNIQ
+    GREP
+    SED
+    FIND
+    XARGS
+    TOUCH
+    DATE
+    ENV
+    ID
+    PRINTF
+    SEQ
+    YES
+    WHICH
+    HOSTNAME
+    DU
+    DD
+    KILL
+    CLEAR
     SH_IS_ASH
     ASH
     FEATURE_PREFER_APPLETS

@@ -90,6 +90,7 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/waitpid.c        # _waitpid (init reaps/respawns children)
     gen/FreeBSD/pause.c          # _pause (init halt loop)
     string/FreeBSD/strrchr.c
+    string/FreeBSD/strsep.c      # _strsep (exec.c PATH split)
     string/stpcpy.c              # _stpcpy
     string/stpncpy.c             # _stpncpy
     secure/stpcpy_chk.c          # ___stpcpy_chk
@@ -98,6 +99,8 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/siglist.c        # _sys_siglist / _sys_signame
     gen/devname.c                # _devname / _devname_r
     gen/uname.c                  # _uname (BusyBox uname; sysctl-backed)
+    gen/FreeBSD/exec.c           # _execvp / _execv / _execlp (BusyBox spawn)
+    stdlib/FreeBSD/putenv.c      # _putenv (BusyBox env)
     gen/FreeBSD/sysctl.c         # _sysctl (public wrapper over __sysctl)
     gen/FreeBSD/sysctlbyname.c   # _sysctlbyname
     gen/FreeBSD/sysctlnametomib.c # _sysctlnametomib
@@ -112,6 +115,27 @@ target_sources(libc_static PRIVATE
     stdtime/timezone_unix03.c    # _st_get_timezone / _st_set_timezone (strftime %z)
     gen/pd_libm_builtins.c       # nan/nanf/nanl + fegetenv/fesetenv (no libm yet)
     gen/pd_notify_stub.c         # notify_post shim (real libnotify needs XPC)
+    gen/pd_getgrent.c            # getgrnam/getgrgid/getgrouplist (/etc/group reader; no libinfo)
+    gen/pd_netdb_stub.c          # gethostbyname/h_errno/hstrerror (no libinfo/libresolv yet)
+    gen/clock_gettime.c          # _clock_gettime / _clock_settime (BusyBox date -s)
+    gen/FreeBSD/sethostname.c    # _sethostname (BusyBox hostname; sysctl-backed)
+    net/FreeBSD/inet_ntoa.c      # _inet_ntoa
+    net/inet_ntop.c              # _inet_ntop (inet_ntoa's formatter)
+    string/FreeBSD/wmemcmp.c     # _wmemcmp (TRE regexec wide compares)
+    string/FreeBSD/strcasestr.c  # _strcasestr (BusyBox grep -F paths)
+    string/FreeBSD/strspn.c      # _strspn
+    secure/strcat_chk.c          # ___strcat_chk
+    # POSIX regex: Apple's TRE engine (regcomp/regexec) + BSD regerror.
+    regex/FreeBSD/regerror.c
+    regex/TRE/lib/regcomp.c
+    regex/TRE/lib/regexec.c
+    regex/TRE/lib/tre-ast.c
+    regex/TRE/lib/tre-compile.c
+    regex/TRE/lib/tre-match-backtrack.c
+    regex/TRE/lib/tre-match-parallel.c
+    regex/TRE/lib/tre-mem.c
+    regex/TRE/lib/tre-parse.c
+    regex/TRE/lib/tre-stack.c
     stdlib/FreeBSD/qsort.c
     stdlib/FreeBSD/realpath.c
     secure/memcpy_chk.c
@@ -175,7 +199,10 @@ get_target_property(_libc_copts libc_static COMPILE_OPTIONS)
 list(REMOVE_ITEM _libc_copts -nostdinc)
 set_target_properties(libc_static PROPERTIES COMPILE_OPTIONS "${_libc_copts}")
 target_compile_options(libc_static PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
-target_compile_definitions(libc_static PRIVATE _FORTIFY_SOURCE=0 PR_13085474_CHECK=0)
+target_compile_definitions(libc_static PRIVATE
+    _FORTIFY_SOURCE=0
+    PR_13085474_CHECK=0
+    PUREDARWIN_EARLY_USERLAND=1)
 # bridgeos availability shim (reuse libplatform's), force-included for C: several
 # private headers (os/lock_private.h) use __API_AVAILABLE(...bridgeos(x)...) which
 # neither the SDK nor PD define.
@@ -213,9 +240,10 @@ target_include_directories(libc_static PRIVATE
 )
 set_source_files_properties(stdlib/FreeBSD/exit.c stdlib/FreeBSD/atexit.c
     stdlib/FreeBSD/abort.c gen/FreeBSD/assert.c gen/FreeBSD/signal.c gen/FreeBSD/sleep.c
-    sys/OpenBSD/stack_protector.c
     gen/FreeBSD/usleep.c gen/FreeBSD/getprogname.c gen/FreeBSD/termios.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
+set_source_files_properties(sys/OpenBSD/stack_protector.c
+    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -fno-stack-protector")
 
 # rand.c / ttyname.c use the underscore syscall/pthread aliases (_open/_read/
 # _close/_fstat/_pthread_*/__isthreaded) -> the _fbsd_compat_.h macro shim maps
@@ -224,7 +252,7 @@ set_source_files_properties(stdlib/FreeBSD/exit.c stdlib/FreeBSD/atexit.c
 # shim now also provides (PD's libc/include/sys/cdefs.h that would supply them is
 # shadowed here by xnu's PrivateHeaders/sys/cdefs.h, which lacks the key macros).
 set_source_files_properties(
-    stdlib/FreeBSD/rand.c gen/FreeBSD/ttyname.c
+    stdlib/FreeBSD/rand.c gen/FreeBSD/ttyname.c gen/FreeBSD/exec.c
     stdtime/FreeBSD/localtime.c stdtime/FreeBSD/strftime.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
 # fnmatch.c needs the collate internals (__collate_*) gated behind __LIBC__ in
@@ -242,6 +270,21 @@ set_source_files_properties(
 set_source_files_properties(
     stdio/FreeBSD/mktemp.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -include stdbool.h -DTRUE=true -DFALSE=false")
+
+# TRE (regcomp/regexec) ships its own pre-generated config.h/tre-config.h in
+# regex/TRE/; regerror.c uses the same tre.h plus the old BSD utils.h.
+set_source_files_properties(
+    regex/FreeBSD/regerror.c
+    regex/TRE/lib/regcomp.c
+    regex/TRE/lib/regexec.c
+    regex/TRE/lib/tre-ast.c
+    regex/TRE/lib/tre-compile.c
+    regex/TRE/lib/tre-match-backtrack.c
+    regex/TRE/lib/tre-match-parallel.c
+    regex/TRE/lib/tre-mem.c
+    regex/TRE/lib/tre-parse.c
+    regex/TRE/lib/tre-stack.c
+    PROPERTIES COMPILE_FLAGS "-DHAVE_CONFIG_H -I${CMAKE_CURRENT_SOURCE_DIR}/regex/TRE -I${CMAKE_CURRENT_SOURCE_DIR}/regex/TRE/lib -I${CMAKE_CURRENT_SOURCE_DIR}/regex/FreeBSD")
 
 add_darwin_static_library(libc_internal_static)
 set_target_properties(libc_internal_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
@@ -285,6 +328,8 @@ target_sources(libc_internal_static PRIVATE
     locale/FreeBSD/wctob.c        # _wctob / _wctob_l (scanf)
     stdio/FreeBSD/rget.c          # ___srget (getc/__srget refill)
     stdio/FreeBSD/ungetc.c        # ___ungetc (scanf pushback)
+    stdio/FreeBSD/getc.c          # _getc
+    stdio/FreeBSD/getchar.c       # _getchar
     stdio/FreeBSD/vsscanf.c       # _vsscanf_l / _vsscanf
     stdio/FreeBSD/vfscanf.c       # __svfscanf / __svfscanf_l (scanf engine)
     locale/FreeBSD/lnumeric.c     # __numeric_load_locale

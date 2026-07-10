@@ -5,6 +5,13 @@ set(PUREDARWIN_BUSYBOX_APPLY_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/apply-minimal-c
 set(PUREDARWIN_BUSYBOX_BIN "${PUREDARWIN_BUSYBOX_BUILD_DIR}/busybox")
 find_program(PUREDARWIN_MAKE_PROGRAM NAMES gmake make REQUIRED)
 
+file(GLOB_RECURSE PUREDARWIN_BUSYBOX_SOURCES CONFIGURE_DEPENDS
+    "${PUREDARWIN_BUSYBOX_SOURCE_DIR}/*.c"
+    "${PUREDARWIN_BUSYBOX_SOURCE_DIR}/*.h"
+    "${PUREDARWIN_BUSYBOX_SOURCE_DIR}/*.S"
+    "${PUREDARWIN_BUSYBOX_SOURCE_DIR}/*.s"
+)
+
 add_custom_command(
     OUTPUT "${PUREDARWIN_BUSYBOX_BUILD_DIR}/.config"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${PUREDARWIN_BUSYBOX_BUILD_DIR}"
@@ -30,18 +37,24 @@ add_custom_command(
     COMMAND "${PUREDARWIN_MAKE_PROGRAM}"
         -C "${PUREDARWIN_BUSYBOX_SOURCE_DIR}"
         O="${PUREDARWIN_BUSYBOX_BUILD_DIR}"
-        CC="${CMAKE_C_COMPILER}"
-        HOSTCC="cc"
-        CFLAGS="-fno-stack-protector"
-        AR="${CMAKE_AR}"
-        RANLIB="${CMAKE_RANLIB}"
-        NM="${CMAKE_NM}"
+        CC=${CMAKE_C_COMPILER}
+        HOSTCC=cc
+        CFLAGS=-fno-stack-protector
+        AR=${CMAKE_AR}
+        RANLIB=${CMAKE_RANLIB}
+        NM=${CMAKE_NM}
+        LDFLAGS=-L$<TARGET_FILE_DIR:libSystem_B_stub>\ -Wl,-dylinker_install_name,/usr/lib/dyld\ -Wl,-platform_version,macos,11.0,11.5\ -Wl,-fixup_chains\ -lSystem
         SKIP_STRIP=y
         busybox
-    DEPENDS "${PUREDARWIN_BUSYBOX_BUILD_DIR}/.config"
+    DEPENDS
+        "${PUREDARWIN_BUSYBOX_BUILD_DIR}/.config"
+        "$<TARGET_FILE:libSystem_B_stub>"
+        "$<TARGET_FILE:dyld>"
+        ${PUREDARWIN_BUSYBOX_SOURCES}
     VERBATIM
 )
 
 add_custom_target(busybox ALL DEPENDS "${PUREDARWIN_BUSYBOX_BIN}")
+add_dependencies(busybox libSystem_B_stub dyld)
 
 install(PROGRAMS "${PUREDARWIN_BUSYBOX_BIN}" DESTINATION bin COMPONENT BaseSystem)
