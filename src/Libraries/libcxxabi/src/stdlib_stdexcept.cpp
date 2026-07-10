@@ -1,4 +1,4 @@
-//===----------------------------------------------------------------------===//
+//===------------------------ stdexcept.cpp -------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,14 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "include/refstring.h"
 #include "stdexcept"
 #include "new"
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <cstddef>
-#include <string>
-#include "include/refstring.h" // from libc++
 
 static_assert(sizeof(std::__libcpp_refstring) == sizeof(const char *), "");
 
@@ -21,46 +20,38 @@ namespace std  // purposefully not using versioning namespace
 {
 
 logic_error::logic_error(const char* msg) : __imp_(msg) {}
-logic_error::logic_error(const string& msg) : __imp_(msg.c_str()) {}
-logic_error::logic_error(const logic_error& other) noexcept : exception(other), __imp_(other.__imp_) {}
+logic_error::logic_error(const logic_error& other) _NOEXCEPT : __imp_(other.__imp_) {}
+
 logic_error&
-logic_error::operator=(const logic_error& other) noexcept
+logic_error::operator=(const logic_error& other) _NOEXCEPT
 {
     __imp_ = other.__imp_;
     return *this;
 }
-logic_error::~logic_error() noexcept {}
+
+logic_error::~logic_error() _NOEXCEPT {}
 
 const char*
-logic_error::what() const noexcept
+logic_error::what() const _NOEXCEPT
 {
     return __imp_.c_str();
 }
 
-runtime_error::runtime_error(const char* msg) : __imp_(msg) {}
-runtime_error::runtime_error(const string& msg) : __imp_(msg.c_str()) {}
-runtime_error::runtime_error(const runtime_error& other) noexcept : exception(other), __imp_(other.__imp_) {}
-runtime_error&
-runtime_error::operator=(const runtime_error& other) noexcept
-{
-    __imp_ = other.__imp_;
-    return *this;
-}
-runtime_error::~runtime_error() noexcept {}
+runtime_error::~runtime_error() _NOEXCEPT {}
 
 const char*
-runtime_error::what() const noexcept
+runtime_error::what() const _NOEXCEPT
 {
     return __imp_.c_str();
 }
 
-domain_error::~domain_error() noexcept {}
-invalid_argument::~invalid_argument() noexcept {}
-length_error::~length_error() noexcept {}
-out_of_range::~out_of_range() noexcept {}
+domain_error::~domain_error() _NOEXCEPT {}
+invalid_argument::~invalid_argument() _NOEXCEPT {}
+length_error::~length_error() _NOEXCEPT {}
+out_of_range::~out_of_range() _NOEXCEPT {}
 
-range_error::~range_error() noexcept {}
-overflow_error::~overflow_error() noexcept {}
-underflow_error::~underflow_error() noexcept {}
+range_error::~range_error() _NOEXCEPT {}
+overflow_error::~overflow_error() _NOEXCEPT {}
+underflow_error::~underflow_error() _NOEXCEPT {}
 
 }  // std

@@ -1149,6 +1149,26 @@ user_trap(
 		pal_dbg_page_fault(thread, vaddr, kret);
 		printf("PD-DIAG: FATAL user #PF -> SIGSEGV: rip=0x%llx fault_addr=0x%llx err=0x%x kret=%d\n",
 		    (unsigned long long)rip, (unsigned long long)vaddr, err, kret);
+		if (is_saved_state64(saved_state)) {
+			uint64_t ursp = saved_state64(saved_state)->isf.rsp;
+			printf("PD-DIAG: rsp=0x%llx user-stack code addrs:", (unsigned long long)ursp);
+			int shown = 0;
+			for (int i = 0; i < 2048 && shown < 24; i++) {
+				uint64_t w = 0;
+				/* rsp may sit just inside the protected guard region; skip
+				 * unreadable words rather than stopping, so we reach the valid
+				 * frames just above the accessible-stack boundary. */
+				if (copyin((user_addr_t)(ursp + (uint64_t)i * 8), (char *)&w, 8) != 0) {
+					continue;
+				}
+				/* print values that look like userland text return addresses */
+				if (w > 0x100000000ULL && w < 0x800000000000ULL) {
+					printf(" 0x%llx", (unsigned long long)w);
+					shown++;
+				}
+			}
+			printf("\n");
+		}
 		exc = EXC_BAD_ACCESS;
 		code = kret;
 		subcode = vaddr;

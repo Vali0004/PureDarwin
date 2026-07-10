@@ -1,4 +1,4 @@
-//===----------------------------------------------------------------------===//
+//===-------------------------- cxa_vector.cpp ---------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -24,9 +24,9 @@
 
 namespace __cxxabiv1 {
 
-//
-// Helper routines and classes
-//
+#if 0
+#pragma mark --Helper routines and classes --
+#endif
 
 namespace {
     inline static size_t __get_element_count ( void *p ) {
@@ -111,9 +111,9 @@ namespace {
     };
 }
 
-//
-// Externally visible routines
-//
+#if 0
+#pragma mark --Externally visible routines--
+#endif
 
 namespace {
 _LIBCXXABI_NORETURN
@@ -121,7 +121,7 @@ void throw_bad_array_new_length() {
 #ifndef _LIBCXXABI_NO_EXCEPTIONS
   throw std::bad_array_new_length();
 #else
-  __abort_message("__cxa_vec_new failed to allocate memory");
+  abort_message("__cxa_vec_new failed to allocate memory");
 #endif
 }
 
@@ -416,6 +416,6 @@ __cxa_vec_delete3(void *array_address, size_t element_size, size_t padding_size,
 }
 
 
-} // extern "C"
+}  // extern "C"
 
 }  // abi

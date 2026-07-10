@@ -1005,8 +1005,6 @@ exec_mach_imgact(struct image_params *imgp)
 	os_reason_t             exec_failure_reason = OS_REASON_NULL;
 	boolean_t               reslide = FALSE;
 
-	printf("PD-DIAG: exec_mach_imgact ENTER magic=0x%x\n", mach_header->magic);
-
 	/*
 	 * make sure it's a Mach-O 1.0 or Mach-O 2.0 binary; the difference
 	 * is a reserved field on the end, so for the most part, we can
@@ -1164,7 +1162,6 @@ grade:
 	 * Actually load the image file we previously decided to load.
 	 */
 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
-	printf("PD-DIAG: exec_mach_imgact load_machfile returned lret=%d\n", lret);
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 
@@ -1412,16 +1409,11 @@ grade:
 	 * than current task, thus swap_task_map is used instead of
 	 * vm_map_switch.
 	 */
-	printf("PD-DIAG: about to swap_task_map task=%p thread=%p new_map=%p\n", task, thread, map);
 	old_map = swap_task_map(task, thread, map);
-	printf("PD-DIAG: swap_task_map returned old_map=%p (survived)\n", old_map);
 	vm_map_deallocate(old_map);
 	old_map = NULL;
-	printf("PD-DIAG: about to activate_exec_state\n");
 
 	lret = activate_exec_state(task, p, thread, &load_result);
-	printf("PD-DIAG: activate_exec_state returned lret=%d (survived) entry_point=0x%llx validentry=%d dynlinker=%d\n",
-	    lret, (unsigned long long)load_result.entry_point, load_result.validentry, load_result.dynlinker);
 	if (lret != KERN_SUCCESS) {
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_ACTV_THREADSTATE, 0, 0);
@@ -1724,7 +1716,6 @@ done:
 	}
 
 bad:
-	printf("PD-DIAG: exec_mach_imgact EXIT error=%d (survived)\n", error);
 	/* If we hit this, we likely would have leaked an exit reason */
 	assert(exec_failure_reason == OS_REASON_NULL);
 	return error;
@@ -1789,9 +1780,6 @@ exec_activate_image(struct image_params *imgp)
 	int i;
 	int itercount = 0;
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
-
-	printf("PD-DIAG: exec_activate_image ENTER fname=%s\n",
-	    imgp->ip_user_fname ? "(set)" : "(null)");
 
 	error = execargs_alloc(imgp);
 	if (error) {
@@ -6316,21 +6304,40 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
 		 */
 		if (load_result->user_stack_size == 0) {
 			load_result->user_stack_size = proc_limitgetcur(p, RLIMIT_STACK, TRUE);
-			prot_size = vm_map_trunc_page(size - load_result->user_stack_size, vm_map_page_mask(map));
+			/*
+			 * PD: RLIMIT_STACK can be RLIM_INFINITY (or otherwise >= the
+			 * allocated stack region -- PD's default stack rlimit is currently
+			 * unlimited). size - user_stack_size would then underflow to a huge
+			 * value and mach_vm_protect would fence off essentially the entire
+			 * stack as VM_PROT_NONE, so freshly grown (never-faulted) stack pages
+			 * take a fatal not-present fault. When the limit already covers the
+			 * whole allocation there is nothing above it to protect.
+			 */
+			if (load_result->user_stack_size >= size) {
+				prot_size = 0;
+			} else {
+				prot_size = vm_map_trunc_page(size - load_result->user_stack_size, vm_map_page_mask(map));
+			}
 		} else {
 			prot_size = PAGE_SIZE;
 		}
 
 		prot_addr = addr;
-		kr = mach_vm_protect(map,
-		    prot_addr,
-		    prot_size,
-		    FALSE,
-		    VM_PROT_NONE);
-		if (kr != KERN_SUCCESS) {
-			(void)mach_vm_deallocate(map, addr, size);
-			return kr;
+		if (prot_size > 0) {
+			kr = mach_vm_protect(map,
+			    prot_addr,
+			    prot_size,
+			    FALSE,
+			    VM_PROT_NONE);
+			if (kr != KERN_SUCCESS) {
+				(void)mach_vm_deallocate(map, addr, size);
+				return kr;
+			}
 		}
+		printf("PD-DIAG: stack region [0x%llx..0x%llx) size=0x%llx user_stack=0x%llx rlim=0x%llx prot=0x%llx\n",
+		    (uint64_t)addr, (uint64_t)(addr + size), (uint64_t)size,
+		    (uint64_t)user_stack, (uint64_t)load_result->user_stack_size,
+		    (uint64_t)prot_size);
 	}
 
 	return KERN_SUCCESS;

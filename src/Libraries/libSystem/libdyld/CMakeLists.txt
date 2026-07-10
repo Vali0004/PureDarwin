@@ -8,6 +8,7 @@ set_property(TARGET libdyld PROPERTY OUTPUT_NAME "dyld")
 target_sources(libdyld PRIVATE
     ${DYLD_SRC_DIR}/src/dyldLibSystemGlue.c   # __DATA,__dyld section + _dyld_func_lookup
     ${DYLD_SRC_DIR}/src/start_glue.s          # _start (LC_MAIN startGlueToCallExit)
+    ${DYLD_SRC_DIR}/src/dyld_stub_binder.s    # dyld_stub_binder for classic lazy binds
     ${DYLD_SRC_DIR}/src/threadLocalHelpers.s  # _tlv_get_addr (real asm TLV-descriptor thunk, was just unwired)
     # _tlv_atexit/_tlv_exit: real Darwin provides thread_local (C++11) teardown
     # from libdyld.dylib -- libc's atexit.c (statically bundled below) calls it
@@ -27,6 +28,8 @@ target_sources(libdyld PRIVATE
     ${CMAKE_SOURCE_DIR}/src/Libraries/libSystem/libdispatch/src/BlocksRuntime/runtime.c)
 
 set_source_files_properties(${DYLD_SRC_DIR}/src/start_glue.s PROPERTIES
+    LANGUAGE ASM COMPILE_FLAGS "-x assembler-with-cpp")
+set_source_files_properties(${DYLD_SRC_DIR}/src/dyld_stub_binder.s PROPERTIES
     LANGUAGE ASM COMPILE_FLAGS "-x assembler-with-cpp")
 
 set(_pd_cpu_caps_redirect ${CMAKE_CURRENT_BINARY_DIR}/compat-include/System/machine/cpu_capabilities.h)

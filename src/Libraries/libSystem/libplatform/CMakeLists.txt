@@ -50,6 +50,8 @@ target_sources(libplatform_static PRIVATE
     src/os/alloc_once.c
     src/os/semaphore.c
     src/setjmp/generic/sigaction.c   # __platform_sigaction (libc's sigaction.c wrapper)
+    src/setjmp/x86_64/setjmp.s       # _setjmp/_longjmp/_sigsetjmp/_siglongjmp (BusyBox et al.)
+    src/setjmp/x86_64/_setjmp.s      # __setjmp/__longjmp (the register save/restore core)
     src/setjmp/x86_64/_sigtramp.s    # real signal-delivery trampoline (Apple's own asm, was just unwired)
     src/setjmp/generic/sigtramp.c    # ___in_sigtramp storage + _sigunaltstack (the C _sigtramp body is #ifdef'd out on x86_64, asm above owns it)
     ${_libplatform_atomics}

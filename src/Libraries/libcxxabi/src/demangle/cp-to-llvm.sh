@@ -5,8 +5,7 @@
 
 set -e
 
-cd $(dirname $0)
-HDRS="ItaniumDemangle.h ItaniumNodes.def StringViewExtras.h Utility.h"
+FILES="ItaniumDemangle.h StringView.h Utility.h README.txt"
 LLVM_DEMANGLE_DIR=$1
 
 if [[ -z "$LLVM_DEMANGLE_DIR" ]]; then
@@ -18,19 +17,11 @@ if [[ ! -d "$LLVM_DEMANGLE_DIR" ]]; then
     exit 1
 fi
 
-read -p "This will overwrite the copies of $HDRS in $LLVM_DEMANGLE_DIR; are you sure? [y/N]" -n 1 -r ANSWER
+read -p "This will overwrite the copies of $FILES in $LLVM_DEMANGLE_DIR; are you sure? [y/N]" -n 1 -r ANSWER
 echo
 
 if [[ $ANSWER =~ ^[Yy]$ ]]; then
-    cp -f README.txt $LLVM_DEMANGLE_DIR
-    chmod -w $LLVM_DEMANGLE_DIR/README.txt
-    for I in $HDRS ; do
-	rm -f $LLVM_DEMANGLE_DIR/$I
-	dash=$(echo "$I---------------------------" | cut -c -27 |\
-		   sed 's|[^-]*||')
-	sed -e '1s|^//=*-* .*\..* -*.*=*// *$|//===--- '"$I $dash"'-*- mode:c++;eval:(read-only-mode) -*-===//|' \
-	    -e '2s|^// *$|//       Do not edit! See README.txt.|' \
-	    $I >$LLVM_DEMANGLE_DIR/$I
-	chmod -w $LLVM_DEMANGLE_DIR/$I
+    for I in $FILES ; do
+        cp $I $LLVM_DEMANGLE_DIR/$I
     done
 fi

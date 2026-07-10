@@ -296,6 +296,7 @@ kernel_collection_slide(const struct mach_header_64* mh, const void* basePointer
 	}
 
 	int stopped = 0;
+	dyldLogFunc("[MH] slide: seg_count=%u\n", fixupStarts->seg_count);
 	for (uint32_t segIndex = 0; segIndex < fixupStarts->seg_count && !stopped; ++segIndex) {
 		if (LogFixups) {
 			dyldLogFunc("[LOG] kernel-fixups: segment %d\n", segIndex);
@@ -304,6 +305,8 @@ kernel_collection_slide(const struct mach_header_64* mh, const void* basePointer
 			continue;
 		}
 		const struct dyld_chained_starts_in_segment* segInfo = (const struct dyld_chained_starts_in_segment*)((uintptr_t)fixupStarts + fixupStarts->seg_info_offset[segIndex]);
+		dyldLogFunc("[MH] slide: seg=%u pages=%u fmt=0x%x\n",
+		    segIndex, segInfo->page_count, segInfo->pointer_format);
 		for (uint32_t pageIndex = 0; pageIndex < segInfo->page_count && !stopped; ++pageIndex) {
 			uint16_t offsetInPage = segInfo->page_start[pageIndex];
 			if (offsetInPage == DYLD_CHAINED_PTR_START_NONE) {

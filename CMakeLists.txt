@@ -13,12 +13,10 @@ cmake_policy(SET CMP0114 NEW)
 
 set(CMAKE_MACOSX_MIN_VERSION 11.0)
 
-# fuck everyone on older stuff, I already patched cxx and cxxabi, and I ain't doing it again
 if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15)
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
         message(FATAL_ERROR
-            "LLVM 21's libc++ requires AppleClang 15 or newer.\n"
-            "Install a newer LLVM via Homebrew or upgrade Xcode."
+            "PureDarwin's vendored libc++ runtime expects AppleClang 13 or newer."
         )
     endif()
 endif()

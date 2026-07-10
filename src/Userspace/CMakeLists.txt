@@ -1,1 +1,3 @@
-add_subdirectory(launchd-dummy)
+add_subdirectory(helloapp)
+add_subdirectory(launchd)
+add_subdirectory(busybox)

@@ -84,7 +84,34 @@ add_darwin_static_library(libc_static)
 target_sources(libc_static PRIVATE
     string/strcat.c
     string/FreeBSD/strdup.c
+    string/FreeBSD/strtok.c      # _strtok (init /etc/ttys tokenizing)
+    string/pd_strtok_r.c         # _strtok_r forwarder (__weak_reference alias not emitted)
+    stdlib/FreeBSD/setenv.c      # _setenv/_unsetenv (init sets HOME/PATH/etc)
+    gen/FreeBSD/waitpid.c        # _waitpid (init reaps/respawns children)
+    gen/FreeBSD/pause.c          # _pause (init halt loop)
     string/FreeBSD/strrchr.c
+    string/stpcpy.c              # _stpcpy
+    string/stpncpy.c             # _stpncpy
+    secure/stpcpy_chk.c          # ___stpcpy_chk
+    secure/stpncpy_chk.c         # ___stpncpy_chk
+    gen/FreeBSD/glob.c           # _glob$INODE64 / _globfree
+    gen/FreeBSD/siglist.c        # _sys_siglist / _sys_signame
+    gen/devname.c                # _devname / _devname_r
+    gen/uname.c                  # _uname (BusyBox uname; sysctl-backed)
+    gen/FreeBSD/sysctl.c         # _sysctl (public wrapper over __sysctl)
+    gen/FreeBSD/sysctlbyname.c   # _sysctlbyname
+    gen/FreeBSD/sysctlnametomib.c # _sysctlnametomib
+    gen/FreeBSD/getlogin.c       # _getlogin / _getlogin_r
+    gen/pd_getpwent.c            # getpwnam/getpwuid (/etc/passwd reader; no libinfo)
+    string/FreeBSD/wcscmp.c      # _wcscmp (wcscoll)
+    stdlib/FreeBSD/strtoimax.c   # _strtoimax / _strtoimax_l (scanf)
+    stdlib/FreeBSD/strtoumax.c   # _strtoumax / _strtoumax_l (scanf)
+    stdio/FreeBSD/mktemp.c       # _mkstemp / _mkdtemp
+    stdtime/FreeBSD/localtime.c  # _localtime / _mktime / _tzset (tzfile reader)
+    stdtime/FreeBSD/strftime.c   # _strftime
+    stdtime/timezone_unix03.c    # _st_get_timezone / _st_set_timezone (strftime %z)
+    gen/pd_libm_builtins.c       # nan/nanf/nanl + fegetenv/fesetenv (no libm yet)
+    gen/pd_notify_stub.c         # notify_post shim (real libnotify needs XPC)
     stdlib/FreeBSD/qsort.c
     stdlib/FreeBSD/realpath.c
     secure/memcpy_chk.c
@@ -108,13 +135,28 @@ target_sources(libc_static PRIVATE
     gen/nanosleep.c              # _nanosleep (sleep.c's underlying wrapper)
     gen/FreeBSD/isatty.c         # _isatty (pguard_malloc.c's tty-detection for its diagnostic output)
     sys/OpenBSD/stack_protector.c # __stack_chk_fail (libplatform's string_io.c is built WITH stack protector)
+    stdlib/FreeBSD/atoi.c      # _atoi
     stdlib/FreeBSD/strtol.c      # _strtol (libmalloc's env-var parsing, e.g. MallocNanoZone)
+    stdlib/FreeBSD/strtoll.c     # _strtoll
     stdlib/FreeBSD/strtoul.c     # _strtoul/_strtoul_l
     stdlib/FreeBSD/strtoull.c    # _strtoull/_strtoull_l
+    stdlib/FreeBSD/rand.c        # _rand/_srand
+    stdlib/FreeBSD/getopt.c      # _getopt/_optarg/_optind
+    stdlib/FreeBSD/bsearch.c     # _bsearch
     gen/thread_stack_pcs.c       # _thread_stack_pcs (libmalloc's pguard/debug backtrace capture)
     gen/FreeBSD/usleep.c         # _usleep
     gen/FreeBSD/getprogname.c    # _getprogname (malloc_printf.c's diagnostic prefix)
+    gen/FreeBSD/time.c           # _time
+    gen/FreeBSD/times.c          # _times
+    gen/FreeBSD/ttyname.c        # _ttyname_r
+    gen/FreeBSD/dirname.c        # _dirname
+    gen/FreeBSD/fnmatch.c        # _fnmatch
+    sys/gettimeofday.c           # _gettimeofday
+    sys/settimeofday.c           # _settimeofday
     secure/memmove_chk.c         # ___memmove_chk
+    secure/strcpy_chk.c          # ___strcpy_chk
+    secure/strncpy_chk.c         # ___strncpy_chk
+    secure/sprintf_chk.c         # ___sprintf_chk
     gen/FreeBSD/termios.c        # _tcgetattr (isatty.c's underlying check)
     # TODO (need cross-deps beyond the SDK sysroot):
     #  - gen/FreeBSD/arc4random.c: os/assumes.h -> corecrypto/ccrng.h chain has a
@@ -175,6 +217,32 @@ set_source_files_properties(stdlib/FreeBSD/exit.c stdlib/FreeBSD/atexit.c
     gen/FreeBSD/usleep.c gen/FreeBSD/getprogname.c gen/FreeBSD/termios.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
 
+# rand.c / ttyname.c use the underscore syscall/pthread aliases (_open/_read/
+# _close/_fstat/_pthread_*/__isthreaded) -> the _fbsd_compat_.h macro shim maps
+# them to the SDK-declared real functions. ttyname.c additionally needs the
+# TSD-key infra (__LIBC_PTHREAD_KEY_TTYNAME + pthread_key_init_np), which the
+# shim now also provides (PD's libc/include/sys/cdefs.h that would supply them is
+# shadowed here by xnu's PrivateHeaders/sys/cdefs.h, which lacks the key macros).
+set_source_files_properties(
+    stdlib/FreeBSD/rand.c gen/FreeBSD/ttyname.c
+    stdtime/FreeBSD/localtime.c stdtime/FreeBSD/strftime.c
+    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
+# fnmatch.c needs the collate internals (__collate_*) gated behind __LIBC__ in
+# collate.h; no underscore-alias shim required.
+set_source_files_properties(
+    gen/FreeBSD/fnmatch.c
+    PROPERTIES COMPILE_FLAGS "-D__LIBC__=1")
+# glob.c needs both: the underscore syscall aliases (_open/_stat/_readdir/...) AND
+# the collate range compare (__collate_range_cmp, __LIBC__-gated in collate.h).
+set_source_files_properties(
+    gen/FreeBSD/glob.c
+    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -D__LIBC__=1")
+# mktemp.c uses the BSD-internal bool + TRUE/FALSE spellings; supply <stdbool.h>
+# and the uppercase aliases (plus the syscall-alias shim for _open/_fstat/etc).
+set_source_files_properties(
+    stdio/FreeBSD/mktemp.c
+    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -include stdbool.h -DTRUE=true -DFALSE=false")
+
 add_darwin_static_library(libc_internal_static)
 set_target_properties(libc_internal_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_sources(libc_internal_static PRIVATE
@@ -198,6 +266,7 @@ target_sources(libc_internal_static PRIVATE
     stdio/FreeBSD/fvwrite.c       # __sfvwrite (vfprintf's underlying buffered writer)
     stdio/FreeBSD/fflush.c        # __sflush / fflush (used by exit's stdio-flush + fvwrite)
     stdio/FreeBSD/fclose.c        # fclose (fwalk's flush-and-close path referenced by findfp.c)
+    stdio/FreeBSD/perror.c        # _perror (init error reporting)
     stdio/FreeBSD/vfprintf.c      # __vfprintf (the real BSD engine; xprintf variant is #if 0'd out)
     stdio/FreeBSD/fprintf.c       # _fprintf
     stdio/FreeBSD/printf.c        # _printf
@@ -209,6 +278,15 @@ target_sources(libc_internal_static PRIVATE
     locale/FreeBSD/setrunelocale.c # __setrunelocale (xlocale's uselocale/newlocale LC_CTYPE switch)
     locale/FreeBSD/setlocale.c    # __get_locale_env/__detect_path_locale (setlocale's env-var lookup)
     locale/FreeBSD/collate.c      # __collate_load_tables
+    locale/FreeBSD/collcmp.c      # __collate_range_cmp (fnmatch/regex)
+    locale/FreeBSD/wctype.c       # _wctype
+    string/FreeBSD/strcoll.c      # _strcoll / _strcoll_l (collate compare)
+    string/FreeBSD/wcscoll.c      # _wcscoll_l (wide collate compare)
+    locale/FreeBSD/wctob.c        # _wctob / _wctob_l (scanf)
+    stdio/FreeBSD/rget.c          # ___srget (getc/__srget refill)
+    stdio/FreeBSD/ungetc.c        # ___ungetc (scanf pushback)
+    stdio/FreeBSD/vsscanf.c       # _vsscanf_l / _vsscanf
+    stdio/FreeBSD/vfscanf.c       # __svfscanf / __svfscanf_l (scanf engine)
     locale/FreeBSD/lnumeric.c     # __numeric_load_locale
     locale/FreeBSD/lmonetary.c    # __monetary_load_locale
     locale/FreeBSD/lmessages.c    # __messages_load_locale
@@ -230,9 +308,15 @@ target_sources(libc_internal_static PRIVATE
     locale/FreeBSD/mskanji.c      # __MSKanji_init
     stdio/FreeBSD/fopen.c         # _fopen (collate/setrunelocale's locale-file open)
     stdio/FreeBSD/fdopen.c        # _fdopen (fopen's underlying FILE* wrapper)
+    stdio/FreeBSD/fgets.c         # _fgets
     stdio/FreeBSD/fread.c         # _fread (collate table loading)
     string/FreeBSD/wcsncmp.c      # _wcsncmp (collate's chainsearch)
     string/FreeBSD/strerror.c     # _strerror (collate's error-message path)
+    string/FreeBSD/strcasecmp.c   # _strcasecmp/_strncasecmp
+    string/FreeBSD/strcspn.c      # _strcspn
+    string/FreeBSD/strpbrk.c      # _strpbrk
+    string/FreeBSD/strndup.c      # _strndup
+    string/FreeBSD/strsignal.c    # _strsignal
     locale/FreeBSD/mbrtowc.c      # _mbrtowc_l (collate's equiv-class matching)
     locale/FreeBSD/mbsrtowcs.c    # _mbsrtowcs_l (collate's mbstowcs)
     locale/FreeBSD/ldpart.c       # __part_load_locale / __ldpart_free_extra (shared LC_* file-loading engine)
@@ -254,7 +338,14 @@ target_sources(libc_internal_static PRIVATE
     gen/FreeBSD/err.c             # _errx/_e_visprintf (xprintf.c's malformed-format-string abort path)
     stdio/FreeBSD/vasprintf.c     # _vasprintf/_vasprintf_l (asprintf.c + err.c's underlying engine)
     stdio/FreeBSD/sprintf.c       # _sprintf (err.c's _e_visprintf)
+    stdio/FreeBSD/sscanf.c        # _sscanf
     stdio/FreeBSD/fputs.c         # _fputs (err.c's _e_visprintf)
+    stdio/FreeBSD/ferror.c        # _ferror
+    stdio/FreeBSD/clrerr.c        # _clearerr
+    stdio/FreeBSD/fgetc.c         # _fgetc
+    stdio/FreeBSD/putc.c          # _putc
+    stdio/FreeBSD/putchar.c       # _putchar
+    stdio/FreeBSD/vprintf.c       # _vprintf
     stdio/FreeBSD/fseek.c         # _fseeko (rewind.c)
     locale/FreeBSD/localeconv.c   # _localeconv/_localeconv_l (vfprintf's grouping_init)
     stdio/FreeBSD/xprintf_str.c

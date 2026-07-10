@@ -3,49 +3,24 @@ set(_libcxx     "${CMAKE_CURRENT_SOURCE_DIR}/../libcxx")
 set(_libunwind  "${CMAKE_CURRENT_SOURCE_DIR}/../libunwind")
 if(NOT EXISTS "${_libcxxabi}/src/cxa_exception.cpp")
     message(FATAL_ERROR "vendored libc++abi sources missing at ${_libcxxabi}/src \
-(expected the LLVM 21 libcxxabi subtree checked in here).")
-endif()
-
-get_filename_component(_osxcross_bin "${CMAKE_AR}" DIRECTORY)
-set(_real_clang "${_osxcross_bin}/clang")
-if(NOT EXISTS "${_real_clang}")
-    message(FATAL_ERROR "expected the un-wrapped clang at ${_real_clang}")
-endif()
-
-# SDK: the wrapper normally supplies -isysroot; the raw clang needs it explicitly.
-if(APPLE)
-    execute_process(
-        COMMAND xcrun --sdk macosx --show-sdk-path
-        OUTPUT_VARIABLE _sdk
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        RESULT_VARIABLE _xcrun_result
-    )
-
-    if(NOT _xcrun_result EQUAL 0 OR NOT IS_DIRECTORY "${_sdk}")
-        message(FATAL_ERROR "Could not locate the macOS SDK using xcrun.")
-    endif()
-elseif(DEFINED ENV{OSXCROSS_SDK})
-    set(_sdk "$ENV{OSXCROSS_SDK}")
-else()
-    message(FATAL_ERROR
-        "Cannot locate the macOS SDK: OSXCROSS_SDK is unset and this is not a native macOS build."
-    )
+(expected the vendored LLVM libcxxabi subtree checked in here).")
 endif()
 
 get_filename_component(_toolchain_bin "${CMAKE_AR}" DIRECTORY)
 
-if(APPLE)
-    # Native Apple clang. Do not pass -target; -arch selects the requested
-    # Mach-O architecture and clang derives the Apple platform triple.
-    find_program(_real_clang
-        NAMES clang
-        HINTS "${_toolchain_bin}"
-        REQUIRED
+# SDK/toolchain selection. CMake's APPLE is true for a Darwin target even when
+# the host is Linux, so use CMAKE_HOST_APPLE to distinguish native AppleClang
+# from osxcross.
+if(CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING)
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE _sdk
+        OUTPUT_STRIP_TRAILING_WHITESPACE
     )
 
-    set(_target_flags
-        -arch "${PUREDARWIN_ARCH}"
-    )
+    find_program(_real_clang NAMES clang REQUIRED)
+
+    set(_target_flags -arch "${PUREDARWIN_ARCH}")
 else()
     # osxcross tools normally look like:
     #   x86_64-apple-darwin20.4-ar
@@ -59,16 +34,21 @@ else()
 
     set(_triple "${CMAKE_MATCH_1}")
 
-    set(_real_clang "${_toolchain_bin}/clang")
+    if(DEFINED ENV{OSXCROSS_SDK})
+        set(_sdk "$ENV{OSXCROSS_SDK}")
+    endif()
+    if(NOT _sdk)
+        set(_sdk "${PUREDARWIN_MACOSX_SDK}")
+    endif()
+
+    set(_real_clang "${_toolchain_bin}/${_triple}-clang")
     if(NOT EXISTS "${_real_clang}")
         message(FATAL_ERROR
-            "Expected the unwrapped osxcross clang at '${_real_clang}'."
+            "Expected the osxcross clang wrapper at '${_real_clang}'."
         )
     endif()
 
-    set(_target_flags
-        -target "${_triple}"
-    )
+    set(_target_flags)
 endif()
 
 set(_config "${CMAKE_CURRENT_SOURCE_DIR}/config")   # __config_site, __assertion_handler
@@ -76,12 +56,12 @@ set(_config "${CMAKE_CURRENT_SOURCE_DIR}/config")   # __config_site, __assertion
 set(_abi_flags
     ${_target_flags}
     -isysroot ${_sdk}
-    -std=c++20 -nostdinc++ -funwind-tables -fexceptions -fPIC -Os -DNDEBUG
+    -std=c++17 -nostdinc++ -funwind-tables -fexceptions -fPIC -Os -DNDEBUG
     -I ${_config}
-    -I ${_libcxx}/include
     -I ${_libcxxabi}/include
     -I ${_libcxxabi}/src
     -I ${_libcxx}/src
+    -idirafter ${_libcxx}/include
     -D_LIBCXXABI_BUILDING_LIBRARY
     -D_LIBCPP_BUILDING_LIBRARY
     -DLIBCXX_BUILDING_LIBCXXABI
@@ -105,6 +85,7 @@ set(_abi_srcs
     stdlib_stdexcept
     fallback_malloc
     abort_message
+    pd_bootstrap_runtime
 )
 
 set(_abi_objs "")
@@ -120,7 +101,7 @@ foreach(s ${_abi_srcs})
                 -c "${_libcxxabi}/src/${s}.cpp" -o "${_obj}"
         DEPENDS "${_libcxxabi}/src/${s}.cpp"
                 "${_config}/__config_site" "${_config}/__assertion_handler"
-        COMMENT "Building libc++abi ${s}.cpp (raw clang, vendored LLVM 21 headers)"
+        COMMENT "Building libc++abi ${s}.cpp (raw clang, vendored LLVM headers)"
         VERBATIM
     )
     list(APPEND _abi_objs "${_obj}")
@@ -152,7 +133,8 @@ set(_uw_flags
     -nostdinc++ -funwind-tables -fPIC -Os -DNDEBUG
     -I ${_libunwind}/include
     -I ${_libunwind}/src
-    -I ${_config} -I ${_libcxx}/include   # <__libunwind_config.h> et al pull libcxx macros
+    -I ${_config}
+    -idirafter ${_libcxx}/include   # <__libunwind_config.h> et al pull libcxx macros
     -D_LIBUNWIND_IS_NATIVE_ONLY
     -D_LIBUNWIND_BUILDING_LIBUNWIND=1
 )
@@ -167,7 +149,7 @@ set(_uw_objs "")
 foreach(s ${_uw_cxx})
     set(_obj "${CMAKE_CURRENT_BINARY_DIR}/uw_${s}.o")
     add_custom_command(OUTPUT "${_obj}"
-        COMMAND "${_real_clang}" ${_uw_flags} -std=c++20 -fno-exceptions -fno-rtti
+        COMMAND "${_real_clang}" ${_uw_flags} -std=c++17 -fno-exceptions -fno-rtti
                 -c "${_libunwind}/src/${s}.cpp" -o "${_obj}"
         DEPENDS "${_libunwind}/src/${s}.cpp"
         COMMENT "Building libunwind ${s}.cpp (raw clang)" VERBATIM)

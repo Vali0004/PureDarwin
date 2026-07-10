@@ -32,7 +32,6 @@
 #include <pthread.h>
 #include <libproc.h>
 #include <sys/param.h>
-#include <sys/mount.h>	// PD-DIAG: mount() for the devfs-console diagnostic in _main()
 #include <mach/mach_time.h> // mach_absolute_time()
 #include <mach/mach_init.h>
 #include <mach/mach_traps.h>
@@ -6510,16 +6509,6 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 		launchTraceID = dyld3::kdebug_trace_dyld_duration_start(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE, (uint64_t)mainExecutableMH, 0, 0);
 	}
 
-	// PD-DIAG: pid 1's initial exec starts with NO open file descriptors, so
-	// dyld::log()'s sLogfile write goes nowhere silently. Mount devfs (a RAM
-	// fs, works even while root is still read-only) and open /dev/console so
-	// our diagnostic prints below are actually visible over serial -- same
-	// pattern launchd-dummy's own _start() already uses successfully.
-	mount("devfs", "/dev", 0, nullptr);
-	int pdDiagFd = open("/dev/console", O_WRONLY | O_NOCTTY, 0);
-	if (pdDiagFd >= 0)
-		_simple_dprintf(pdDiagFd, "PD-DIAG: dyld _main() entered, console fd=%d\n", pdDiagFd);
-
 	//Check and see if there are any kernel flags
 	dyld3::BootArgs::setFlags(hexToUInt64(_simple_getenv(apple, "dyld_flags"), nullptr));
 
@@ -7379,14 +7368,12 @@ reloadAllImages:
 		{
 			// find entry point for main executable
 			result = (uintptr_t)sMainExecutable->getEntryFromLC_MAIN();
-			if (pdDiagFd >= 0) _simple_dprintf(pdDiagFd, "PD-DIAG: getEntryFromLC_MAIN() = 0x%lx\n", result);
 			if ( result != 0 ) {
 				// main executable uses LC_MAIN, we need to use helper in libdyld to call into main()
 				if ( (gLibSystemHelpers != NULL) && (gLibSystemHelpers->version >= 9) )
 					*startGlue = (uintptr_t)gLibSystemHelpers->startGlueToCallExit;
 				else
 					halt("libdyld.dylib support not present for LC_MAIN");
-				if (pdDiagFd >= 0) _simple_dprintf(pdDiagFd, "PD-DIAG: after glue set, result=0x%lx startGlue=0x%lx\n", result, *startGlue);
 			}
 			else {
 				// main executable uses LC_UNIXTHREAD, dyld needs to let "start" in program set up for main()
@@ -7411,7 +7398,6 @@ reloadAllImages:
 	}
 #endif
 
-	if (pdDiagFd >= 0) _simple_dprintf(pdDiagFd, "PD-DIAG: pre-sSkipMain check: sSkipMain=%d result=0x%lx\n", (int)sSkipMain, result);
 	if (sSkipMain) {
 		notifyMonitoringDyldMain();
 		if (dyld3::kdebug_trace_dyld_enabled(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE)) {
@@ -7422,7 +7408,6 @@ reloadAllImages:
 		*startGlue = (uintptr_t)gLibSystemHelpers->startGlueToCallExit;
 	}
 
-	if (pdDiagFd >= 0) _simple_dprintf(pdDiagFd, "PD-DIAG: _main returning result=0x%lx startGlue=0x%lx\n", result, *startGlue);
 	return result;
 }
 

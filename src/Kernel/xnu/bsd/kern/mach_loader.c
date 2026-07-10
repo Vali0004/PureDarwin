@@ -449,12 +449,8 @@ load_machfile(
 	kern_return_t           kret;
 	unsigned int            pmap_flags = 0;
 
-	printf("PD-DIAG: load_machfile ENTER file_offset=%lld macho_size=%lld file_size=%lld\n",
-	    (long long)file_offset, (long long)macho_size, (long long)file_size);
-
 	if (os_add_overflow(file_offset, macho_size, &total_size) ||
 	    total_size > file_size) {
-		printf("PD-DIAG: load_machfile BADMACHO overflow/size check failed\n");
 		return LOAD_BADMACHO;
 	}
 
@@ -481,20 +477,16 @@ load_machfile(
 	}
 #endif /* XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGE */
 
-	printf("PD-DIAG: load_machfile calling pmap_create_options flags=0x%x\n", pmap_flags);
 	pmap = pmap_create_options(get_task_ledger(ledger_task),
 	    (vm_map_size_t) 0,
 	    pmap_flags);
 	if (pmap == NULL) {
-		printf("PD-DIAG: load_machfile pmap_create_options FAILED\n");
 		return LOAD_RESOURCE;
 	}
-	printf("PD-DIAG: load_machfile pmap_create_options returned pmap=%p, calling vm_map_create\n", pmap);
 	map = vm_map_create(pmap,
 	    0,
 	    vm_compute_max_offset(result->is_64bit_addr),
 	    TRUE);
-	printf("PD-DIAG: load_machfile vm_map_create returned map=%p\n", map);
 
 #if defined(__arm64__)
 	if (result->is_64bit_addr) {
@@ -921,9 +913,6 @@ parse_machfile(
 		slide_realign = TRUE;
 	}
 #endif
-
-	printf("PD-DIAG: parse_machfile ENTER depth=%d ncmds=%u magic=0x%x\n",
-	    depth, header->ncmds, header->magic);
 
 	for (pass = 0; pass <= 3; pass++) {
 		if (pass == 1) {
@@ -1450,10 +1439,8 @@ parse_machfile(
 			 * load the dylinker, and slide it by the independent DYLD ASLR
 			 * offset regardless of the PIE-ness of the main binary.
 			 */
-			printf("PD-DIAG: parse_machfile depth=%d calling load_dylinker\n", depth);
 			ret = load_dylinker(dlp, header->cputype, map, thread, depth,
 			    dyld_aslr_offset, result, imgp);
-			printf("PD-DIAG: parse_machfile depth=%d load_dylinker returned ret=%d\n", depth, ret);
 		}
 
 

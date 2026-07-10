@@ -27,7 +27,14 @@ add_darwin_shared_library(libSystem_B_stub
     INSTALL_NAME /usr/lib/libSystem.B.dylib)
 set_property(TARGET libSystem_B_stub PROPERTY OUTPUT_NAME "System.B")
 
-target_sources(libSystem_B_stub PRIVATE empty.c pd_pthread_umbrella_stubs.c pd_libSystem_init.c)
+target_sources(libSystem_B_stub PRIVATE
+    empty.c
+    pd_libSystem_init.c
+    pd_libSystem_compat.c
+    pd_libSystem_memset.c
+    pd_libSystem_process.c
+    pd_libSystem_stack_chk.c
+    pd_pthread_umbrella_stubs.c)
 
 # Match launchd-dummy's LC_LOAD_DYLIB expectation (from otool -L) so dyld's
 # compatibility-version check accepts this as a satisfying match.
@@ -79,6 +86,7 @@ target_link_options(libSystem_B_stub PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
 # order dyld itself links (so transitive deps resolve), plus libmalloc for
 # _malloc_size.
 set(LIBSYSTEM_EXPORTS ${CMAKE_CURRENT_SOURCE_DIR}/libSystem.exports)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LIBSYSTEM_EXPORTS})
 # -exported_symbols_list only FILTERS what is exported; it does not force archive
 # members to load. empty.c references nothing, so without help ld64 would pull no
 # members and every listed symbol would stay an undefined import. Turn each

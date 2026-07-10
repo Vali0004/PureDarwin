@@ -116,6 +116,7 @@ typedef struct console_buf {
 
 extern int serial_getc(void);
 extern void serial_putc(char);
+extern void vc_serial_putc(char);
 
 #if DEBUG || DEVELOPMENT
 TUNABLE(bool, allow_printf_from_interrupts_disabled_context, "nointr_consio", false);
@@ -318,6 +319,7 @@ static inline void
 _cnputs(char * c, int size)
 {
 	extern int disableConsoleOutput;
+	extern bool serial_console_enabled;
 
 	if (disableConsoleOutput) {
 		return;
@@ -327,11 +329,27 @@ _cnputs(char * c, int size)
 
 	const uint32_t idx = get_cons_ops_index();
 
+	/*
+	 * PD: once the framebuffer (GOP) console comes up, cons_ops_index flips to
+	 * the video console and it "robs" all console output, a serial terminal
+	 * driving stdin then sees nothing on stdout. When the active console is the
+	 * video console AND a serial console is enabled (serial= boot-arg, UART up),
+	 * mirror every byte to the serial UART too so both show the same output.
+	 */
+	const boolean_t mirror_serial =
+	    serial_console_enabled && (idx != SERIAL_CONS_OPS);
+
 	while (size-- > 0) {
 		if (*c == '\n') {
 			cons_ops[idx].putc(0, 0, '\r');
+			if (mirror_serial) {
+				serial_putc('\r');
+			}
 		}
 		cons_ops[idx].putc(0, 0, *c);
+		if (mirror_serial) {
+			serial_putc(*c);
+		}
 		c++;
 	}
 }
@@ -596,6 +614,7 @@ static void
 _serial_putc(__unused int a, __unused int b, int c)
 {
 	serial_putc((char)c);
+	vc_serial_putc((char)c);
 }
 
 int

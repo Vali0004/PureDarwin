@@ -14,8 +14,9 @@
  *  - A few libdyld API globals (dyld_get_active_platform, _NSGetMachExecuteHeader,
  *    _dyld_shared_cache_contains_path, _dyld_fast_stub_entry) normally come from
  *    dyldAPIsInLibSystem.cpp (the libdyld side, not the dyld binary). Provide
- *    minimal bring-up implementations: platform is macOS, there is no shared
- *    cache, and with -fixup_chains there is no lazy fast-stub path.
+ *    minimal bring-up implementations: platform is macOS and there is no shared
+ *    cache. _dyld_fast_stub_entry forwards into dyld2's real lazy binder so
+ *    classic lazy stubs do not require -fixup_chains in every user binary.
  *
  * This file is compiled into the dyld target so it inherits its include env.
  */
@@ -43,7 +44,15 @@ extern "C" void* _NSGetMachExecuteHeader(void) { return nullptr; }
 
 bool _dyld_shared_cache_contains_path(const char*) { return false; }
 
-void* _dyld_fast_stub_entry(void*, long) { return nullptr; }
+class ImageLoader;
+namespace dyld { uintptr_t fastBindLazySymbol(ImageLoader** imageLoaderCache, uintptr_t lazyBindingInfoOffset); }
+
+void* _dyld_fast_stub_entry(void* loaderCache, long lazyBindingInfoOffset)
+{
+    return reinterpret_cast<void*>(
+        dyld::fastBindLazySymbol(reinterpret_cast<ImageLoader**>(loaderCache),
+                                 static_cast<uintptr_t>(lazyBindingInfoOffset)));
+}
 
 // The C dlopen entry normally lives in dyldAPIsInLibSystem.cpp (the libdyld side,
 // not the dyld binary). dyld3/APIs.cpp puts &dlopen in its API function-pointer

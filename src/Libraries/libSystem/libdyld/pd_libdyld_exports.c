@@ -15,3 +15,26 @@
  */
 extern void start(void);
 void *pd_libdyld_getStartGlueToCallExit(void) { return (void *)&start; }
+
+extern int _dyld_func_lookup(const char *name, void **address);
+
+__attribute__((visibility("hidden")))
+void *pd_dyld_fast_stub_entry(void *loadercache, long lazyinfo)
+    __asm__("__Z21_dyld_fast_stub_entryPvl");
+
+void *pd_dyld_fast_stub_entry(void *loadercache, long lazyinfo)
+{
+	typedef void *(*func_t)(void *, long);
+	static func_t fast_stub_entry;
+
+	if (fast_stub_entry == 0) {
+		void *address = 0;
+		if (_dyld_func_lookup("__dyld_fast_stub_entry", &address) != 0)
+			fast_stub_entry = (func_t)address;
+	}
+
+	if (fast_stub_entry == 0)
+		return 0;
+
+	return fast_stub_entry(loadercache, lazyinfo);
+}

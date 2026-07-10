@@ -44,6 +44,14 @@
 
 struct __cxa_range_t { const void *addr; size_t length; };
 
+struct ProgramVars {
+	void *mh;
+	int *NXArgcPtr;
+	char ***NXArgvPtr;
+	char ***environPtr;
+	char **__prognamePtr;
+};
+
 /* Mirrors dyld::LibSystemHelpers (dyld/src/dyldLibSystemInterface.h). */
 struct LibSystemHelpers {
 	uintptr_t version;
@@ -73,7 +81,9 @@ struct LibSystemHelpers {
 extern void *pd_libdyld_getStartGlueToCallExit(void);
 extern int _dyld_func_lookup(const char *name, void **address);
 extern void _pthread_set_self(void *p);   /* p == NULL selects the VARIANT_DYLD seed path */
+extern void _program_vars_init(const struct ProgramVars *vars);
 extern void __atexit_init(void);
+extern void __malloc_init(const char *apple[]);
 extern int mach_init(void);
 
 static pthread_mutex_t sGlobalDyldLock = PTHREAD_MUTEX_INITIALIZER;
@@ -120,11 +130,33 @@ static struct LibSystemHelpers sHelpers = {
 };
 
 __attribute__((constructor))
-static void pd_libSystem_initializer(void)
+static void pd_libSystem_initializer(int argc, const char *argv[], const char *envp[],
+    const char *apple[], const struct ProgramVars *vars)
 {
+	static int fallback_argc;
+	static const char **fallback_argv;
+	static const char **fallback_envp;
+	static char *fallback_progname;
+	static struct ProgramVars fallback_vars;
+
+	if (vars == NULL) {
+		fallback_argc = argc;
+		fallback_argv = argv;
+		fallback_envp = envp;
+		fallback_progname = (argv && argv[0]) ? (char *)argv[0] : NULL;
+		fallback_vars.mh = NULL;
+		fallback_vars.NXArgcPtr = &fallback_argc;
+		fallback_vars.NXArgvPtr = (char ***)&fallback_argv;
+		fallback_vars.environPtr = (char ***)&fallback_envp;
+		fallback_vars.__prognamePtr = &fallback_progname;
+		vars = &fallback_vars;
+	}
+
+	_program_vars_init(vars);
 	mach_init();
 	_pthread_set_self(NULL);
 	__atexit_init();
+	__malloc_init(apple);
 
 	sHelpers.startGlueToCallExit = pd_libdyld_getStartGlueToCallExit();
 
