@@ -13,10 +13,23 @@ if(NOT EXISTS "${_real_clang}")
 endif()
 
 # SDK: the wrapper normally supplies -isysroot; the raw clang needs it explicitly.
-if(DEFINED ENV{OSXCROSS_SDK})
+if(APPLE)
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE _sdk
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _xcrun_result
+    )
+
+    if(NOT _xcrun_result EQUAL 0 OR NOT IS_DIRECTORY "${_sdk}")
+        message(FATAL_ERROR "Could not locate the macOS SDK using xcrun.")
+    endif()
+elseif(DEFINED ENV{OSXCROSS_SDK})
     set(_sdk "$ENV{OSXCROSS_SDK}")
 else()
-    message(FATAL_ERROR "OSXCROSS_SDK not in environment; cannot locate the macOS SDK.")
+    message(FATAL_ERROR
+        "Cannot locate the macOS SDK: OSXCROSS_SDK is unset and this is not a native macOS build."
+    )
 endif()
 
 get_filename_component(_ar_name "${CMAKE_AR}" NAME)
