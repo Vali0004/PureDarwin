@@ -13,6 +13,16 @@ cmake_policy(SET CMP0114 NEW)
 
 set(CMAKE_MACOSX_MIN_VERSION 11.0)
 
+# fuck everyone on older stuff, I already patched cxx and cxxabi, and I ain't doing it again
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15)
+        message(FATAL_ERROR
+            "LLVM 21's libc++ requires AppleClang 15 or newer.\n"
+            "Install a newer LLVM via Homebrew or upgrade Xcode."
+        )
+    endif()
+endif()
+
 # Target CPU architecture. x86_64 is the primary/working target (QEMU boot,
 # loader, dyld). arm64 is an opt-in in progress: configure with
 # -DPUREDARWIN_ARCH=arm64. Falls back to CMAKE_OSX_ARCHITECTURES if that's set.
