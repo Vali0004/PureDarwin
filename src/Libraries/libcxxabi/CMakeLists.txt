@@ -32,13 +32,49 @@ else()
     )
 endif()
 
-get_filename_component(_ar_name "${CMAKE_AR}" NAME)
-string(REGEX REPLACE "-ar$" "" _triple "${_ar_name}")
+get_filename_component(_toolchain_bin "${CMAKE_AR}" DIRECTORY)
+
+if(APPLE)
+    # Native Apple clang. Do not pass -target; -arch selects the requested
+    # Mach-O architecture and clang derives the Apple platform triple.
+    find_program(_real_clang
+        NAMES clang
+        HINTS "${_toolchain_bin}"
+        REQUIRED
+    )
+
+    set(_target_flags
+        -arch "${PUREDARWIN_ARCH}"
+    )
+else()
+    # osxcross tools normally look like:
+    #   x86_64-apple-darwin20.4-ar
+    get_filename_component(_ar_name "${CMAKE_AR}" NAME)
+
+    if(NOT _ar_name MATCHES "^(.+)-ar$")
+        message(FATAL_ERROR
+            "Cannot derive the osxcross target triple from CMAKE_AR='${CMAKE_AR}'."
+        )
+    endif()
+
+    set(_triple "${CMAKE_MATCH_1}")
+
+    set(_real_clang "${_toolchain_bin}/clang")
+    if(NOT EXISTS "${_real_clang}")
+        message(FATAL_ERROR
+            "Expected the unwrapped osxcross clang at '${_real_clang}'."
+        )
+    endif()
+
+    set(_target_flags
+        -target "${_triple}"
+    )
+endif()
 
 set(_config "${CMAKE_CURRENT_SOURCE_DIR}/config")   # __config_site, __assertion_handler
 
 set(_abi_flags
-    -target ${_triple} -arch ${PUREDARWIN_ARCH}
+    ${_target_flags}
     -isysroot ${_sdk}
     -std=c++20 -nostdinc++ -funwind-tables -fexceptions -fPIC -Os -DNDEBUG
     -I ${_config}
@@ -111,7 +147,7 @@ if(NOT EXISTS "${_libunwind}/src/libunwind.cpp")
 endif()
 
 set(_uw_flags
-    -target ${_triple} -arch ${PUREDARWIN_ARCH}
+    ${_target_flags}
     -isysroot ${_sdk}
     -nostdinc++ -funwind-tables -fPIC -Os -DNDEBUG
     -I ${_libunwind}/include
