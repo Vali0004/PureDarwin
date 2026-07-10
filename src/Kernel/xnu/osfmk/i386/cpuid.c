@@ -912,6 +912,9 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_ICELAKE_DT:
 			cpufamily = CPUFAMILY_INTEL_ICELAKE;
 			break;
+		case CPUID_MODEL_GOLDMONT_PLUS:
+			cpufamily = CPUFAMILY_INTEL_GOLDMONT_PLUS;
+			break;
 		}
 		break;
 	}

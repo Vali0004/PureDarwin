@@ -165,6 +165,23 @@ tsc_init(void)
 	}
 
 	switch (cpuid_cpufamily()) {
+	case CPUFAMILY_INTEL_GOLDMONT_PLUS: {
+		busFreq = EFI_get_frequency("FSBFrequency");
+		if (busFreq == 0) {
+			busFreq = BASE_NHM_CLOCK_SOURCE;
+		}
+
+		tscFreq = EFI_get_frequency("TSCFrequency");
+		if (tscFreq == 0) {
+			tscFreq = busFreq;
+		}
+
+		tscGranularity = (uint32_t)(tscFreq / busFreq);
+		if (tscGranularity == 0) {
+			tscGranularity = 1;
+		}
+		break;
+	}
 	case CPUFAMILY_INTEL_KABYLAKE:
 	case CPUFAMILY_INTEL_ICELAKE:
 	case CPUFAMILY_INTEL_SKYLAKE: {
@@ -219,14 +236,26 @@ tsc_init(void)
 			busFreq = BASE_NHM_CLOCK_SOURCE;
 		}
 
-		if (cpuid_vmm_family() == CPUID_VMM_FAMILY_QEMU_TCG) {
+		uint64_t tsc_freq = EFI_get_frequency("TSCFrequency");
+		if (tsc_freq != 0) {
+			/*
+			 * The bootloader may publish a measured TSC frequency for
+			 * CPUs/firmware where the legacy ratio MSRs below are not
+			 * available.  Trust it before touching MSR_PLATFORM_INFO or
+			 * MSR_FLEX_RATIO; on Gemini Lake under KVM those MSR reads
+			 * #GP during early boot.
+			 */
+			tscGranularity = (uint32_t)(tsc_freq / busFreq);
+			if (tscGranularity == 0) {
+				tscGranularity = 1;
+			}
+		} else if (cpuid_vmm_family() == CPUID_VMM_FAMILY_QEMU_TCG) {
 			/*
 			 * QEMU TCG does not emulate MSR_PLATFORM_INFO or
 			 * MSR_FLEX_RATIO — reads return 0, writes are dropped.
 			 * Derive the TSC/bus ratio entirely from DT properties
 			 * provided by the bootloader; never touch the MSRs.
 			 */
-			uint64_t tsc_freq = EFI_get_frequency("TSCFrequency");
 			if (tsc_freq != 0 && busFreq != 0) {
 				tscGranularity = (uint32_t)(tsc_freq / busFreq);
 			}

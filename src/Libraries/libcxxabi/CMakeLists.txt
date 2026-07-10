@@ -61,11 +61,22 @@ set(_abi_flags
     -I ${_libcxxabi}/include
     -I ${_libcxxabi}/src
     -I ${_libcxx}/src
-    -idirafter ${_libcxx}/include
     -D_LIBCXXABI_BUILDING_LIBRARY
     -D_LIBCPP_BUILDING_LIBRARY
     -DLIBCXX_BUILDING_LIBCXXABI
 )
+# libcxx/include must come before the toolchain's own <stddef.h>/<stdint.h>
+# etc. in the search list so #include_next chains resolve to those, but
+# where in the list that is depends on the toolchain: real Apple clang's
+# resource-dir include is added right after our own -I dirs (so ours must
+# be a plain -I, ahead of it), while osxcross's clang puts its bundled
+# libc/stdint headers ahead of everything (so ours must be -idirafter, or
+# it shadows them and math.h/stdint.h contents go missing).
+if(CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING)
+    list(APPEND _abi_flags -I ${_libcxx}/include)
+else()
+    list(APPEND _abi_flags -idirafter ${_libcxx}/include)
+endif()
 
 # The subset dyld actually needs. cxa_demangle/cxa_thread_atexit/cxa_vector/
 # aix/noexception are deliberately excluded (not referenced by dyld).
@@ -134,10 +145,15 @@ set(_uw_flags
     -I ${_libunwind}/include
     -I ${_libunwind}/src
     -I ${_config}
-    -idirafter ${_libcxx}/include   # <__libunwind_config.h> et al pull libcxx macros
     -D_LIBUNWIND_IS_NATIVE_ONLY
     -D_LIBUNWIND_BUILDING_LIBUNWIND=1
 )
+# See the matching comment on _abi_flags above for why this is conditional.
+if(CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING)
+    list(APPEND _uw_flags -I ${_libcxx}/include)
+else()
+    list(APPEND _uw_flags -idirafter ${_libcxx}/include)   # <__libunwind_config.h> et al pull libcxx macros
+endif()
 
 # x86_64 Itanium/DWARF unwinder subset. Excluded: Unwind-sjlj.c (SjLj EH),
 # Unwind-EHABI (ARM32), Unwind-seh (Windows), Unwind-wasm, Unwind_AIXExtras.

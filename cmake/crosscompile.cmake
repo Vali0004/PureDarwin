@@ -1,13 +1,33 @@
+# host_ld (PD's own in-tree ld64, tools/cctools/ld64) is an add_executable()
+# target, so osxcross's toolchain.cmake -- which forces CMAKE_SYSTEM_NAME
+# Darwin globally -- builds it as an unusable Mach-O binary instead of a
+# native ELF one (the same Canadian-cross trap migcom's dead in-tree target
+# has). osxcross ships its own native, TAPI-capable ld (built for the host,
+# targeting Darwin) as "<triple>-ld"; prefer that, matching migcom's
+# seeded-via-package-manager pattern, and only fall back to host_ld if it
+# can't be found.
+if(NOT CMAKE_HOST_APPLE AND NOT NATIVE_LD64_EXECUTABLE)
+    get_filename_component(_ld64_ar_name "${CMAKE_AR}" NAME)
+    if(_ld64_ar_name MATCHES "^(.+)-ar$")
+        find_program(NATIVE_LD64_EXECUTABLE NAMES "${CMAKE_MATCH_1}-ld")
+    endif()
+endif()
+
 function(add_darwin_executable name)
     cmake_parse_arguments(SL "NO_STANDARD_LIBRARIES;USE_HOST_SDK" "MACOSX_VERSION_MIN" "" ${ARGN})
 
     add_executable(${name})
-    add_dependencies(${name} host_ld)
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
-    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    if(CMAKE_HOST_APPLE)
+        # PD own ld64 (host_ld) is built without TAPI support, so it cannot
+        # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd) -- fall
+        # back to the real Apple linker via xcrun, which handles them fine.
         execute_process(COMMAND xcrun --find ld OUTPUT_VARIABLE XCRUN_LD OUTPUT_STRIP_TRAILING_WHITESPACE)
         target_link_options(${name} PRIVATE -fuse-ld=${XCRUN_LD})
+    elseif(NATIVE_LD64_EXECUTABLE)
+        target_link_options(${name} PRIVATE -fuse-ld=${NATIVE_LD64_EXECUTABLE})
     else()
+        add_dependencies(${name} host_ld)
         target_link_options(${name} PRIVATE -fuse-ld=$<TARGET_FILE:host_ld>)
     endif()
 
@@ -58,11 +78,16 @@ function(add_darwin_shared_library name)
         add_library(${name} SHARED)
     endif()
 
-    add_dependencies(${name} host_ld)
-    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    if(CMAKE_HOST_APPLE)
+        # PD own ld64 (host_ld) is built without TAPI support, so it cannot
+        # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd) -- fall
+        # back to the real Apple linker via xcrun, which handles them fine.
         execute_process(COMMAND xcrun --find ld OUTPUT_VARIABLE XCRUN_LD OUTPUT_STRIP_TRAILING_WHITESPACE)
         target_link_options(${name} PRIVATE -fuse-ld=${XCRUN_LD})
+    elseif(NATIVE_LD64_EXECUTABLE)
+        target_link_options(${name} PRIVATE -fuse-ld=${NATIVE_LD64_EXECUTABLE})
     else()
+        add_dependencies(${name} host_ld)
         target_link_options(${name} PRIVATE -fuse-ld=$<TARGET_FILE:host_ld>)
     endif()
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)

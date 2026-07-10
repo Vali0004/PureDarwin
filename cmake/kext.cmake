@@ -25,11 +25,18 @@ function(add_kext_bundle name)
         target_compile_options(${name} PRIVATE -mno-red-zone)
     endif()
 
-    target_link_options(${name} PRIVATE "LINKER:-bundle")
-    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
-        # ld64 requires libSystem to accept -bundle; the SDK .tbd stub satisfies
-        # the check without adding a real runtime dependency.
-        target_link_options(${name} PRIVATE -lSystem)
+    if(CMAKE_HOST_APPLE)
+        # Real Apple ld rejects a plain MH_BUNDLE (-bundle) unless it links
+        # libSystem, which a kext must not do. Kexts need the dedicated
+        # MH_KEXT_BUNDLE output (-kext), which has no such requirement.
+        target_link_options(${name} PRIVATE "LINKER:-kext")
+    else()
+        target_link_options(${name} PRIVATE "LINKER:-bundle")
+        if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+            # ld64 requires libSystem to accept -bundle; the SDK .tbd stub satisfies
+            # the check without adding a real runtime dependency.
+            target_link_options(${name} PRIVATE -lSystem)
+        endif()
     endif()
     target_link_options(${name} PRIVATE "SHELL:-undefined dynamic_lookup")
 
