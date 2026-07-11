@@ -27,7 +27,7 @@
 
 #include <IOKit/IOTypes.h>
 
-/* ---- Capability registers (BAR0 + 0x00) ---- */
+/* Capability registers (BAR0 + 0x00) */
 #define XHCI_CAPLENGTH   0x00   /* u8: offset to operational regs */
 #define XHCI_HCIVERSION  0x02   /* u16 */
 #define XHCI_HCSPARAMS1  0x04
@@ -46,7 +46,7 @@
 #define XHCI_HCCP1_CSZ(v)        (((v) >> 2) & 1)        /* context size: 0=32B 1=64B */
 #define XHCI_HCCP1_XECP(v)       (((v) >> 16) & 0xFFFF)  /* extended caps ptr, in 32b words */
 
-/* ---- Operational registers (BAR0 + CAPLENGTH) ---- */
+/* Operational registers (BAR0 + CAPLENGTH) */
 #define XHCI_USBCMD      0x00
 #define XHCI_USBSTS      0x04
 #define XHCI_PAGESIZE    0x08
@@ -88,7 +88,7 @@
 #define XHCI_PORTSC_RW1CS (XHCI_PORTSC_CSC | (1U<<18) | (1U<<19) | (1U<<20) | \
                            XHCI_PORTSC_PRC | (1U<<22) | (1U<<23))
 
-/* ---- Runtime registers (BAR0 + RTSOFF) ---- */
+/* Runtime registers (BAR0 + RTSOFF) */
 #define XHCI_RT_IR0        0x20   /* Interrupter Register Set 0 */
 #define XHCI_IR_IMAN       0x00
 #define XHCI_IR_IMOD       0x04
@@ -101,10 +101,10 @@
 
 #define XHCI_ERDP_EHB  (1ULL << 3) /* Event Handler Busy */
 
-/* ---- Doorbell array (BAR0 + DBOFF), one u32 per slot (0 = command ring) ---- */
+/* Doorbell array (BAR0 + DBOFF), one u32 per slot (0 = command ring) */
 #define XHCI_DB_TARGET_CONTROL_EP0  1  /* control endpoint doorbell target */
 
-/* ---- TRB (Transfer Request Block): 16 bytes ---- */
+/* TRB (Transfer Request Block): 16 bytes */
 typedef struct {
     UInt64 param;
     UInt32 status;
@@ -161,7 +161,7 @@ enum {
 /* Data/status stage direction bit, control[16] */
 #define TRB_DIR_IN         (1U << 16)
 
-/* ---- Slot Context (first 32B of a 32B-context device context) ---- */
+/* Slot Context (first 32B of a 32B-context device context) */
 typedef struct {
     UInt32 dword0;   /* route string[19:0], speed[23:20], ctx entries[31:27] */
     UInt32 dword1;   /* max exit latency[15:0], root hub port[23:16], num ports[31:24] */
@@ -174,7 +174,7 @@ typedef struct {
 #define SLOT_CTX_SPEED_SHIFT     20
 #define SLOT_CTX_ROOTPORT_SHIFT  16
 
-/* ---- Endpoint Context ---- */
+/* Endpoint Context */
 typedef struct {
     UInt32 dword0;   /* ep state[2:0], interval[23:16] */
     UInt32 dword1;   /* ep type[5:3], max packet size[31:16], max burst[15:8] */
@@ -189,7 +189,7 @@ typedef struct {
 #define EP_CTX_TYPE_SHIFT     3
 #define EP_CTX_MAXPKT_SHIFT   16
 
-/* ---- Input Control Context (first 32B of an Input Context) ---- */
+/* Input Control Context (first 32B of an Input Context) */
 typedef struct {
     UInt32 dropFlags;
     UInt32 addFlags;
@@ -210,7 +210,7 @@ typedef struct {
     XHCIEndpointContext     ep[31];
 } __attribute__((packed)) XHCIDeviceContext;
 
-/* ---- USB standard descriptors/requests (subset) ---- */
+/* USB standard descriptors/requests (subset) */
 typedef struct {
     UInt8  bmRequestType;
     UInt8  bRequest;
@@ -284,7 +284,7 @@ typedef struct {
 #define USB_EP_TYPE_MASK 0x03
 #define USB_EP_TYPE_BULK 0x02
 
-/* ---- USB Bulk-Only Transport (Mass Storage) ---- */
+/* USB Bulk-Only Transport (Mass Storage) */
 typedef struct {
     UInt32 dCBWSignature;      /* 0x43425355 "USBC" */
     UInt32 dCBWTag;
