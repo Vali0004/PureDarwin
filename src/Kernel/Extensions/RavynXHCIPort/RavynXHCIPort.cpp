@@ -518,7 +518,16 @@ bool RavynXHCIPort::resetAndEnumeratePort(UInt32 port0based)
     if (portsc & XHCI_PORTSC_RW1CS) {
         XHCI_Log("Port %u: clearing stale change bits before reset, portsc=%08x",
                 port0based, portsc);
-        portWrite32(port0based, XHCI_PORTSC, portsc & XHCI_PORTSC_RW1CS);
+        /* portsc & ~XHCI_PORTSC_PR, NOT portsc & XHCI_PORTSC_RW1CS: writing
+         * only the RW1C bits back would zero every other field on this
+         * register, including PP (Port Power, bit9), which actually
+         * powers the port off. Writing the value back almost as-read
+         * (RW1C bits set to 1 clear themselves; everything else, PP
+         * included, is preserved because we're writing it back exactly
+         * as it read) while explicitly zeroing PR so we don't re-trigger
+         * a reset is the correct "clear change bits, change nothing else"
+         * write. Same fix applies to the post-reset clear below. */
+        portWrite32(port0based, XHCI_PORTSC, portsc & ~XHCI_PORTSC_PR);
         portsc = portRead32(port0based, XHCI_PORTSC);
     }
 
@@ -530,8 +539,8 @@ bool RavynXHCIPort::resetAndEnumeratePort(UInt32 port0based)
         if (portsc & XHCI_PORTSC_PED) { enabled = true; break; }
         IOSleep(2);
     }
-    /* Clear change bits (RW1C). */
-    portWrite32(port0based, XHCI_PORTSC, portsc & XHCI_PORTSC_RW1CS);
+    /* Clear change bits (RW1C), preserving PP and everything else. */
+    portWrite32(port0based, XHCI_PORTSC, portsc & ~XHCI_PORTSC_PR);
 
     if (!enabled) {
         XHCI_Log("Port %u reset: never became enabled, portsc=%08x", port0based, portsc);
