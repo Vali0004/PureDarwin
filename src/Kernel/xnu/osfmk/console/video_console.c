@@ -1260,21 +1260,6 @@ vcputc(__unused int l, __unused int u, int c)
 	}
 }
 
-void
-vc_serial_putc(char c)
-{
-	if (gc_initialized) {
-		VCPUTC_LOCK_LOCK();
-		gc_hide_cursor(gc_x, gc_y);
-		gc_putchar(c);
-		if (c == '\n') {
-			gc_putchar('\r');
-		}
-		gc_show_cursor(gc_x, gc_y);
-		VCPUTC_LOCK_UNLOCK();
-	}
-}
-
 /*
  * Video Console (Back-End)
  * ------------------------

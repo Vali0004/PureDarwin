@@ -11,7 +11,7 @@ target_sources(libdyld PRIVATE
     ${DYLD_SRC_DIR}/src/dyld_stub_binder.s    # dyld_stub_binder for classic lazy binds
     ${DYLD_SRC_DIR}/src/threadLocalHelpers.s  # _tlv_get_addr (real asm TLV-descriptor thunk, was just unwired)
     # _tlv_atexit/_tlv_exit: real Darwin provides thread_local (C++11) teardown
-    # from libdyld.dylib -- libc's atexit.c (statically bundled below) calls it
+    # from libdyld.dylib, libc's atexit.c (statically bundled below) calls it
     # by that exact contract (see its own comment: "existing _tlv_atexit() in
     # libdyld"). The main `dyld` executable target also builds this file for
     # its OWN internal bootstrap use; this is a second, independent compilation

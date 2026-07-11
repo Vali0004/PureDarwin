@@ -1,5 +1,5 @@
 # iig is a host-native tool (it runs at build time, generating sources for
-# the cross-compiled kext), like migcom -- it must NOT be built with the
+# the cross-compiled kext), like migcom, it must NOT be built with the
 # osxcross toolchain (that produces a Mach-O binary CMake then cannot execute
 # on the Linux build host). Unlike migcom's in-tree add_executable, iig has
 # no cross-toolchain-poisoned fallback target: it is sourced entirely from
@@ -7,7 +7,7 @@
 # manager pattern.
 find_program(IIG_EXECUTABLE iig)
 if(NOT IIG_EXECUTABLE)
-    message(WARNING "iig not found on PATH -- "
+    message(WARNING "iig not found on PATH, "
         "run `nix profile install` in the iig-tools repo "
         "(https://github.com/PureDarwin/iig-tools, or your local checkout) "
         "before building any target that calls iig()")

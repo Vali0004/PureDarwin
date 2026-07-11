@@ -1,6 +1,6 @@
 # host_ld (PD's own in-tree ld64, tools/cctools/ld64) is an add_executable()
-# target, so osxcross's toolchain.cmake -- which forces CMAKE_SYSTEM_NAME
-# Darwin globally -- builds it as an unusable Mach-O binary instead of a
+# target, so osxcross's toolchain.cmake, which forces CMAKE_SYSTEM_NAME
+# Darwin globally, builds it as an unusable Mach-O binary instead of a
 # native ELF one (the same Canadian-cross trap migcom's dead in-tree target
 # has). osxcross ships its own native, TAPI-capable ld (built for the host,
 # targeting Darwin) as "<triple>-ld"; prefer that, matching migcom's
@@ -20,7 +20,7 @@ function(add_darwin_executable name)
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
     if(CMAKE_HOST_APPLE)
         # PD own ld64 (host_ld) is built without TAPI support, so it cannot
-        # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd) -- fall
+        # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd), fall
         # back to the real Apple linker via xcrun, which handles them fine.
         execute_process(COMMAND xcrun --find ld OUTPUT_VARIABLE XCRUN_LD OUTPUT_STRIP_TRAILING_WHITESPACE)
         target_link_options(${name} PRIVATE -fuse-ld=${XCRUN_LD})
@@ -80,7 +80,7 @@ function(add_darwin_shared_library name)
 
     if(CMAKE_HOST_APPLE)
         # PD own ld64 (host_ld) is built without TAPI support, so it cannot
-        # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd) -- fall
+        # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd), fall
         # back to the real Apple linker via xcrun, which handles them fine.
         execute_process(COMMAND xcrun --find ld OUTPUT_VARIABLE XCRUN_LD OUTPUT_STRIP_TRAILING_WHITESPACE)
         target_link_options(${name} PRIVATE -fuse-ld=${XCRUN_LD})
@@ -124,7 +124,7 @@ function(add_darwin_shared_library name)
     # filename ("libfoo.dylib"), silently clobbering whatever full path the
     # link step embedded. <rdar://n/a, PD-local>: every dylib built through
     # this helper had its correct /usr/lib/... install name overwritten with a
-    # bare filename at `cmake --install` time -- e.g. libdyld.dylib installed
+    # bare filename at `cmake --install` time, e.g. libdyld.dylib installed
     # with id "libdyld.dylib" instead of "/usr/lib/system/libdyld.dylib",
     # which made real dyld's libDyldPath() identity check
     # (ImageLoaderMachO.cpp's setupLazyPointerHandler) fail and throw

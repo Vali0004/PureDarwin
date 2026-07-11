@@ -524,6 +524,29 @@ bool
 RavynAHCIPort::rebasePort(PortState &portState)
 {
     if (!allocPortMemory(portState)) return false;
+
+    /*
+     * Spin up / power on the device before anything else touches this port.
+     * QEMU's virtual AHCI disks are always "ready" so this was never needed
+     * there, but real hardware supporting staggered spin-up (CAP.SSS) or
+     * cold-presence power switching (PxCMD.CPD) leaves the device
+     * unpowered until software explicitly asks for it - without this,
+     * COMRESET/IDENTIFY on real hardware gets stuck with the busy (BSY)
+     * bit set forever (observed as "Waiting for port N timed out - still
+     * busy TFD=00000080").
+     */
+    {
+        uint32_t cap = hbaRead32(AHCI_CAP);
+        uint32_t cmd = portRead32(portState.port, PORT_CMD);
+        if (cap & AHCI_CAP_SSS)
+            cmd |= PORT_CMD_SUD;
+        if (cmd & PORT_CMD_CPD)
+            cmd |= PORT_CMD_POD;
+        portWrite32(portState.port, PORT_CMD, cmd);
+        if (cap & AHCI_CAP_SSS)
+            IOSleep(10); /* let the device begin spinning up before COMRESET */
+    }
+
     if (!stopPortEngine(portState.port)) return false;
 
     portWrite32(portState.port, PORT_CLB,
