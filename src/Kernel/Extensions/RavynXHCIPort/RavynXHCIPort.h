@@ -82,6 +82,17 @@ private:
     UInt32                fContextSize; /* 32 or 64 bytes/context */
     IOLock              * fCmdLock;
 
+    /* USB2/USB3 root hub port pairing, from the xHCI Extended Capabilities'
+     * Supported Protocol structures (index by 0-based port number). A
+     * combo connector typically shows up as two distinct xHCI port
+     * numbers, one per protocol major revision; a device negotiating
+     * SuperSpeed must be enumerated via its USB3-view port number, not the
+     * USB2 companion, or real bus transactions to it fail (observed as
+     * USB Transaction Error on every control transfer despite the USB2
+     * view's link successfully training). 0xFF = no pairing found. */
+    UInt8                  fPortMajorRev[64];   /* 2, 3, or 0 if unknown */
+    UInt8                  fPairedPort[64];     /* 0xFF if none */
+
     /* DCBAA: array of 64-bit device-context pointers, index by slot ID (0 unused). */
     IOBufferMemoryDescriptor * fDCBAAMem;
     volatile UInt64           * fDCBAA;
@@ -133,26 +144,47 @@ private:
         { return *(volatile UInt32 *)(fOpRegs + off); }
     inline void opWrite32(UInt32 off, UInt32 v) const
         { *(volatile UInt32 *)(fOpRegs + off) = v; }
+    /* 64-bit xHCI registers (DCBAAP, CRCR, ERSTBA, ERDP) must be written and
+     * read as two separate, ordered 32-bit accesses (low DWORD first), not
+     * one 64-bit store/load. A single 64-bit MMIO write compiles to one
+     * atomic CPU instruction, but the PCIe root complex can still split it
+     * into two 32-bit TLPs the far end doesn't commit atomically; real
+     * hardware was observed to silently drop such writes entirely (CRCR
+     * read back as all-zero immediately after being written), while QEMU's
+     * software MMIO emulation never exposed the difference. Every real
+     * xHCI driver (e.g. Linux xhci-hcd's lo_hi_writeq) does the split for
+     * exactly this reason. */
     inline UInt64 opRead64(UInt32 off) const
-        { return *(volatile UInt64 *)(fOpRegs + off); }
+        { UInt32 lo = opRead32(off); UInt32 hi = opRead32(off + 4); return ((UInt64)hi << 32) | lo; }
     inline void opWrite64(UInt32 off, UInt64 v) const
-        { *(volatile UInt64 *)(fOpRegs + off) = v; }
+        { opWrite32(off, (UInt32)v); opWrite32(off + 4, (UInt32)(v >> 32)); }
     inline UInt32 rtRead32(UInt32 off) const
         { return *(volatile UInt32 *)(fRTRegs + off); }
     inline void rtWrite32(UInt32 off, UInt32 v) const
         { *(volatile UInt32 *)(fRTRegs + off) = v; }
     inline UInt64 rtRead64(UInt32 off) const
-        { return *(volatile UInt64 *)(fRTRegs + off); }
+        { UInt32 lo = rtRead32(off); UInt32 hi = rtRead32(off + 4); return ((UInt64)hi << 32) | lo; }
     inline void rtWrite64(UInt32 off, UInt64 v) const
-        { *(volatile UInt64 *)(fRTRegs + off) = v; }
+        { rtWrite32(off, (UInt32)v); rtWrite32(off + 4, (UInt32)(v >> 32)); }
     inline UInt32 portRead32(UInt32 port0based, UInt32 reg) const
         { return opRead32(XHCI_PORTREGS_BASE + port0based * XHCI_PORTREGS_SIZE + reg); }
     inline void portWrite32(UInt32 port0based, UInt32 reg, UInt32 v) const
         { opWrite32(XHCI_PORTREGS_BASE + port0based * XHCI_PORTREGS_SIZE + reg, v); }
     inline void ringDoorbell(UInt32 slot, UInt32 target) const
-        { *(volatile UInt32 *)(fDBRegs + slot * 4) = target; }
+        {
+            /* Ensure the Transfer/Command TRB stores (with their cycle bits)
+             * are globally visible before the doorbell MMIO write that tells
+             * the controller to sample the ring - otherwise the controller
+             * can read a stale (empty) ring, go idle, and never look again
+             * (no second doorbell), stranding a Running endpoint with a
+             * queued TD and no completion event. */
+            __sync_synchronize();
+            *(volatile UInt32 *)(fDBRegs + slot * 4) = target;
+        }
 
     bool resetController();
+    void claimBIOSOwnership();
+    void parseExtendedCapabilities();
     bool setupDCBAA();
     bool setupCommandRing();
     bool setupEventRing();
@@ -172,10 +204,13 @@ private:
     bool waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC, UInt32 timeoutMs = 1000);
 
     bool enableSlot(UInt32 *outSlotId);
+    void disableSlot(UInt32 slotId);
     bool addressDevice(UInt32 slotId, UInt32 port0based, UInt32 routeString,
-                       UInt32 speed, UInt16 &maxPacket0);
+                       UInt32 speed, UInt16 &maxPacket0,
+                       UInt32 parentHubSlot = 0, UInt32 parentPortNum = 0);
     bool sendAddressDeviceCommand(UInt32 slotId, UInt32 port0based, UInt32 routeString,
-                                  UInt32 speed, UInt16 maxPkt, bool bsr);
+                                  UInt32 speed, UInt16 maxPkt, bool bsr,
+                                  UInt32 parentHubSlot, UInt32 parentPortNum);
     bool controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
                          void *buf, UInt16 len, bool in);
     bool configureBulkEndpoints(UInt32 slotId, UInt8 inEp, UInt16 inMaxPkt,
@@ -183,7 +218,33 @@ private:
     bool bulkTransfer(UInt32 slotId, UInt8 epNum, bool in,
                       IOBufferMemoryDescriptor *xferMem, UInt32 len, UInt32 timeoutMs);
 
-    bool tryEnumerateMassStorage(UInt32 port0based);
+    /* Slot Context Hub/NumberOfPorts/TTT update via Configure Endpoint (only
+     * the A0 slot-context flag set, no endpoints touched) so the xHC treats
+     * this slot as a hub and will accept downstream devices' route strings. */
+    bool markSlotAsHub(UInt32 slotId, UInt8 numPorts, bool multiTT,
+                       UInt8 intrEp, UInt16 intrMaxPkt, UInt8 intrInterval);
+
+    /* Hub class control requests (recipient = other/port). */
+    bool hubGetDescriptor(UInt32 slotId, bool superSpeed, void *buf, UInt16 len);
+    bool hubSetPortFeature(UInt32 slotId, UInt8 port1based, UInt16 feature);
+    bool hubClearPortFeature(UInt32 slotId, UInt8 port1based, UInt16 feature);
+    bool hubGetPortStatus(UInt32 slotId, UInt8 port1based, UInt32 *outStatus);
+
+    /* Reset + enable one hub downstream port and enumerate whatever's
+     * attached to it (recursing into enumerateSlotDevice with a hub-relative
+     * route string), depth-limited to guard against a mis-parsed hub
+     * descriptor turning into an infinite/absurd recursion. */
+    bool enumerateHubPort(UInt32 hubSlotId, UInt32 rootPort0based, UInt32 hubRouteString,
+                          UInt8 port1based, bool superSpeedHub, int depth);
+
+    /* Given an already-Address-Device'd slot (device, not yet known to be a
+     * hub or a mass-storage device), fetch its device descriptor and either
+     * recurse into hub downstream enumeration or search its configuration
+     * for a bulk-only mass storage interface and publish a disk nub. */
+    bool enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UInt32 routeString,
+                             UInt32 speed, int depth);
+
+    bool tryEnumerateMassStorage(UInt32 port0based, UInt32 speed);
 };
 
 #endif /* _RAVYN_XHCI_PORT_H */

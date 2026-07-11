@@ -84,9 +84,37 @@
 #define XHCI_PORTSC_SPEED(v) (((v) >> 10) & 0xF)
 #define XHCI_PORTSC_PRC   (1U << 21) /* Port Reset Change */
 #define XHCI_PORTSC_CSC   (1U << 17) /* Connect Status Change */
+#define XHCI_PORTSC_CAS   (1U << 24) /* Cold Attach Status: warm reset required */
+#define XHCI_PORTSC_WPR   (1U << 31) /* Warm Port Reset (SuperSpeed only) */
 /* RW1CS bits that must be preserved-as-0-on-write to avoid clearing on RMW */
 #define XHCI_PORTSC_RW1CS (XHCI_PORTSC_CSC | (1U<<18) | (1U<<19) | (1U<<20) | \
                            XHCI_PORTSC_PRC | (1U<<22) | (1U<<23))
+/* PED behaves like a write-1-to-clear bit too: per spec, software cannot
+ * write a 1 to enable a port, only to disable one that's already enabled.
+ * Any "preserve state, clear change bits" write that reads back portsc
+ * with PED already 1 and writes that same 1 back will disable the port it
+ * just enabled. Bits that must be forced to 0 on every such write. */
+#define XHCI_PORTSC_WRITEBACK_CLEAR (XHCI_PORTSC_RW1CS | XHCI_PORTSC_PED)
+
+/* Extended Capabilities (BAR0 + XHCI_HCCP1_XECP(HCCPARAMS1)*4), a linked
+ * list of variable-format structures starting at the MMIO base (NOT
+ * relative to CAPLENGTH like the operational registers). */
+#define XHCI_XECP_ID(dw0)          ((dw0) & 0xFF)
+#define XHCI_XECP_NEXT(dw0)        (((dw0) >> 8) & 0xFF)   /* in 32-bit DWORDs, 0 = end of list */
+#define XHCI_XECP_ID_LEGACY_SUPPORT      1
+#define XHCI_XECP_ID_SUPPORTED_PROTOCOL  2
+
+/* USB Legacy Support capability */
+#define XHCI_LEGACY_BIOS_OWNED     (1U << 16)
+#define XHCI_LEGACY_OS_OWNED       (1U << 24)
+#define XHCI_LEGACY_CONTROL_STATUS 0x04
+
+/* Supported Protocol Capability (xHCI 1.2 spec 7.2), one per USB major
+ * revision this controller implements, each covering a contiguous range of
+ * root hub ports. */
+#define XHCI_SP_MAJOR_REV(dw0)     (((dw0) >> 24) & 0xFF)  /* 2 = USB2, 3 = USB3 */
+#define XHCI_SP_PORT_OFFSET(dw2)   ((dw2) & 0xFF)          /* 1-based */
+#define XHCI_SP_PORT_COUNT(dw2)    (((dw2) >> 8) & 0xFF)
 
 /* Runtime registers (BAR0 + RTSOFF) */
 #define XHCI_RT_IR0        0x20   /* Interrupter Register Set 0 */
@@ -180,6 +208,18 @@ typedef struct {
 #define SLOT_CTX_ENTRIES_SHIFT   27
 #define SLOT_CTX_SPEED_SHIFT     20
 #define SLOT_CTX_ROOTPORT_SHIFT  16
+/* dword0: Hub/MTT flags for devices that are themselves USB hubs. */
+#define SLOT_CTX_MTT_BIT         (1U << 25)
+#define SLOT_CTX_HUB_BIT         (1U << 26)
+/* dword1[31:24]: Number of Ports (hub descriptor's bNbrPorts), only
+ * meaningful when SLOT_CTX_HUB_BIT is set. */
+#define SLOT_CTX_NUMPORTS_SHIFT  24
+/* dword2: Parent Hub Slot ID[7:0]/Parent Port Number[15:8] (only needed for
+ * LS/FS devices behind a HS hub, for Transaction Translator routing) and
+ * TT Think Time[17:16] (only meaningful when this slot IS a hub). */
+#define SLOT_CTX_PARENT_SLOT_SHIFT 0
+#define SLOT_CTX_PARENT_PORT_SHIFT 8
+#define SLOT_CTX_TTT_SHIFT         16
 
 /* Endpoint Context */
 typedef struct {
@@ -193,6 +233,8 @@ typedef struct {
 #define EP_TYPE_CONTROL       4
 #define EP_TYPE_BULK_OUT      2
 #define EP_TYPE_BULK_IN       6
+#define EP_CTX_CERR_SHIFT     1
+#define EP_CTX_CERR(c)        ((UInt32)(c) << EP_CTX_CERR_SHIFT)
 #define EP_CTX_TYPE_SHIFT     3
 #define EP_CTX_MAXPKT_SHIFT   16
 
@@ -285,6 +327,46 @@ typedef struct {
 #define USB_IF_CLASS_MASS_STORAGE   0x08
 #define USB_IF_SUBCLASS_SCSI        0x06
 #define USB_IF_PROTOCOL_BULK_ONLY   0x50
+
+/* USB Hub class (device class 0x09): downstream port traversal so devices
+ * behind an internal/onboard hub (very common on real hardware - the actual
+ * boot USB stick usually isn't wired straight to a root xHCI port) can be
+ * enumerated. bDeviceProtocol distinguishes a classic USB2 hub (0/1/2:
+ * full-speed only / single-TT / multi-TT) from a USB3.x SuperSpeed hub (3);
+ * the hub/port class requests below are numerically identical between the
+ * two, only the GET_DESCRIPTOR class code and exact port-status bit layout
+ * differ, and we only need the bits both share (connection + reset). */
+#define USB_DEV_CLASS_HUB           0x09
+#define USB_HUB_PROTO_SUPERSPEED    3
+
+#define USB_DESC_HUB                0x29 /* USB2 Hub Descriptor */
+#define USB_DESC_HUB_SS             0x2A /* USB3 SuperSpeed Hub Descriptor */
+
+/* bmRequestType for hub class requests: 0xA0/0x23/0xA3 = class request,
+ * device/other(port) recipient, in/out. */
+#define USB_HUB_REQTYPE_GET_HUB_DESC   0xA0
+#define USB_HUB_REQTYPE_SET_PORT_FEAT  0x23
+#define USB_HUB_REQTYPE_CLEAR_PORT_FEAT 0x23
+#define USB_HUB_REQTYPE_GET_PORT_STATUS 0xA3
+
+#define USB_HUB_FEAT_PORT_CONNECTION   0
+#define USB_HUB_FEAT_PORT_RESET        4
+#define USB_HUB_FEAT_PORT_POWER        8
+#define USB_HUB_FEAT_C_PORT_CONNECTION 16
+#define USB_HUB_FEAT_C_PORT_RESET      20
+#define USB_HUB_FEAT_C_BH_PORT_RESET   29 /* SS hub: warm-reset change */
+
+/* GET_PORT_STATUS's 4-byte reply: wPortStatus | (wPortChange << 16). Only
+ * the bits common to USB2 and USB3 hub port status words that we actually
+ * use are named here. */
+#define USB_PORTSTATUS_CONNECTION      (1U << 0)
+#define USB_PORTSTATUS_ENABLE          (1U << 1)
+#define USB_PORTSTATUS_PLS(v)          (((v) >> 5) & 0xF) /* SS hubs only: Port Link State */
+#define USB_PORTSTATUS_LOW_SPEED       (1U << 9)  /* USB2 hubs only */
+#define USB_PORTSTATUS_HIGH_SPEED      (1U << 10) /* USB2 hubs only */
+#define USB_PORTCHANGE_C_RESET         (1U << 20)
+#define USB_PORTCHANGE_C_BH_RESET      (1U << 21) /* SS hubs only: warm-reset change */
+#define USB_PORT_LINK_STATE_U0         0
 
 #define USB_EP_DIR_IN    0x80
 #define USB_EP_ADDR_MASK 0x0F

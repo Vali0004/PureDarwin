@@ -153,8 +153,18 @@ RavynXHCIMassStorageDisk::scsiReadWrite10(UInt64 block, UInt32 nblks,
     cdb[8] = (UInt8)(nblks);
 
     UInt32 dataLen = nblks * fBlockSize;
-    IOReturn ret = fParent->botTransfer(fSlotId, cdb, sizeof(cdb), dataLen, !write, buffer, bufOff);
-    return ret == kIOReturnSuccess;
+    /* Real hardware intermittently strands a single BOT transfer (a lost
+     * doorbell the periodic re-ring couldn't recover, or a transient NAK
+     * storm). Retry the whole CBW/data/CSW command a few times before
+     * surfacing an I/O error - one clean retry almost always succeeds, and
+     * this keeps a single flaky block from failing the root mount. */
+    for (int attempt = 0; attempt < 4; attempt++) {
+        IOReturn ret = fParent->botTransfer(fSlotId, cdb, sizeof(cdb), dataLen, !write, buffer, bufOff);
+        if (ret == kIOReturnSuccess) return true;
+        XHCI_Log("usbdisk%u BOT %s block=%llu nblks=%u attempt %d failed, retrying",
+                fMscIndex, write ? "write" : "read", block, nblks, attempt);
+    }
+    return false;
 }
 
 IOReturn
@@ -164,22 +174,31 @@ RavynXHCIMassStorageDisk::doAsyncReadWrite(IOMemoryDescriptor  * buffer,
                                            IOStorageAttributes * attributes,
                                            IOStorageCompletion * completion)
 {
+    /* IOBlockStorageDevice contract: the return value reports only whether
+     * the request was *accepted for asynchronous completion*. The actual I/O
+     * result is delivered through IOStorage::complete(). Once we've called
+     * complete() (which wakes and lets the synchronous caller tear down its
+     * completion/synchronizer context), returning a non-success code makes
+     * the caller believe the completion will never fire and touch that
+     * already-freed context - the null deref (CR2=0x28) seen panicking in
+     * IOGUIDPartitionScheme::scan on the first failed read. So every path
+     * that calls complete() must return kIOReturnSuccess. */
     if (!fParent || nblks == 0 || !buffer) {
         IOStorage::complete(completion, kIOReturnBadArgument, 0);
-        return kIOReturnBadArgument;
+        return kIOReturnSuccess;
     }
 
     if (fCapacityBlocks == 0 || block >= fCapacityBlocks || nblks > (fCapacityBlocks - block)) {
         XHCI_Log("usbdisk%u rejecting I/O block=%llu nblks=%llu max=%llu",
                 fMscIndex, block, nblks, fCapacityBlocks);
         IOStorage::complete(completion, kIOReturnBadArgument, 0);
-        return kIOReturnBadArgument;
+        return kIOReturnSuccess;
     }
 
     IOReturn ioret = buffer->prepare();
     if (ioret != kIOReturnSuccess) {
         IOStorage::complete(completion, ioret, 0);
-        return ioret;
+        return kIOReturnSuccess;
     }
 
     const bool isWrite = ((buffer->getDirection() & kIODirectionOut) != 0);
@@ -190,7 +209,7 @@ RavynXHCIMassStorageDisk::doAsyncReadWrite(IOMemoryDescriptor  * buffer,
 
     IOReturn ret = ok ? kIOReturnSuccess : kIOReturnIOError;
     IOStorage::complete(completion, ret, ok ? totBytes : 0);
-    return ret;
+    return kIOReturnSuccess;
 }
 
 IOReturn
