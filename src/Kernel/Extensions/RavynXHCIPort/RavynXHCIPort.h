@@ -86,6 +86,12 @@ private:
     IOBufferMemoryDescriptor * fDCBAAMem;
     volatile UInt64           * fDCBAA;
 
+    /* Scratchpad buffers (HCSPARAMS2.Max Scratchpad Buffers): controller-
+     * owned working memory required by real hardware, referenced via
+     * DCBAA[0]. Unused (all NULL) if the controller doesn't need any. */
+    IOBufferMemoryDescriptor * fScratchpadArrayMem;
+    IOBufferMemoryDescriptor * fScratchpadBufMem[32];
+
     /* Command ring: single segment, ring-linked to itself via a LINK TRB. */
     IOBufferMemoryDescriptor * fCmdRingMem;
     volatile XHCITRB          * fCmdRing;
@@ -168,6 +174,8 @@ private:
     bool enableSlot(UInt32 *outSlotId);
     bool addressDevice(UInt32 slotId, UInt32 port0based, UInt32 routeString,
                        UInt32 speed, UInt16 &maxPacket0);
+    bool sendAddressDeviceCommand(UInt32 slotId, UInt32 port0based, UInt32 routeString,
+                                  UInt32 speed, UInt16 maxPkt, bool bsr);
     bool controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
                          void *buf, UInt16 len, bool in);
     bool configureBulkEndpoints(UInt32 slotId, UInt8 inEp, UInt16 inMaxPkt,

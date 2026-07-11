@@ -287,16 +287,25 @@ bool RavynXHCIPort::start(IOService *provider)
         XHCI_Log("controller reset failed");
         return false;
     }
+    XHCI_Log("checkpoint after resetController: USBCMD=%08x USBSTS=%08x",
+            opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
+
     if (!setupDCBAA() || !setupCommandRing() || !setupEventRing()) {
         XHCI_Log("ring/DCBAA setup failed");
         return false;
     }
+    XHCI_Log("checkpoint after ring/DCBAA setup: USBCMD=%08x USBSTS=%08x",
+            opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
 
     /* CONFIG.MaxSlotsEn */
     opWrite32(XHCI_CONFIG, fMaxSlots);
+    XHCI_Log("checkpoint after CONFIG write: USBCMD=%08x USBSTS=%08x",
+            opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
 
     /* Run */
     opWrite32(XHCI_USBCMD, opRead32(XHCI_USBCMD) | XHCI_USBCMD_RS);
+    XHCI_Log("checkpoint after RS write: USBCMD=%08x USBSTS=%08x",
+            opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
 
     bzero(fMSC, sizeof(fMSC));
     bzero(fDiskNubs, sizeof(fDiskNubs));
@@ -355,6 +364,44 @@ bool RavynXHCIPort::setupDCBAA()
     fDCBAA = (volatile UInt64 *)fDCBAAMem->getBytesNoCopy();
     bzero((void *)fDCBAA, (fMaxSlots + 1) * sizeof(UInt64));
     opWrite64(XHCI_DCBAAP, fDCBAAMem->getPhysicalAddress());
+
+    /* Scratchpad buffers: real xHCI silicon almost always needs some pages
+     * of controller-owned working memory (unlike QEMU's emulated xHCI,
+     * which never asked for any and let this go unnoticed). If
+     * HCSPARAMS2.Max Scratchpad Buffers is nonzero, DCBAA[0] must point at
+     * an array of that many page-sized buffers' physical addresses before
+     * the controller can process any command; skipping it is exactly why
+     * ringing the doorbell for the very first command (Enable Slot) halted
+     * the controller with USBSTS.HSE on real hardware while working fine
+     * under QEMU. */
+    UInt32 hcsp2 = capRead32(XHCI_HCSPARAMS2);
+    UInt32 maxScratchHi = (hcsp2 >> 21) & 0x1F;
+    UInt32 maxScratchLo = (hcsp2 >> 27) & 0x1F;
+    UInt32 maxScratchpadBufs = (maxScratchHi << 5) | maxScratchLo;
+    XHCI_Log("HCSPARAMS2=%08x maxScratchpadBufs=%u", hcsp2, maxScratchpadBufs);
+    if (maxScratchpadBufs > 32) {
+        XHCI_Log("maxScratchpadBufs %u exceeds fixed array size, capping at 32", maxScratchpadBufs);
+        maxScratchpadBufs = 32;
+    }
+
+    if (maxScratchpadBufs > 0) {
+        fScratchpadArrayMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+            kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
+            maxScratchpadBufs * sizeof(UInt64), mask);
+        if (!fScratchpadArrayMem) return false;
+        volatile UInt64 *scratchArray = (volatile UInt64 *)fScratchpadArrayMem->getBytesNoCopy();
+        bzero((void *)scratchArray, maxScratchpadBufs * sizeof(UInt64));
+
+        for (UInt32 i = 0; i < maxScratchpadBufs; i++) {
+            IOBufferMemoryDescriptor *buf = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+                kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut, 0x1000, mask);
+            if (!buf) return false;
+            bzero((void *)buf->getBytesNoCopy(), 0x1000);
+            scratchArray[i] = buf->getPhysicalAddress();
+            fScratchpadBufMem[i] = buf;
+        }
+        fDCBAA[0] = fScratchpadArrayMem->getPhysicalAddress();
+    }
     return true;
 }
 
@@ -408,6 +455,14 @@ bool RavynXHCIPort::setupEventRing()
     rtWrite32(XHCI_RT_IR0 + XHCI_IR_ERSTSZ, 1);
     rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, ringBase);
     rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERSTBA, fERSTMem->getPhysicalAddress());
+
+    /* IMAN.IE (Interrupter Enable) is only supposed to gate the actual
+     * interrupt/MSI signal per spec, not whether the xHC queues events at
+     * all, but we're polling (no ISR registered, and USBCMD.INTE stays 0
+     * so this can't actually assert a system interrupt line) and it costs
+     * nothing to set it in case some real silicon ties event posting to it
+     * more strictly than the spec requires. */
+    rtWrite32(XHCI_RT_IR0 + XHCI_IR_IMAN, XHCI_IMAN_IE);
     return true;
 }
 
@@ -457,16 +512,43 @@ bool RavynXHCIPort::doCommand(UInt64 param, UInt32 status, UInt32 controlNoCycle
             }
             fEventRingDequeue++;
             if (fEventRingDequeue == kRingTRBs) { fEventRingDequeue = 0; fEventRingCycle ^= 1; }
-            UInt64 erdp = rtRead64(XHCI_RT_IR0 + XHCI_IR_ERDP);
+            /* ERDP.EHB (Event Handler Busy, bit3) must be explicitly written
+             * as 1 by software to acknowledge/clear it after consuming an
+             * event, not just passed through from a prior read. QEMU's
+             * emulated xHCI doesn't seem to enforce this and kept posting
+             * events regardless; real hardware can stop posting new events
+             * (including the Command Completion Event for Enable Slot)
+             * until EHB is cleared, which read like every doCommand() just
+             * timing out for no reason. */
             UInt64 newErdp = fEventRingMem->getPhysicalAddress() + fEventRingDequeue * sizeof(XHCITRB);
-            rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | (erdp & 0xFULL));
+            rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | XHCI_ERDP_EHB);
             if (ok) break;
             continue;
         }
         IOSleep(1);
     }
     IOLockUnlock(fCmdLock);
-    if (!ok) XHCI_Log("doCommand timed out (type=%u)", (unsigned)TRB_TYPE(controlNoCycle));
+    if (!ok) {
+        /* Dump enough state to tell apart "doorbell never reached the
+         * controller"/"controller halted"/"command ring not running" from
+         * "event ring genuinely empty" without another blind guess-and-wait
+         * real-hardware round trip. */
+        UInt32 usbcmd = opRead32(XHCI_USBCMD);
+        UInt32 usbsts = opRead32(XHCI_USBSTS);
+        UInt64 crcr = opRead64(XHCI_CRCR);
+        UInt64 erdp = rtRead64(XHCI_RT_IR0 + XHCI_IR_ERDP);
+        UInt32 iman = rtRead32(XHCI_RT_IR0 + XHCI_IR_IMAN);
+        UInt64 evParamDbg   = fEventRing[fEventRingDequeue].param;
+        UInt32 evStatusDbg  = fEventRing[fEventRingDequeue].status;
+        UInt32 evControlDbg = fEventRing[fEventRingDequeue].control;
+        XHCI_Log("doCommand timed out (type=%u) USBCMD=%08x USBSTS=%08x CRCR=%016llx "
+                "ERDP=%016llx IMAN=%08x deqIdx=%u expectCycle=%u eventAt[param=%016llx "
+                "status=%08x control=%08x]",
+                (unsigned)TRB_TYPE(controlNoCycle), usbcmd, usbsts,
+                (unsigned long long)crcr, (unsigned long long)erdp, iman,
+                fEventRingDequeue, fEventRingCycle,
+                (unsigned long long)evParamDbg, evStatusDbg, evControlDbg);
+    }
     return ok;
 }
 
@@ -481,9 +563,16 @@ bool RavynXHCIPort::waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC,
             if (match && outCC) *outCC = TRB_CC(evStatus);
             fEventRingDequeue++;
             if (fEventRingDequeue == kRingTRBs) { fEventRingDequeue = 0; fEventRingCycle ^= 1; }
-            UInt64 erdp = rtRead64(XHCI_RT_IR0 + XHCI_IR_ERDP);
+            /* ERDP.EHB (Event Handler Busy, bit3) must be explicitly written
+             * as 1 by software to acknowledge/clear it after consuming an
+             * event, not just passed through from a prior read. QEMU's
+             * emulated xHCI doesn't seem to enforce this and kept posting
+             * events regardless; real hardware can stop posting new events
+             * (including the Command Completion Event for Enable Slot)
+             * until EHB is cleared, which read like every doCommand() just
+             * timing out for no reason. */
             UInt64 newErdp = fEventRingMem->getPhysicalAddress() + fEventRingDequeue * sizeof(XHCITRB);
-            rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | (erdp & 0xFULL));
+            rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | XHCI_ERDP_EHB);
             if (match) return true;
             continue;
         }
@@ -495,11 +584,39 @@ bool RavynXHCIPort::waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC,
 
 void RavynXHCIPort::scanPorts()
 {
+    /* Explicitly power every port on. Ports come up powered after HCRST on
+     * most real controllers, but not guaranteed, and PP is a normal
+     * read-write bit we must set ourselves per spec rather than assume.
+     * Give the device a moment to settle onto the bus before the first
+     * connect-status read. */
     for (UInt32 p = 0; p < fMaxPorts; p++) {
         UInt32 portsc = portRead32(p, XHCI_PORTSC);
-        if (!(portsc & XHCI_PORTSC_CCS)) continue;
-        XHCI_Log("Port %u connected, portsc=%08x speed=%u", p, portsc, XHCI_PORTSC_SPEED(portsc));
-        resetAndEnumeratePort(p);
+        if (!(portsc & XHCI_PORTSC_PP)) {
+            portWrite32(p, XHCI_PORTSC, (portsc & ~(XHCI_PORTSC_RW1CS | XHCI_PORTSC_PR)) | XHCI_PORTSC_PP);
+        }
+    }
+    XHCI_Log("checkpoint after port power-up loop: USBCMD=%08x USBSTS=%08x",
+            opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
+    IOSleep(20);
+
+    /* Redetect: a device that hasn't finished attaching/negotiating yet
+     * won't show CCS on the very first pass. Poll a handful of times with
+     * a short delay between rounds instead of a single one-shot scan,
+     * matching how real USB stacks handle late-appearing connect events. */
+    bool seen[64] = { false };
+    for (int pass = 0; pass < 10; pass++) {
+        bool anyNew = false;
+        for (UInt32 p = 0; p < fMaxPorts && p < 64; p++) {
+            if (seen[p]) continue;
+            UInt32 portsc = portRead32(p, XHCI_PORTSC);
+            if (!(portsc & XHCI_PORTSC_CCS)) continue;
+            seen[p] = true;
+            anyNew = true;
+            XHCI_Log("Port %u connected, portsc=%08x speed=%u", p, portsc, XHCI_PORTSC_SPEED(portsc));
+            resetAndEnumeratePort(p);
+        }
+        if (!anyNew && pass > 0) break;
+        IOSleep(50);
     }
 }
 
@@ -532,6 +649,8 @@ bool RavynXHCIPort::resetAndEnumeratePort(UInt32 port0based)
     }
 
     portWrite32(port0based, XHCI_PORTSC, (portsc & ~XHCI_PORTSC_RW1CS) | XHCI_PORTSC_PR);
+    XHCI_Log("Port %u: checkpoint right after PR write: USBCMD=%08x USBSTS=%08x",
+            port0based, opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
 
     bool enabled = false;
     for (int i = 0; i < 1000; i++) {
@@ -539,6 +658,8 @@ bool RavynXHCIPort::resetAndEnumeratePort(UInt32 port0based)
         if (portsc & XHCI_PORTSC_PED) { enabled = true; break; }
         IOSleep(2);
     }
+    XHCI_Log("Port %u: checkpoint after enable-poll (enabled=%d): USBCMD=%08x USBSTS=%08x",
+            port0based, enabled, opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
     /* Clear change bits (RW1C), preserving PP and everything else. */
     portWrite32(port0based, XHCI_PORTSC, portsc & ~XHCI_PORTSC_PR);
 
@@ -580,6 +701,16 @@ bool RavynXHCIPort::enableSlot(UInt32 *outSlotId)
     return true;
 }
 
+/* Two-phase enumeration, per spec (and every real USB stack): a guessed
+ * default max packet size for EP0 based on link speed alone isn't reliable
+ * enough to safely send SET_ADDRESS on the wire (observed on real hardware:
+ * "Address Device failed cc=4", USB Transaction Error). Phase 1 issues
+ * Address Device with BSR (Block Set Address Request) set, which sets up
+ * the default control endpoint enough to run control transfers WITHOUT
+ * actually sending SET_ADDRESS, so we can safely GET_DESCRIPTOR(device, 8
+ * bytes) and learn the device's real bMaxPacketSize0. Phase 2 re-issues
+ * Address Device with BSR clear and the corrected max packet size, which
+ * is what actually assigns the address. */
 bool RavynXHCIPort::addressDevice(UInt32 slotId, UInt32 port0based, UInt32 routeString,
                                   UInt32 speed, UInt16 &maxPacket0)
 {
@@ -607,18 +738,44 @@ bool RavynXHCIPort::addressDevice(UInt32 slotId, UInt32 port0based, UInt32 route
 
     fDCBAA[slotId] = sr.deviceCtxMem->getPhysicalAddress();
 
-    /* Speed -> default max packet size for EP0 (USB2 spec table). */
+    /* Speed -> conservative default max packet size for EP0 (USB2 spec
+     * table), used only for the BSR probe transfer itself; the real value
+     * comes from the device's own device descriptor. */
     UInt16 defaultMaxPkt = 8;
     switch (speed) {
-        case 1: defaultMaxPkt = 8;   break; /* full speed, conservative default */
+        case 1: defaultMaxPkt = 8;   break; /* full speed */
         case 2: defaultMaxPkt = 8;   break; /* low speed */
         case 3: defaultMaxPkt = 64;  break; /* high speed */
         case 4: defaultMaxPkt = 512; break; /* super speed */
         default: defaultMaxPkt = 8;  break;
     }
-    maxPacket0 = defaultMaxPkt;
 
+    if (!sendAddressDeviceCommand(slotId, port0based, routeString, speed, defaultMaxPkt, true))
+        return false;
+
+    USBDeviceDescriptor devDesc8;
+    bzero(&devDesc8, sizeof(devDesc8));
+    USBSetupPacket getDevDesc8 = { 0x80, USB_REQ_GET_DESCRIPTOR,
+                                  (UInt16)(USB_DESC_DEVICE << 8), 0, 8 };
+    UInt16 realMaxPkt = defaultMaxPkt;
+    if (controlTransfer(slotId, getDevDesc8, &devDesc8, 8, true) && devDesc8.bMaxPacketSize0 > 0) {
+        realMaxPkt = (speed == 4) ? (UInt16)(1U << devDesc8.bMaxPacketSize0) /* SS encodes as 2^n */
+                                  : devDesc8.bMaxPacketSize0;
+    } else {
+        XHCI_Log("Port %u slot %u: BSR probe GET_DESCRIPTOR(8) failed, keeping default maxpkt=%u",
+                port0based, slotId, defaultMaxPkt);
+    }
+
+    maxPacket0 = realMaxPkt;
+    return sendAddressDeviceCommand(slotId, port0based, routeString, speed, realMaxPkt, false);
+}
+
+bool RavynXHCIPort::sendAddressDeviceCommand(UInt32 slotId, UInt32 port0based, UInt32 routeString,
+                                             UInt32 speed, UInt16 maxPkt, bool bsr)
+{
+    SlotResources &sr = fSlots[slotId];
     XHCIInputContext *ic = (XHCIInputContext *)sr.inputCtxMem->getBytesNoCopy();
+    bzero(ic, sizeof(*ic));
     ic->control.dropFlags = 0;
     ic->control.addFlags = (1U << 0) /* slot ctx */ | (1U << 1) /* EP0 ctx */;
 
@@ -628,17 +785,17 @@ bool RavynXHCIPort::addressDevice(UInt32 slotId, UInt32 port0based, UInt32 route
     ic->slot.dword3 = 0;
 
     ic->ep[0].dword0 = 0;
-    ic->ep[0].dword1 = (EP_TYPE_CONTROL << EP_CTX_TYPE_SHIFT) | ((UInt32)defaultMaxPkt << EP_CTX_MAXPKT_SHIFT);
+    ic->ep[0].dword1 = (EP_TYPE_CONTROL << EP_CTX_TYPE_SHIFT) | ((UInt32)maxPkt << EP_CTX_MAXPKT_SHIFT);
     ic->ep[0].trDequeuePtr = sr.ep0RingMem->getPhysicalAddress() | 1 /* DCS */;
     ic->ep[0].avgTrbLen_maxEsitLo = 8;
 
     UInt8 cc = 0;
     UInt32 slotOut = 0;
-    bool ok = doCommand(sr.inputCtxMem->getPhysicalAddress(), 0,
-                        TRB_SET_TYPE(TRB_TYPE_ADDRESS_DEVICE) | TRB_SET_SLOT(slotId),
-                        &cc, &slotOut, 1000);
+    UInt32 control = TRB_SET_TYPE(TRB_TYPE_ADDRESS_DEVICE) | TRB_SET_SLOT(slotId);
+    if (bsr) control |= TRB_ADDR_DEV_BSR;
+    bool ok = doCommand(sr.inputCtxMem->getPhysicalAddress(), 0, control, &cc, &slotOut, 1000);
     if (!ok || cc != TRB_CC_SUCCESS) {
-        XHCI_Log("Address Device failed slot=%u cc=%u", slotId, cc);
+        XHCI_Log("Address Device (bsr=%d) failed slot=%u cc=%u", bsr, slotId, cc);
         return false;
     }
     return true;

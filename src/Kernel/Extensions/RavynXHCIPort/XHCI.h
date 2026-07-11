@@ -161,6 +161,13 @@ enum {
 /* Data/status stage direction bit, control[16] */
 #define TRB_DIR_IN         (1U << 16)
 
+/* Address Device Command TRB, BSR (Block Set Address Request) bit, control[9].
+ * BSR=1 sets up the default control endpoint (so 8-byte GET_DESCRIPTOR probes
+ * work) without sending SET_ADDRESS on the wire; the real address assignment
+ * happens on a second Address Device command with BSR=0, once we know the
+ * device's actual bMaxPacketSize0. */
+#define TRB_ADDR_DEV_BSR   (1U << 9)
+
 /* Slot Context (first 32B of a 32B-context device context) */
 typedef struct {
     UInt32 dword0;   /* route string[19:0], speed[23:20], ctx entries[31:27] */
