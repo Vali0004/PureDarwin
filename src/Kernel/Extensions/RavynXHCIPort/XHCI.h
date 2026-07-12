@@ -366,6 +366,8 @@ typedef struct {
 #define USB_HUB_REQTYPE_SET_PORT_FEAT  0x23
 #define USB_HUB_REQTYPE_CLEAR_PORT_FEAT 0x23
 #define USB_HUB_REQTYPE_GET_PORT_STATUS 0xA3
+#define USB_HUB_REQTYPE_SET_HUB_DEPTH  0x20 /* host-to-device, class, device */
+#define USB_REQ_SET_HUB_DEPTH          12   /* SS-hub-only class request */
 
 #define USB_HUB_FEAT_PORT_CONNECTION   0
 #define USB_HUB_FEAT_PORT_RESET        4

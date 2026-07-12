@@ -362,10 +362,23 @@ shutdown_common(void)
 	init_log("[init] shutdown requested\n");
 	if (access("/etc/init/rc.shutdown", X_OK) == 0) {
 		run_wait(shutdown_argv);
+	} else {
+		init_log("[init] no executable /etc/init/rc.shutdown\n");
 	}
 
 	kill_everything();
 	sync();
+
+	/* Root is mounted read-write (ext4 supports rw now); remount it
+	 * read-only before the final unmount so an unclean power-off doesn't
+	 * leave the filesystem with in-flight metadata writes. Best-effort:
+	 * MNT_UPDATE|MNT_RDONLY is applied to the mountpoint generically by
+	 * the VFS mount(2) path regardless of what the filesystem's own
+	 * VFS_MOUNT callback does with vfs_isupdate(), so this works even
+	 * though ext4_mount()'s update path is a no-op stub. */
+	if (mount("ext4", "/", MNT_UPDATE | MNT_RDONLY, NULL) < 0) {
+		init_log("[init] remount root read-only failed\n");
+	}
 
 	init_log("[init] unmounting /dev\n");
 	unmount("/dev", 0);

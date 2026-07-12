@@ -115,6 +115,19 @@ private:
     UInt8                  fPortMajorRev[64];   /* 2, 3, or 0 if unknown */
     UInt8                  fPairedPort[64];     /* 0xFF if none */
 
+    /* Hotplug: true once a root port has an enumerated (or enumeration-
+     * attempted) device on it, so the background poll thread doesn't keep
+     * re-issuing Enable Slot/Address Device for the same connect event on
+     * every pass. Cleared when CCS drops so a later replug on that port is
+     * picked up again. Note: this only detects *new* connects; a device
+     * physically removed does not tear down its already-published nub
+     * (RavynXHCIMassStorageDisk/RavynXHCIKeyboard stay registered until a
+     * future reboot) - only reconnection/insertion is handled. */
+    bool                   fPortOccupied[64];
+    volatile bool          fHotplugRunning;
+    static void hotplugThread(void *arg, wait_result_t);
+    void hotplugLoop();
+
     /* DCBAA: array of 64-bit device-context pointers, index by slot ID (0 unused). */
     IOBufferMemoryDescriptor * fDCBAAMem;
     volatile UInt64           * fDCBAA;
@@ -288,6 +301,7 @@ private:
 
     /* Hub class control requests (recipient = other/port). */
     bool hubGetDescriptor(UInt32 slotId, bool superSpeed, void *buf, UInt16 len);
+    bool hubSetDepth(UInt32 slotId, UInt16 depth);
     bool hubSetPortFeature(UInt32 slotId, UInt8 port1based, UInt16 feature);
     bool hubClearPortFeature(UInt32 slotId, UInt8 port1based, UInt16 feature);
     bool hubGetPortStatus(UInt32 slotId, UInt8 port1based, UInt32 *outStatus);

@@ -69,10 +69,14 @@ set(_abi_flags
 # etc. in the search list so #include_next chains resolve to those, but
 # where in the list that is depends on the toolchain: real Apple clang's
 # resource-dir include is added right after our own -I dirs (so ours must
-# be a plain -I, ahead of it), while osxcross's clang puts its bundled
-# libc/stdint headers ahead of everything (so ours must be -idirafter, or
-# it shadows them and math.h/stdint.h contents go missing).
-if(CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING)
+# be a plain -I, ahead of it), while osxcross's from-source clang build
+# puts its bundled libc/stdint headers ahead of everything, even beyond an
+# explicit -idirafter (so ours must be -idirafter, or it shadows them and
+# math.h/stdint.h contents go missing). PUREDARWIN_NIX_TOOLCHAIN (set by
+# cmake/nix-toolchain.cmake) is a thin wrapper around vanilla nixpkgs
+# clang, which follows ordinary -idirafter semantics (always dead last) -
+# same as real Apple clang here, not osxcross's inverted ordering.
+if((CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING) OR PUREDARWIN_NIX_TOOLCHAIN)
     list(APPEND _abi_flags -I ${_libcxx}/include)
 else()
     list(APPEND _abi_flags -idirafter ${_libcxx}/include)
@@ -149,7 +153,7 @@ set(_uw_flags
     -D_LIBUNWIND_BUILDING_LIBUNWIND=1
 )
 # See the matching comment on _abi_flags above for why this is conditional.
-if(CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING)
+if((CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING) OR PUREDARWIN_NIX_TOOLCHAIN)
     list(APPEND _uw_flags -I ${_libcxx}/include)
 else()
     list(APPEND _uw_flags -idirafter ${_libcxx}/include)   # <__libunwind_config.h> et al pull libcxx macros

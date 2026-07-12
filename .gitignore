@@ -122,3 +122,6 @@ iOSInjectionProject/
 src/Kernel/Extensions/**/kmod_info.c
 CMakeFiles
 CMakeCache.txt
+
+# Nix files
+result

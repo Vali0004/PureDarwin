@@ -25,6 +25,7 @@
 
 #include <IOKit/IOLib.h>
 #include <IOKit/storage/IOMedia.h>
+#include <kern/thread.h>
 #include "RavynXHCIPort.h"
 #include "RavynXHCIMassStorageDisk.h"
 #include "RavynXHCIKeyboard.h"
@@ -358,16 +359,27 @@ bool RavynXHCIPort::start(IOService *provider)
     bzero(fKbd, sizeof(fKbd));
     bzero(fKbdNubs, sizeof(fKbdNubs));
     bzero(fSlots, sizeof(fSlots));
+    bzero(fPortOccupied, sizeof(fPortOccupied));
 
     scanPorts();
 
     XHCI_Log("start complete");
     registerService();
+
+    fHotplugRunning = true;
+    thread_t hpThread = THREAD_NULL;
+    if (kernel_thread_start((thread_continue_t)&RavynXHCIPort::hotplugThread, this, &hpThread) == KERN_SUCCESS) {
+        thread_deallocate(hpThread);
+    } else {
+        XHCI_Log("failed to start hotplug poll thread");
+        fHotplugRunning = false;
+    }
     return true;
 }
 
 void RavynXHCIPort::stop(IOService *provider)
 {
+    fHotplugRunning = false;
     super::stop(provider);
 }
 
@@ -812,6 +824,7 @@ void RavynXHCIPort::scanPorts()
             if (!(portsc & XHCI_PORTSC_CCS)) continue;
             seen[p] = true;
             anyNew = true;
+            fPortOccupied[p] = true;
             XHCI_Log("Port %u connected, portsc=%08x speed=%u", p, portsc, XHCI_PORTSC_SPEED(portsc));
             resetAndEnumeratePort(p);
         }
@@ -826,12 +839,52 @@ void RavynXHCIPort::scanPorts()
             if (!(portsc & XHCI_PORTSC_CCS)) continue;
             seen[p] = true;
             anyNew = true;
+            fPortOccupied[p] = true;
             XHCI_Log("Port %u connected, portsc=%08x speed=%u", p, portsc, XHCI_PORTSC_SPEED(portsc));
             resetAndEnumeratePort(p);
         }
 
         if (!anyNew && pass > 0) break;
         IOSleep(50);
+    }
+}
+
+/* Background hotplug poll: xHCI Port Status Change events normally arrive
+ * on the interrupter/event ring via an MSI interrupt, but this driver never
+ * registered one (everything - command completion, transfers, initial
+ * enumeration - is serviced by polling serviceEventRing() from a caller's
+ * thread). Without *something* re-checking CCS after boot, a device plugged
+ * in after start() completes is invisible forever. This thread is the
+ * minimal fix: periodically re-read every root port's CCS bit and run the
+ * normal enumeration path on any port that's newly connected and not
+ * already occupied. It does not handle removal (tearing down a nub whose
+ * device was unplugged) - only new connects/replugs. */
+void RavynXHCIPort::hotplugThread(void *arg, wait_result_t)
+{
+    RavynXHCIPort *self = (RavynXHCIPort *)arg;
+    self->hotplugLoop();
+    thread_terminate(current_thread());
+}
+
+void RavynXHCIPort::hotplugLoop()
+{
+    while (fHotplugRunning) {
+        for (UInt32 p = 0; p < fMaxPorts && p < 64; p++) {
+            UInt32 portsc = portRead32(p, XHCI_PORTSC);
+            bool connected = (portsc & XHCI_PORTSC_CCS) != 0;
+
+            if (!connected) {
+                fPortOccupied[p] = false;   /* allow a future replug on this port */
+                continue;
+            }
+            if (fPortOccupied[p]) continue;
+
+            fPortOccupied[p] = true;
+            XHCI_Log("hotplug: Port %u connected, portsc=%08x speed=%u",
+                    p, portsc, XHCI_PORTSC_SPEED(portsc));
+            resetAndEnumeratePort(p);
+        }
+        IOSleep(500);
     }
 }
 
@@ -1439,6 +1492,18 @@ bool RavynXHCIPort::hubGetDescriptor(UInt32 slotId, bool superSpeed, void *buf, 
     return controlTransfer(slotId, setup, buf, len, true);
 }
 
+/* USB 3.x SET_HUB_DEPTH (SS-hub-only class request, wValue = tier depth from
+ * the root hub, 0-based). Real SuperSpeed hub silicon has been observed to
+ * refuse to route any traffic - including Address Device for a downstream
+ * device - to its ports until this is sent, even at depth 0 (root-attached).
+ * Must run after SET_CONFIGURATION and before powering/enumerating ports. */
+bool RavynXHCIPort::hubSetDepth(UInt32 slotId, UInt16 depth)
+{
+    USBSetupPacket setup = { USB_HUB_REQTYPE_SET_HUB_DEPTH, USB_REQ_SET_HUB_DEPTH,
+        depth, 0, 0 };
+    return controlTransfer(slotId, setup, NULL, 0, false);
+}
+
 bool RavynXHCIPort::hubSetPortFeature(UInt32 slotId, UInt8 port1based, UInt16 feature)
 {
     USBSetupPacket setup = { USB_HUB_REQTYPE_SET_PORT_FEAT, 3 /* SET_FEATURE */,
@@ -1648,6 +1713,10 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
             return false;
         }
         bool superSpeedHub = (devDesc.bDeviceProtocol == USB_HUB_PROTO_SUPERSPEED);
+        if (superSpeedHub && !hubSetDepth(slotId, (UInt16)depth)) {
+            XHCI_Log("slot %u: SET_HUB_DEPTH(%d) failed", slotId, depth);
+            return false;
+        }
         UInt8 hubDescBuf[16];
         bzero(hubDescBuf, sizeof(hubDescBuf));
         if (!hubGetDescriptor(slotId, superSpeedHub, hubDescBuf, sizeof(hubDescBuf))) {
