@@ -84,11 +84,46 @@
         "type": "github"
       }
     },
+    "nixpkgs_4": {
+      "locked": {
+        "lastModified": 1764667669,
+        "narHash": "sha256-7WUCZfmqLAssbDqwg9cUDAXrSoXN79eEEq17qhTNM/Y=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "418468ac9527e799809c900eda37cbff999199b6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "iig-tools": "iig-tools",
         "kc-tools": "kc-tools",
-        "nixpkgs": "nixpkgs_3"
+        "nixpkgs": "nixpkgs_3",
+        "xnu-loader": "xnu-loader"
+      }
+    },
+    "xnu-loader": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_4"
+      },
+      "locked": {
+        "lastModified": 1783846961,
+        "narHash": "sha256-IZoPcgfyZaRQz9fMb3TfUMbUjy3+wF7rCsgIJOCq0ok=",
+        "owner": "Vali0004",
+        "repo": "xnu-loader",
+        "rev": "a90a5fbda1f0ad1fb0478b2b0099ac8d2c4cdc2f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Vali0004",
+        "repo": "xnu-loader",
+        "type": "github"
       }
     }
   },

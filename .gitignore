@@ -123,6 +123,13 @@ src/Kernel/Extensions/**/kmod_info.c
 CMakeFiles
 CMakeCache.txt
 
+# Filesystem
+*.img
+*.iso
+*.ext4
+*.hfs
+*.fd
+
 # Nix files
 result
 */output.txt
