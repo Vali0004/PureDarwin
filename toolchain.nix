@@ -89,7 +89,9 @@ let
             c++) find_name=clang++ ;;
             *) find_name="$1" ;;
           esac
-          if command -v "${target}-$find_name" >/dev/null 2>&1; then
+          if [ -x "$BINDIR/${target}-$find_name" ]; then
+            echo "$BINDIR/${target}-$find_name"
+          elif command -v "${target}-$find_name" >/dev/null 2>&1; then
             command -v "${target}-$find_name"
           else
             command -v "$1"

@@ -1,6 +1,40 @@
 {
   "nodes": {
+    "iig-tools": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1783715284,
+        "narHash": "sha256-0XAqC6ic1yL+sB1tEDyp1CPt4Vm0SdpcI0sTJ7cph5g=",
+        "owner": "Vali0004",
+        "repo": "iig-tools",
+        "rev": "50dc519a7f8581147ccab24349d03e2350989f65",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Vali0004",
+        "repo": "iig-tools",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
+      "locked": {
+        "lastModified": 1783522502,
+        "narHash": "sha256-iffAls3iaNTyJC2faYcUXSI+Gp02cDjYl+MygxKl2GI=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "0bb7ec54c8483066ec9d7720e780a5caa71f8612",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
       "locked": {
         "lastModified": 1783703440,
         "narHash": "sha256-O3/YajjWo001VUIgD8BwaRdSNLUFe7nZ1qV5TwhRBcw=",
@@ -18,7 +52,8 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "iig-tools": "iig-tools",
+        "nixpkgs": "nixpkgs_2"
       }
     }
   },

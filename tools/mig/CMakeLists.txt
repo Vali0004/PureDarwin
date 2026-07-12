@@ -43,6 +43,80 @@ else()
     # compiler is on PATH instead - correct on any Linux host regardless
     # of which cross toolchain (osxcross or this one) is otherwise in use.
     find_program(MIGCOM_NATIVE_CC NAMES cc gcc clang REQUIRED)
+    set(_migcom_native_cflags
+        -std=gnu89
+        -D__private_extern__=
+        -D__LITTLE_ENDIAN__
+    )
+
+    # Stage just the SDK's mach/ header subtree into an isolated shim dir
+    # rather than adding the whole SDK usr/include to the search path.
+    # mig's sources only need mach-specific types (mach/boolean.h,
+    # mach/message.h, ...) that glibc simply doesn't have; the SDK's
+    # errno.h/stdio.h/string.h etc use __asm("_fputs")-style Mach-O
+    # symbol-rename annotations that poison this native ELF build if
+    # they're reachable at all - even as -idirafter (last-resort) entries,
+    # they won races against the native-clang wrapper's own injected
+    # glibc -idirafter for reasons not fully tracked down. A shim
+    # directory containing only mach/ has no errno.h/stdio.h/string.h to
+    # ever collide with, sidestepping the ordering fight entirely.
+    # mach/i386/vm_types.h in turn wants i386/_types.h (a sibling top-level
+    # dir in the SDK, not under mach/ itself) - stage that too.
+    set(_mach_shim "${CMAKE_CURRENT_BINARY_DIR}/mach_shim")
+    add_custom_command(OUTPUT "${_mach_shim}/mach/boolean.h"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/mach" "${_mach_shim}/mach"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/i386" "${_mach_shim}/i386"
+        # i386/_types.h unconditionally (re)defines __int64_t/__uint64_t/
+        # __mbstate_t with no include guards of its own - real, low-level
+        # ABI typedefs that glibc's bits/types.h (already active via the
+        # forced sys/types.h include below) ALSO defines, spelled
+        # differently (long vs long long; both are 64-bit, but C treats
+        # them as distinct types, so both definitions active at once is a
+        # hard conflict, not a missing-file problem). Since glibc's
+        # versions are already in scope by the time this header is ever
+        # reached, just strip Apple's redundant redefinitions from the
+        # staged copy rather than the original SDK file.
+        COMMAND sed -i
+                -e "/typedef long long *__int64_t;/d"
+                -e "/typedef unsigned long long *__uint64_t;/d"
+                -e "/^typedef union {/,/} __mbstate_t;/d"
+                "${_mach_shim}/i386/_types.h"
+        # Only the underscore-prefixed sys/*.h (type-only, glibc has none
+        # of these - no collision risk) and sys/_types/ subdirectory, NOT
+        # the whole sys/ tree: real (non-underscore) sys/*.h files like
+        # sys/select.h, sys/socket.h duplicate territory glibc's own
+        # sys/types.h transitively #include <sys/select.h>s into, and
+        # Apple's copies need sys/cdefs.h machinery that can't coexist
+        # with glibc's declarations (see below).
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_mach_shim}/sys"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/sys/_types.h"
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/sys/_endian.h"
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/sys/appleapiopts.h"
+                "${_mach_shim}/sys/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/sys/_types" "${_mach_shim}/sys/_types"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/sys/_pthread" "${_mach_shim}/sys/_pthread"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/machine" "${_mach_shim}/machine"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/architecture" "${_mach_shim}/architecture"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/_types" "${_mach_shim}/_types"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/libkern" "${_mach_shim}/libkern"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/Availability.h"
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/AvailabilityInternal.h"
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/AvailabilityVersions.h"
+                "${PUREDARWIN_MACOSX_SDK}/usr/include/AvailabilityMacros.h"
+                "${_mach_shim}/"
+        COMMENT "Staging mach/ headers for native migcom build"
+        VERBATIM
+    )
 
     set(_migcom_objs "")
     foreach(_src ${MIGCOM_SRCS})
@@ -59,22 +133,23 @@ else()
             COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/migcom_native"
             # mig's own sources #include <mach/boolean.h> etc, and rely on
             # u_int/u_short/etc BSD typedefs normally pulled in
-            # transitively - force sys/types.h so those are always
-            # defined regardless of header include order. Point at the
-            # SDK's bundled copies (same ones real osxcross/macOS builds
-            # resolve these from) rather than xnu's raw osfmk/bsd source
-            # trees: those have their own header-generation steps (e.g.
-            # bsd/sys/cdefs.h wants a build-generated
-            # sys/_symbol_aliasing.h) that create a chicken-and-egg
-            # ordering problem for a tool needed early in that same
-            # pipeline. The SDK's headers are pre-generated and self-
-            # contained, sidestepping that entirely.
-            COMMAND "${MIGCOM_NATIVE_CC}" -DMIG_VERSION=\"\"
+            # transitively - force sys/types.h (real glibc one; the mach
+            # shim below contains no sys/types.h to conflict) so those are
+            # always defined regardless of header include order. Also force
+            # glibc's __mbstate_t (bits/types/__mbstate_t.h, guarded by
+            # ____mbstate_t_defined) ahead of time: unlike __int64_t/
+            # __uint64_t (no reusable per-typedef guard in glibc, so the
+            # sed below just deletes Apple's redundant copies), sys/types.h
+            # alone doesn't pull this one in, and i386/_types.h's own
+            # __mbstate_t definition was stripped below too (same conflict
+            # class), so something has to define it before mach headers
+            # reference it.
+            COMMAND "${MIGCOM_NATIVE_CC}" ${_migcom_native_cflags} -DMIG_VERSION=\"\"
                     -I "${CMAKE_CURRENT_SOURCE_DIR}" -I "${CMAKE_CURRENT_BINARY_DIR}"
-                    -I "${PUREDARWIN_MACOSX_SDK}/usr/include"
-                    -include sys/types.h
+                    -I "${_mach_shim}"
+                    -include sys/types.h -include bits/types/__mbstate_t.h
                     -c "${_src_abs}" -o "${_obj}"
-            DEPENDS "${_src_abs}"
+            DEPENDS "${_src_abs}" "${_mach_shim}/mach/boolean.h"
             COMMENT "Building native migcom: ${_name}.c"
             VERBATIM
         )

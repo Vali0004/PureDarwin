@@ -18,7 +18,9 @@ function(add_darwin_executable name)
 
     add_executable(${name})
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
-    if(CMAKE_HOST_APPLE)
+    if(PUREDARWIN_NIX_TOOLCHAIN)
+        target_link_options(${name} PRIVATE -fuse-ld=lld)
+    elseif(CMAKE_HOST_APPLE)
         # PD own ld64 (host_ld) is built without TAPI support, so it cannot
         # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd), fall
         # back to the real Apple linker via xcrun, which handles them fine.
@@ -78,7 +80,9 @@ function(add_darwin_shared_library name)
         add_library(${name} SHARED)
     endif()
 
-    if(CMAKE_HOST_APPLE)
+    if(PUREDARWIN_NIX_TOOLCHAIN)
+        target_link_options(${name} PRIVATE -fuse-ld=lld)
+    elseif(CMAKE_HOST_APPLE)
         # PD own ld64 (host_ld) is built without TAPI support, so it cannot
         # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd), fall
         # back to the real Apple linker via xcrun, which handles them fine.

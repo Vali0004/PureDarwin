@@ -89,7 +89,10 @@ fi
 
 if [ "$UNAME_S" = "Linux" ]; then
 	C=${MIGCC}
-	M=`"${xcrunPath}" -sdk "$sdkRoot" -find migcom`
+	M=${MIGCOM-}
+	if [ -z "$M" ]; then
+		M=`"${xcrunPath}" -sdk "$sdkRoot" -find migcom`
+	fi
 else
 	C=${MIGCC}
 	M=${MIGCOM-${migcomPath}}
@@ -187,6 +190,7 @@ do
     fi
     rm -f "${temp}.c" "${temp}.d"
     (echo '#line 1 '\"${file}\" ; cat "${file}" ) > "${temp}.c"
+    echo "DEBUG C=[$C] M=[$M] MIGCC=[$MIGCC] xcrunPath=[$xcrunPath] sdkRoot=[$sdkRoot]" >&2
     "$C" -E -arch ${arch} "${target[@]}" "${cppflags[@]}" -I "${sourcedir}" "${iSysRootParm[@]}" "${temp}.c" | "$M" "${migflags[@]}"
     if [ $? -ne 0 ]
     then
@@ -232,6 +236,5 @@ do
     rm -f "${temp}.c"
 done
 
-/bin/rmdir "${WORKTMP}"
+rmdir "${WORKTMP}"
 exit 0
-

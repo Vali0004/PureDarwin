@@ -24,6 +24,12 @@
 
 #define _FORTIFY_SOURCE 0
 
+#ifdef PD_LD64LLD_WEAK_DYLD_FALLBACKS
+#define PD_DYLD_FALLBACK_ATTR __attribute__((weak))
+#else
+#define PD_DYLD_FALLBACK_ATTR
+#endif
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -259,12 +265,14 @@ struct tm* localtime(const time_t* t)
 }
 
 // malloc calls exit(-1) in case of errors...
+PD_DYLD_FALLBACK_ATTR
 void exit(int x)
 {
 	_ZN4dyld4haltEPKc("exit()");
 }
 
 // static initializers make calls to __cxa_atexit
+PD_DYLD_FALLBACK_ATTR
 void __cxa_atexit()
 {
 	// do nothing, dyld never terminates
@@ -364,8 +372,8 @@ char* mach_error_type(mach_error_t err)
 
 // _pthread_reap_thread calls fprintf(stderr).
 // We map fprint to _simple_vdprintf and ignore FILE* stream, so ok for it to be NULL
-FILE* __stderrp = NULL;
-FILE* __stdoutp = NULL;
+PD_DYLD_FALLBACK_ATTR FILE* __stderrp = NULL;
+PD_DYLD_FALLBACK_ATTR FILE* __stdoutp = NULL;
 
 // work with c++abi.a
 void (*__cxa_terminate_handler)(void) = _ZSt9terminatev;
@@ -392,6 +400,7 @@ void _ZNKSt3__120__vector_base_commonILb1EE20__throw_length_errorEv()
 
 // libc.a sometimes missing memset
 #undef memset
+PD_DYLD_FALLBACK_ATTR
 void* memset(void* b, int c, size_t len)
 {
 	uint8_t* p = (uint8_t*)b;
@@ -1170,6 +1179,5 @@ void uuid_unparse_upper(const uuid_t uu, uuid_string_t out)
              uu[8], uu[9],
              uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
 }
-
 
 

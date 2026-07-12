@@ -94,16 +94,33 @@ add_dependencies(libSystem_B_stub
     libsystem_kernel_static libplatform_static pthread_static
     libc_static libc_internal_static libmalloc_static
     corecrypto_static CrashReporterClient)
-target_link_libraries(libSystem_B_stub PRIVATE
-    $<TARGET_FILE:libsystem_kernel_static>
-    $<TARGET_FILE:libplatform_static>
-    $<TARGET_FILE:pthread_static>
-    $<TARGET_FILE:libc_static>
-    $<TARGET_FILE:libc_internal_static>
-    $<TARGET_FILE:libmalloc_static>
-    ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/syscalls.a
-    $<TARGET_FILE:corecrypto_static>
-    $<TARGET_FILE:CrashReporterClient>)
+if(PUREDARWIN_NIX_TOOLCHAIN)
+    # ld64.lld resolves archive roots before its duplicate-dead-strip pass can
+    # discard libsystem_kernel's _libc_funcptr dispatch wrappers. Let the real
+    # pthread/platform/libc archives satisfy their public symbols first, then
+    # pull libsystem_kernel for Mach/syscall pieces.
+    target_link_libraries(libSystem_B_stub PRIVATE
+        $<TARGET_FILE:libplatform_static>
+        $<TARGET_FILE:pthread_static>
+        $<TARGET_FILE:libc_static>
+        $<TARGET_FILE:libc_internal_static>
+        $<TARGET_FILE:libmalloc_static>
+        $<TARGET_FILE:libsystem_kernel_static>
+        ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/syscalls.a
+        $<TARGET_FILE:corecrypto_static>
+        $<TARGET_FILE:CrashReporterClient>)
+else()
+    target_link_libraries(libSystem_B_stub PRIVATE
+        $<TARGET_FILE:libsystem_kernel_static>
+        $<TARGET_FILE:libplatform_static>
+        $<TARGET_FILE:pthread_static>
+        $<TARGET_FILE:libc_static>
+        $<TARGET_FILE:libc_internal_static>
+        $<TARGET_FILE:libmalloc_static>
+        ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/syscalls.a
+        $<TARGET_FILE:corecrypto_static>
+        $<TARGET_FILE:CrashReporterClient>)
+endif()
 if(TARGET libcxxabi_static)
     add_dependencies(libSystem_B_stub libcxxabi_static_build)
     target_link_libraries(libSystem_B_stub PRIVATE $<TARGET_FILE:libcxxabi_static>)
@@ -125,6 +142,12 @@ target_link_options(libSystem_B_stub PRIVATE
     # eager -- no lazy stubs, no dyld_stub_binder -- exactly as libdyld.dylib does.
     -Wl,-fixup_chains
     -Wl,-exported_symbols_list,${LIBSYSTEM_EXPORTS})
+if(PUREDARWIN_NIX_TOOLCHAIN)
+    # ld64.lld diagnoses duplicate archive members before ordinary dead_strip
+    # can discard them; Apple's ld64 accepts this link. Keep the compatibility
+    # switch scoped to the Nix/LLVM linker path.
+    target_link_options(libSystem_B_stub PRIVATE -Wl,--dead-strip-duplicates)
+endif()
 set_property(TARGET libSystem_B_stub APPEND PROPERTY LINK_DEPENDS ${LIBSYSTEM_EXPORTS})
 
 # Reexport libdyld (/usr/lib/system/libdyld.dylib) so that any binary depending

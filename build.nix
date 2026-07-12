@@ -21,6 +21,12 @@
 , gnused
 , clang
 , libuuid
+, ruby
+, iig
+, pname ? "puredarwin-nix-toolchain"
+, buildTargets ? [ "helloapp" "launchd" ]
+, installUserland ? true
+, installKernel ? false
 }:
 
 let
@@ -35,7 +41,7 @@ let
   };
 in
 stdenv.mkDerivation {
-  pname = "puredarwin-nix-toolchain-smoke";
+  inherit pname;
   version = "0.1";
 
   src = ./.;
@@ -47,6 +53,7 @@ stdenv.mkDerivation {
   # build libSystem's MIG-generated IPC stubs, which launchd links against)
   # invokes CMake's plain "yacc"/"lex" find_program targets under the hood.
   # perl: src/Libraries/libSystem/libc's generate_features.pl build step.
+  # ruby: src/Libraries/dyld's VersionMap.h / for_dyld_priv.inc generator.
   # ed: libc's headers.sh strips private-header content via classic `ed`.
   # unifdef: same script also runs a HOST unifdef over headers - the one
   # PureDarwin builds itself (tools/unifdef) is cross-compiled Mach-O, so
@@ -63,9 +70,10 @@ stdenv.mkDerivation {
   # tools - they compile and RUN on the build machine during the build
   # (a real Canadian-cross case, unlike everything else here which is
   # cross-compiled Mach-O), and their Makefiles invoke bare "clang".
+  # iig: IOKit Interface Generator, used by DriverKit/IOKit targets.
   nativeBuildInputs = [
     cmake ninja darwinCrossToolchain bison flex perl bash ed unifdef tcsh
-    gnustep-base pax coreutils findutils gawk gnused clang
+    gnustep-base pax coreutils findutils gawk gnused clang ruby iig
   ];
 
   # tools/dtrace_ctf's ctfconvert is a HOST tool (runs on the build machine,
@@ -162,16 +170,33 @@ EOF
     # only the directories need to be reachable, not built up-front here.
     mkdir -p .nix-stubs
     ln -sf "$PWD/tools/mig/mig.sh" .nix-stubs/mig
+    ln -sf "$PWD/build-nix/tools/mig/migcom_native/migcom.native" .nix-stubs/migcom
+    cat > .nix-stubs/libtool <<'EOF'
+#!/bin/sh
+if [ "$1" = "-static" ] && [ "$2" = "-o" ]; then
+  out="$3"
+  shift 3
+  exec x86_64-apple-darwin20.4-ar rcs "$out" "$@"
+fi
+echo "unsupported libtool invocation: $*" >&2
+exit 1
+EOF
+    chmod +x .nix-stubs/libtool
     export PATH="$PWD/.nix-stubs:$PWD/build-nix/tools/mig:$PWD/build-nix/tools/cctools/misc:$PWD/build-nix/tools/unifdef:$PWD/build-nix/tools/dtrace_ctf/tools:$PATH"
-    ninja -C build-nix helloapp launchd
+    ninja -C build-nix ${lib.escapeShellArgs buildTargets}
     runHook postBuild
   '';
 
   installPhase = ''
     runHook preInstall
+  '' + lib.optionalString installUserland ''
     mkdir -p $out/bin
     cp build-nix/src/Userspace/helloapp/helloapp $out/bin/
     cp build-nix/src/Userspace/launchd/launchd $out/bin/
+  '' + lib.optionalString installKernel ''
+    mkdir -p $out
+    cp -R build-nix/src/Kernel/xnu/xnu/. $out/
+  '' + ''
     runHook postInstall
   '';
 

@@ -1,6 +1,6 @@
 add_library(host_commoncrypto_static STATIC)
 target_include_directories(host_commoncrypto_static PUBLIC include)
-target_include_directories(host_commoncrypto_static PRIVATE include/Private libcn lib)
+target_include_directories(host_commoncrypto_static PRIVATE include/Private include/Private/CommonCrypto libcn lib)
 
 add_library(host_commoncrypto_headers INTERFACE)
 target_include_directories(host_commoncrypto_headers INTERFACE include)

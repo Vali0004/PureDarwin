@@ -9,9 +9,15 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+#ifdef PD_LD64LLD_WEAK_DYLD_FALLBACKS
+#define PD_DYLD_FALLBACK_ATTR __attribute__((weak))
+#else
+#define PD_DYLD_FALLBACK_ATTR
+#endif
+
 int NXArgc = 0;
 const char **NXArgv = 0;
-const char **environ = 0;
+PD_DYLD_FALLBACK_ATTR const char **environ = 0;
 const char *__progname = 0;
 
 /* AMFI: grant every dyld capability. */

@@ -10,6 +10,12 @@ else()
     set(XNU_MACHINE_CONFIGS "")
 endif()
 
+if(PUREDARWIN_NIX_TOOLCHAIN)
+    set(XNU_LD_PATH "$ENV{NIX_DARWIN_TOOLCHAIN_DIR}/x86_64-apple-darwin20.4-ld")
+else()
+    set(XNU_LD_PATH "$<TARGET_FILE:host_ld>")
+endif()
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install)
 externalproject_add(xnu_headers.extproj
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_build
@@ -35,6 +41,7 @@ externalproject_add(xnu_headers.extproj
             -D DSYMUTIL_PATH=${dsymutil_path}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/preprocess_files.cmake
     COMMAND
+        ${CMAKE_COMMAND} -E env --unset=CC --unset=CXX
         make -C <SOURCE_DIR> installhdrs ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
             BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
@@ -87,7 +94,7 @@ externalproject_add(xnu
             -D CTFMERGE_PATH=$<TARGET_FILE:host_ctfmerge>
             -D CTFINSERT_PATH=$<TARGET_FILE:host_ctf_insert>
             -D AVAILABILITY_PL_PATH=$<TARGET_FILE:availability.pl>
-            -D LD_PATH=$<TARGET_FILE:host_ld>
+            -D LD_PATH=${XNU_LD_PATH}
             -D MIG_PATH=${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh
             -D MIGCOM_PATH=$<TARGET_FILE:migcom>
             -D STRIP_PATH=$<TARGET_FILE:host_strip>
@@ -102,6 +109,7 @@ externalproject_add(xnu
             -D PTHREAD_HEADER_PATH=$<TARGET_PROPERTY:pthread_common_headers,INTERFACE_INCLUDE_DIRECTORIES>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/preprocess_files.cmake
     COMMAND
+        ${CMAKE_COMMAND} -E env --unset=CC --unset=CXX
         make -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
             BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
@@ -112,11 +120,15 @@ externalproject_add(xnu
     USES_TERMINAL_CONFIGURE TRUE
     USES_TERMINAL_BUILD TRUE
 )
-add_dependencies(xnu
+set(_xnu_dependencies
     xnu_headers libfirehose_kernel host_codesign_allocate host_ctfconvert host_ctfmerge
     migcom host_strip host_lipo host_nm unifdef host_nmedit availability.pl host_ld
     dyld_availability_headers
 )
+if(PUREDARWIN_NIX_TOOLCHAIN)
+    list(REMOVE_ITEM _xnu_dependencies host_ld)
+endif()
+add_dependencies(xnu ${_xnu_dependencies})
 
 install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xnu/System/Library/Frameworks/Kernel.framework/Versions/A/Resources DESTINATION System/Library/Frameworks/Kernel.framework/Versions/A COMPONENT BaseSystem)
 install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xnu/System/Library/Frameworks/Kernel.framework/Versions/A/Headers DESTINATION System/Library/Frameworks/Kernel.framework/Versions/A COMPONENT DeveloperTools)
