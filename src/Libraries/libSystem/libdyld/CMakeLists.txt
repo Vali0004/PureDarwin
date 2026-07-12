@@ -78,7 +78,24 @@ target_link_options(libdyld PRIVATE
     -compatibility_version 1.0.0
     -current_version 1292.100.5
     -Wl,-dead_strip
-    -lSystem
     -Wl,-fixup_chains)
+if(CMAKE_HOST_APPLE)
+    set(_libdyld_apple_ld_stub_dir ${CMAKE_CURRENT_BINARY_DIR}/apple-ld-stubs)
+    set(_libdyld_apple_ld_pthread_stub ${_libdyld_apple_ld_stub_dir}/libsystem_pthread.tbd)
+    add_custom_command(
+        OUTPUT ${_libdyld_apple_ld_pthread_stub}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_libdyld_apple_ld_stub_dir}
+        COMMAND ${CMAKE_COMMAND}
+            -D OUTPUT=${_libdyld_apple_ld_pthread_stub}
+            -P ${CMAKE_SOURCE_DIR}/cmake/write_libsystem_pthread_tbd.cmake
+        VERBATIM)
+    add_custom_target(libdyld_apple_ld_stubs DEPENDS ${_libdyld_apple_ld_pthread_stub})
+    add_dependencies(libdyld libdyld_apple_ld_stubs)
+    target_link_options(libdyld PRIVATE
+        -Wl,-L,${_libdyld_apple_ld_stub_dir}
+        -Wl,-framework,System)
+else()
+    target_link_options(libdyld PRIVATE -lSystem)
+endif()
 
 install(TARGETS libdyld LIBRARY DESTINATION usr/lib/system COMPONENT BaseSystem)
