@@ -91,26 +91,14 @@ stdenv.mkDerivation {
     mkdir -p sdk
     tar xf ${sdkTarball} -C sdk
     export DARWIN_SDK_ROOT="$PWD/sdk/MacOSX11.3.sdk"
-    # xnu's own Makefile hardcodes /bin/pwd (doesn't exist in the sandbox -
-    # only /bin/sh is provided); a real Unix filesystem always has it, so
-    # this is XNU's assumption, not something worth carrying upstream.
+
     sed -i 's#/bin/pwd#pwd#g' src/Kernel/xnu/Makefile
-    # xnu/cmake/MakeInc.cmd.in hardcodes XCRUN = /usr/local/osxcross/bin/xcrun
-    # (the non-Darwin-host branch) and routes essentially every build tool
-    # (CC, MIG, STRIP, NM, UNIFDEF, DSYMUTIL, ...) through
-    # `$(XCRUN) -sdk $(SDKROOT) -find <tool>` - our own xcrun shim already
-    # implements that exact `-find` dispatch, so just repoint it.
+
     sed -i "s#/usr/local/osxcross/bin/xcrun#${darwinCrossToolchain}/bin/xcrun#g" \
       src/Kernel/xnu/cmake/MakeInc.cmd.in tools/mig/mig.sh
-    # Same file also hardcodes a whole slate of /bin/*, /usr/bin/* tool
-    # paths (cp, mv, mkdir, tr, sed, awk, find, xargs, pax, plutil, ...) -
-    # standard coreutils/findutils/gawk/gnused/pax names, just not at
-    # those literal absolute paths in the sandbox; strip the prefix so
-    # plain PATH lookup resolves them (all present via nativeBuildInputs).
     sed -i -E 's#(^|[[:space:]=])/(usr/)?bin/([A-Za-z_]+)#\1\3#g' \
       src/Kernel/xnu/cmake/MakeInc.cmd.in
-    # sw_vers is a real macOS-only tool with no Linux equivalent; xnu only
-    # wants a version string (HOST_OS_VERSION) out of it, so stub it.
+
     mkdir -p .nix-stubs
     cat > .nix-stubs/sw_vers <<'EOF'
 #!/bin/sh
@@ -119,30 +107,10 @@ EOF
     chmod +x .nix-stubs/sw_vers
     export PATH="$PWD/.nix-stubs:$PATH"
     sed -i '1s#.*#\#!'"$(command -v bash)"'#' src/Kernel/xnu/cmake/make_symbol_aliasing.sh.in
-    # src/Libraries/libcxxabi's CMakeLists doesn't read DARWIN_SDK_ROOT -
-    # it derives its own -isysroot from $ENV{OSXCROSS_SDK} or, failing
-    # that, this cache variable (which top-level CMakeLists.txt otherwise
-    # defaults to the real host's /usr/local/osxcross/SDK path).
-    #
-    # patchShebangs: many build scripts across the tree (libc's headers.sh,
-    # xnu's san/tools/validate_blacklist.sh, AvailabilityVersions/
-    # availability.pl, ...) have a literal #!/bin/bash or #!/usr/bin/perl
-    # shebang, none of which exist in the sandbox (nixpkgs bash/perl live
-    # in the store); rewrite them all up front rather than one at a time.
     patchShebangs src tools
-    # tools/cctools/ld64 (a target we don't build here, but CMake still
-    # configures the whole tree) find_package(OpenSSL REQUIRED)s a real
-    # libcrypto; osxcross satisfies this from a bundled macports package,
-    # not the bare Apple SDK. We don't build or link that target in this
-    # smoke test, so any OpenSSL that lets configure succeed is fine here.
-    # CMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY (set for the SDK-restricted
-    # search everything else needs) means even an OPENSSL_ROOT_DIR hint
-    # still gets filtered out by find_library, so bypass the search
-    # entirely with the exact final cache variables FindOpenSSL checks.
-    # Same story for ZLIB (tools/dtrace_ctf): the SDK has zlib.h/zconf.h but
-    # only versioned/bare .tbd stubs for the library, and CMake's FindZLIB
-    # find_library() doesn't treat .tbd as a valid suffix by default - point
-    # it straight at the SDK's stub rather than teaching CMake a new suffix.
+    # patchShebangs does not rewrite this csh script, but /bin/csh is also
+    # absent in the Nix sandbox.
+    sed -i '1c#!${tcsh}/bin/tcsh -f' src/Kernel/xnu/SETUP/config/doconf
     cmake -S . -B build-nix -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE=cmake/nix-toolchain.cmake \
       -DCMAKE_BUILD_TYPE=Debug \
@@ -160,14 +128,6 @@ EOF
 
   buildPhase = ''
     runHook preBuild
-    # MakeInc.cmd.in's xcrun-based fallback (see above) resolves MIG/
-    # MIGCOM/LIBTOOL/UNIFDEF/etc by bare name via PATH, but they're the
-    # project's own build products (or, for mig, a checked-in wrapper
-    # script named mig.sh, not "mig") living under source/build-nix
-    # subdirectories, never installed anywhere PATH-visible. ninja builds
-    # them (migcom etc.) before xnu_headers.extproj's custom command
-    # actually runs, since that's a real dependency in the CMake graph -
-    # only the directories need to be reachable, not built up-front here.
     mkdir -p .nix-stubs
     ln -sf "$PWD/tools/mig/mig.sh" .nix-stubs/mig
     ln -sf "$PWD/build-nix/tools/mig/migcom_native/migcom.native" .nix-stubs/migcom

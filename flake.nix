@@ -1,18 +1,4 @@
 {
-  description = ''
-    PureDarwin's x86_64-apple-darwin cross toolchain (toolchain.nix) built
-    entirely from nixpkgs' own unwrapped LLVM/clang/lld - no osxcross
-    build.sh required - plus Nix build targets proving it compiles and
-    links real PureDarwin targets.
-
-    packages.darwin-cross-toolchain: the toolchain itself, a drop-in
-    alternative to /usr/local/osxcross/bin (see cmake/nix-toolchain.cmake).
-
-    packages.userland: builds helloapp + launchd through that toolchain.
-    packages.kernel: builds the XNU install target.
-    packages.default: builds both userland and kernel targets.
-  '';
-
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     iig-tools.url = "github:Vali0004/iig-tools";
@@ -21,10 +7,6 @@
   outputs = { self, nixpkgs, iig-tools }:
     let
       system = "x86_64-linux";
-      # requireFile (used by build.nix for the proprietary Apple SDK
-      # tarball) is marked unfree by nixpkgs; this is a locally-registered,
-      # non-redistributed input, not something fetched from a remote
-      # mirror, so allow it.
       pkgs = import nixpkgs {
         inherit system;
         config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "MacOSX11.3.sdk.tar.xz";
@@ -37,6 +19,7 @@
       } // args);
       userlandBuild = mkPureDarwinBuild {
         pname = "puredarwin-userland";
+        # Busybox requires some... unsupported ld64.lld flags
         buildTargets = [ "helloapp" "launchd" ];
         installUserland = true;
         installKernel = false;

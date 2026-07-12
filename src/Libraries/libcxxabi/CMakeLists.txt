@@ -156,7 +156,7 @@ set(_uw_flags
 if((CMAKE_HOST_APPLE AND NOT CMAKE_CROSSCOMPILING) OR PUREDARWIN_NIX_TOOLCHAIN)
     list(APPEND _uw_flags -I ${_libcxx}/include)
 else()
-    list(APPEND _uw_flags -idirafter ${_libcxx}/include)   # <__libunwind_config.h> et al pull libcxx macros
+    list(APPEND _uw_flags -idirafter ${_libcxx}/include)
 endif()
 
 # x86_64 Itanium/DWARF unwinder subset. Excluded: Unwind-sjlj.c (SjLj EH),

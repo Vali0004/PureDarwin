@@ -49,7 +49,9 @@ let
   '';
 
   ldWrapper = writeShellScriptBin "${target}-ld" ''
-    exec ${lld}/bin/ld64.lld "$@"
+    exec ${lld}/bin/ld64.lld \
+      -platform_version 11.0 11.3 \
+      "$@"
   '';
 
   # osxcross also exposes a bare (non-triple-prefixed) "dsymutil" on PATH,
