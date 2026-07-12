@@ -61,32 +61,6 @@
         kc = kcBuild;
         xnuLoader = xnu-loader.packages.${system}.default;
       };
-      # `nix run .` - boot the built image in QEMU. The store image and OVMF
-      # vars are read-only, so both get a writable working copy in $PWD on
-      # first run (persisted across runs; delete them for a fresh boot).
-      # Usage: nix run . [-- image.img [extra qemu args...]]
-      qemuRun = pkgs.writeShellScriptBin "puredarwin-qemu" ''
-        set -euo pipefail
-        IMG="''${1:-puredarwin-run.img}"
-        if [ $# -gt 0 ]; then shift; fi
-        if [ ! -f "$IMG" ]; then
-          echo "[*] seeding writable image $IMG from ${imageBuild}/puredarwin.img"
-          cp ${imageBuild}/puredarwin.img "$IMG"
-          chmod u+w "$IMG"
-        fi
-        VARS="''${PUREDARWIN_OVMF_VARS:-OVMF_VARS.fd}"
-        if [ ! -f "$VARS" ]; then
-          cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd "$VARS"
-          chmod u+w "$VARS"
-        fi
-        exec ${pkgs.qemu}/bin/qemu-system-x86_64 \
-          -M q35 -m 4096 -cpu IvyBridge,vendor=GenuineIntel \
-          -drive if=pflash,format=raw,unit=0,readonly=on,file=${pkgs.OVMF.fd}/FV/OVMF_CODE.fd \
-          -drive if=pflash,format=raw,unit=1,file="$VARS" \
-          -drive id=root,format=raw,file="$IMG" \
-          -serial stdio -no-reboot -no-shutdown \
-          "$@"
-      '';
     in {
       packages.${system} = {
         darwin-cross-toolchain = darwinCrossToolchain;
@@ -95,16 +69,7 @@
         kernel = kernelBuild;
         kc = kcBuild;
         image = imageBuild;
-        qemu = qemuRun;
         default = fullBuild;
-      };
-
-      apps.${system} = rec {
-        qemu = {
-          type = "app";
-          program = "${qemuRun}/bin/puredarwin-qemu";
-        };
-        default = qemu;
       };
 
       devShells.${system} = rec {

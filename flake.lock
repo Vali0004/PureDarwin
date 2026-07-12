@@ -23,11 +23,11 @@
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1783846934,
-        "narHash": "sha256-WYFyWNubM7KGGVhmfDN+8rY+8q6lIW5ryQ4MygP21bI=",
+        "lastModified": 1783875036,
+        "narHash": "sha256-4l7kSxwRfM2+/HecS/58fYMWSJqfJoiVFmt01/KN5Ec=",
         "owner": "Vali0004",
         "repo": "kc-tools",
-        "rev": "565fab80f005398dbc15627746da1478eac1fa85",
+        "rev": "1755083e21c8f8a0315ff5ca4a2d6ff38ca2b455",
         "type": "github"
       },
       "original": {
