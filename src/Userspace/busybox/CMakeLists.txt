@@ -52,7 +52,7 @@ add_custom_command(
         O="${PUREDARWIN_BUSYBOX_BUILD_DIR}"
         CC=${CMAKE_C_COMPILER}
         HOSTCC=cc
-        CFLAGS=-fno-stack-protector
+        CFLAGS=-fno-stack-protector\ -fcommon
         LD=${CMAKE_C_COMPILER}\ ${PUREDARWIN_BUSYBOX_LINKER_FLAG}
         AR=${CMAKE_AR}
         RANLIB=${CMAKE_RANLIB}

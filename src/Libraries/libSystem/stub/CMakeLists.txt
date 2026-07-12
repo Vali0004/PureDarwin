@@ -1,14 +1,14 @@
 # libSystem_B_stub: /usr/lib/libSystem.B.dylib.
 #
 # STILL NOT the real Apple libSystem.dylib (no libsystem_c.dylib/libsystem_
-# malloc.dylib/etc sub-dylib products exist in PD -- those pieces are built
+# malloc.dylib/etc sub-dylib products exist in PD - those pieces are built
 # only as static archives, e.g. liblibc_static.a, liblibmalloc_static.a...),
 # but no longer an empty placeholder either: this target now links those
 # archives directly and exports the specific symbol surface real dependents
 # (currently: libdyld.dylib) need, so it functions as a genuine umbrella
-# providing real code -- see the -u/-exported_symbols_list block below and
+# providing real code - see the -u/-exported_symbols_list block below and
 # libSystem.exports for exactly what's covered. It also carries the dyld<->
-# libSystem handshake initializer (pd_libSystem_init.c) -- dyld hardcodes
+# libSystem handshake initializer (pd_libSystem_init.c) - dyld hardcodes
 # that only the image whose install path is exactly libSystem.B.dylib's may
 # run an initializer before libSystemInitialized is set, so that constructor
 # has to live here, not in libdyld.dylib. Expand libSystem.exports (and the
@@ -16,8 +16,8 @@
 #
 # ld64 requires every dynamic MH_EXECUTE to carry an LC_LOAD_DYLIB on
 # libSystem.dylib (a hardcoded policy check, not a symbol-resolution one), so
-# any PD userspace binary that links dynamically -- e.g. launchd-dummy, which
-# calls no libSystem function at all, just raw syscalls -- ends up with a real
+# any PD userspace binary that links dynamically - e.g. launchd-dummy, which
+# calls no libSystem function at all, just raw syscalls - ends up with a real
 # runtime dependency on a file that has to actually exist and be loadable for
 # dyld's LC_LOAD_DYLIB resolution to succeed, even though nothing in the binary
 # calls into it. This target's install name and version match what dyld's
@@ -36,7 +36,8 @@ target_sources(libSystem_B_stub PRIVATE
     empty.c
     pd_libSystem_init.c
     pd_libSystem_compat.c
-    pd_libSystem_process.c)
+    pd_libSystem_process.c
+    ${CMAKE_SOURCE_DIR}/src/Libraries/dyld/pd_libc_common_storage.c)
 
 # Match launchd-dummy's LC_LOAD_DYLIB expectation (from otool -L) so dyld's
 # compatibility-version check accepts this as a satisfying match.
@@ -46,11 +47,11 @@ target_link_options(libSystem_B_stub PRIVATE
 
 # cctools' ld64 applies its "dynamic main executables must link with
 # libSystem.dylib" policy check to ANY dynamic output with zero declared
-# dependencies -- dylibs included, not just MH_EXECUTEs. Empirically (isolated
+# dependencies - dylibs included, not just MH_EXECUTEs. Empirically (isolated
 # repro outside CMake), neither -umbrella/-all_load nor genuinely-unresolved
 # symbols avoid it; the only thing that does is an actual LC_LOAD_DYLIB, which
 # means linking -lSystem against the SDK's stub .tbd (build-time only, no code
-# pulled in -- matches -nostdlib). Since THIS target's own install name IS
+# pulled in - matches -nostdlib). Since THIS target's own install name IS
 # /usr/lib/libSystem.B.dylib, that produces a literal self-referential
 # LC_LOAD_DYLIB (ld64 warns "linking with itself", not an error). This is safe:
 # PD's dyld is the real dyld-832 source tree, which already dedups already-
@@ -77,7 +78,7 @@ target_link_options(libSystem_B_stub PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
 # only as static archives, so we instead link those archives directly and export
 # exactly the needed symbols. The exports list (libSystem.exports) names them as
 # required roots, so ld64 pulls their defining members + transitive closure out
-# of the archives -- the umbrella genuinely provides them. Same archive SET and
+# of the archives - the umbrella genuinely provides them. Same archive SET and
 # order dyld itself links (so transitive deps resolve), plus libmalloc for
 # _malloc_size.
 set(LIBSYSTEM_EXPORTS ${CMAKE_CURRENT_SOURCE_DIR}/libSystem.exports)
@@ -144,7 +145,7 @@ target_link_options(libSystem_B_stub PRIVATE
     -Wl,-dead_strip
     # Without -lSystem there is no dyld_stub_binder for lazy binding (some pulled
     # code, e.g. __tlv_exit, would need it). Use chained fixups so ALL binds are
-    # eager -- no lazy stubs, no dyld_stub_binder -- exactly as libdyld.dylib does.
+    # eager - no lazy stubs, no dyld_stub_binder - exactly as libdyld.dylib does.
     -Wl,-fixup_chains
     -Wl,-exported_symbols_list,${LIBSYSTEM_EXPORTS})
 if(PUREDARWIN_USE_LD64_LLD)
@@ -156,13 +157,13 @@ endif()
 set_property(TARGET libSystem_B_stub APPEND PROPERTY LINK_DEPENDS ${LIBSYSTEM_EXPORTS})
 
 # Reexport libdyld (/usr/lib/system/libdyld.dylib) so that any binary depending
-# on libSystem.B.dylib -- e.g. launchd -- pulls libdyld into its load graph and
+# on libSystem.B.dylib, e.g. launchd, pulls libdyld into its load graph and
 # runs its initializer, which registers the dyld thread-helpers (required for
 # LC_MAIN launch). This mirrors real Darwin, where libSystem.B.dylib is an
 # umbrella that reexports libdyld and the other libsystem_* sub-libraries.
 # NB: -reexport_library alone did NOT resolve pd_libSystem_init.c's own
 # references to libdyld's `start` (start_glue.s) and `_dyld_func_lookup`
-# (dyldLibSystemGlue.c) -- link libdyld directly too so those resolve normally;
+# (dyldLibSystemGlue.c) - link libdyld directly too so those resolve normally;
 # -reexport_library still marks it LC_REEXPORT_DYLIB for dependents.
 add_dependencies(libSystem_B_stub libdyld)
 target_link_libraries(libSystem_B_stub PRIVATE $<TARGET_FILE:libdyld>)

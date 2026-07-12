@@ -58,6 +58,7 @@ list(TRANSFORM DYLD_SRCS PREPEND "${DYLD_SOURCE_DIR}/")
 add_darwin_executable(dyld MACOSX_VERSION_MIN 11.0)
 target_sources(dyld PRIVATE ${DYLD_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/pd_stubs.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/pd_libc_common_storage.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pd_fileutils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pd_dyld_internal_stubs.cpp)
 
@@ -109,6 +110,7 @@ add_dependencies(dyld libsystem_kernel_static)
 # bridgeos/TARGET_OS_BRIDGE availability shim force-included (see the header).
 target_compile_options(dyld PRIVATE
     -mno-red-zone -fno-stack-protector
+    $<$<COMPILE_LANGUAGE:CXX>:-std=c++17;-fno-rtti>
     # PD normally builds -nostdinc with explicit -I header dirs, so it sets no
     # sysroot. dyld compiles against the SDK's coherent libc/libc++ instead (its
     # wrapper headers #include_next into the C library), so it needs -isysroot.
@@ -118,8 +120,6 @@ target_compile_options(dyld PRIVATE
     # C++ into assembly); scope it to C/C++ translation units only.
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${CMAKE_CURRENT_SOURCE_DIR}/dyld_sdk_compat.h>
 )
-set_source_files_properties(${DYLD_SRCS} PROPERTIES
-    COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CXX>:-std=c++17;-fno-rtti>")
 
 target_link_libraries(dyld PRIVATE
     AvailabilityHeaders

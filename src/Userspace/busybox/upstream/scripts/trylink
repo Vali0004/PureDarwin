@@ -86,6 +86,27 @@ A_FILES="$6"
 LDLIBS="$7"
 CONFIG_EXTRA_LDLIBS="$8"
 
+# Apple ld does not support --start-group/--end-group, so it cannot rescan the
+# BusyBox archive/object list when later built-in objects provide globals needed
+# by earlier archives. Put non-archive built-in objects before archives on
+# Darwin so their generated common storage is visible before archive scanning.
+case "$($CC $CFLAGS -dumpmachine 2>/dev/null)" in
+    *apple-darwin*)
+        a_archives=""
+        a_objects=""
+        for f in $A_FILES; do
+            case "$f" in
+                *.a) a_archives="$a_archives $f" ;;
+                *) a_objects="$a_objects $f" ;;
+            esac
+        done
+        for f in shell/ash_ptr_hack.o libbb/common_bufsiz.o libbb/ptr_to_globals.o coreutils/test_ptr_hack.o; do
+            test -f "$f" && O_FILES="$O_FILES $f"
+        done
+        A_FILES="$a_objects $a_archives"
+        ;;
+esac
+
 # The --sort-section option is not supported by older versions of ld
 SORT_SECTION="-Wl,--sort-section,alignment"
 if ! check_cc "-Wl,--sort-section,alignment"; then
