@@ -3,10 +3,10 @@
 , cmake
 , ninja
 , requireFile
-, darwinCrossToolchain
-, nativeLd
-, nativeUnifdef
-, nativeMigcom
+, darwinCrossToolchain ? null
+, nativeLd ? null
+, nativeUnifdef ? null
+, nativeMigcom ? null
 , openssl
 , bison
 , flex
@@ -26,17 +26,27 @@
 , libuuid
 , ruby
 , iig
+, tinycc
+, src ? ./.
 , pname ? "puredarwin-nix-toolchain"
 , buildTargets ? [ "helloapp" "launchd" ]
+, enableProjects ? true
+, enableKernel ? true
+, enableLibraries ? true
+, enableUserspace ? true
+, enableTools ? true
 , installUserland ? true
 , installKernel ? false
 , installXnuHeaders ? false
 , installKexts ? false
+, installLibSystem ? false
 , installBaseSystem ? false
+, prebuiltLibSystem ? null
 }:
 
 let
-  sdkTarball = requireFile {
+  isDarwinHost = stdenv.hostPlatform.isDarwin;
+  sdkTarball = if isDarwinHost then null else requireFile {
     name = "MacOSX11.3.sdk.tar.xz";
     sha256 = "9adc1373d3879e1973d28ad9f17c9051b02931674a3ec2a2498128989ece2cb1";
     message = ''
@@ -45,34 +55,59 @@ let
         nix-store --add-fixed sha256 /path/to/MacOSX11.3.sdk.tar.xz
     '';
   };
+  opensslCryptoLibrary =
+    if isDarwinHost
+    then "${openssl.out}/lib/libcrypto.dylib"
+    else "${openssl.out}/lib/libcrypto.so";
+  opensslSslLibrary =
+    if isDarwinHost
+    then "${openssl.out}/lib/libssl.dylib"
+    else "${openssl.out}/lib/libssl.so";
 in
-stdenv.mkDerivation {
+stdenv.mkDerivation ({
   inherit pname;
   version = "0.1";
 
-  src = ./.;
+  inherit src;
 
   nativeBuildInputs = [
-    cmake ninja darwinCrossToolchain bison flex perl bash ed unifdef tcsh
-    gnustep-base pax coreutils findutils gawk gnused clang ruby iig
+    cmake ninja bison flex perl bash ed unifdef tcsh
+    pax coreutils findutils gawk gnused clang ruby iig
+  ] ++ lib.optionals (!isDarwinHost) [
+    darwinCrossToolchain nativeUnifdef nativeMigcom gnustep-base
   ];
 
-  buildInputs = [ zlib libuuid openssl ];
-
-  NIX_DARWIN_TOOLCHAIN_DIR = "${darwinCrossToolchain}/bin";
+  buildInputs = [ zlib openssl ] ++ lib.optionals (!isDarwinHost) [ libuuid ];
 
   configurePhase = ''
     runHook preConfigure
+  '' + lib.optionalString (!isDarwinHost) ''
     mkdir -p sdk
     tar xf ${sdkTarball} -C sdk
     export DARWIN_SDK_ROOT="$PWD/sdk/MacOSX11.3.sdk"
+  '' + lib.optionalString isDarwinHost ''
+    export DARWIN_SDK_ROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+  '' + ''
 
-    sed -i 's#/bin/pwd#pwd#g' src/Kernel/xnu/Makefile src/Userspace/busybox/upstream/Makefile
+    if [ -e src/Kernel/xnu/Makefile ]; then
+      sed -i 's#/bin/pwd#pwd#g' src/Kernel/xnu/Makefile
+    fi
+    if [ -e src/Userspace/busybox/upstream/Makefile ]; then
+      sed -i 's#/bin/pwd#pwd#g' src/Userspace/busybox/upstream/Makefile
+    fi
 
-    sed -i "s#/usr/local/osxcross/bin/xcrun#${darwinCrossToolchain}/bin/xcrun#g" \
-      src/Kernel/xnu/cmake/MakeInc.cmd.in tools/mig/mig.sh
-    sed -i -E 's#(^|[[:space:]=])/(usr/)?bin/([A-Za-z_]+)#\1\3#g' \
-      src/Kernel/xnu/cmake/MakeInc.cmd.in
+  '' + lib.optionalString (!isDarwinHost) ''
+    if [ -e src/Kernel/xnu/cmake/MakeInc.cmd.in ]; then
+      sed -i "s#/usr/local/osxcross/bin/xcrun#${darwinCrossToolchain}/bin/xcrun#g" \
+        src/Kernel/xnu/cmake/MakeInc.cmd.in
+      sed -i -E 's#(^|[[:space:]=])/(usr/)?bin/([A-Za-z_]+)#\1\3#g' \
+        src/Kernel/xnu/cmake/MakeInc.cmd.in
+    fi
+    if [ -e tools/mig/mig.sh ]; then
+      sed -i "s#/usr/local/osxcross/bin/xcrun#${darwinCrossToolchain}/bin/xcrun#g" \
+        tools/mig/mig.sh
+    fi
+  '' + ''
 
     mkdir -p .nix-stubs
     cat > .nix-stubs/sw_vers <<'EOF'
@@ -81,36 +116,52 @@ echo 11.3
 EOF
     chmod +x .nix-stubs/sw_vers
     export PATH="$PWD/.nix-stubs:$PATH"
-    sed -i '1s#.*#\#!'"$(command -v bash)"'#' src/Kernel/xnu/cmake/make_symbol_aliasing.sh.in
-    patchShebangs src tools
+    if [ -e src/Kernel/xnu/cmake/make_symbol_aliasing.sh.in ]; then
+      sed -i '1s#.*#\#!'"$(command -v bash)"'#' src/Kernel/xnu/cmake/make_symbol_aliasing.sh.in
+    fi
+    patchShebangs src ${lib.optionalString enableTools "tools"}
     # patchShebangs does not rewrite this csh script, but /bin/csh is also
     # absent in the Nix sandbox.
-    sed -i '1c#!${tcsh}/bin/tcsh -f' src/Kernel/xnu/SETUP/config/doconf
+    if [ -e src/Kernel/xnu/SETUP/config/doconf ]; then
+      sed -i '1c#!${tcsh}/bin/tcsh -f' src/Kernel/xnu/SETUP/config/doconf
+    fi
 
+  '' + lib.optionalString (!isDarwinHost) ''
     export NIX_NATIVE_LD_PATH="${nativeLd}/bin/ld"
     export NIX_HOST_CC_PATH="${clang}/bin/clang"
 
     export NIX_MIGCOM_PATH="${nativeMigcom}/bin/migcom"
     export NIX_UNIFDEF_PATH="${nativeUnifdef}/bin/unifdef"
+  '' + ''
 
     cmake -S . -B build-nix -G Ninja \
+  '' + lib.optionalString (!isDarwinHost) ''
       -DCMAKE_TOOLCHAIN_FILE=cmake/nix-toolchain.cmake \
+  '' + ''
       -DCMAKE_BUILD_TYPE=Debug \
       -DOPENSSL_INCLUDE_DIR=${openssl.dev}/include \
-      -DOPENSSL_CRYPTO_LIBRARY=${openssl.out}/lib/libcrypto.so \
-      -DOPENSSL_SSL_LIBRARY=${openssl.out}/lib/libssl.so \
+      -DOPENSSL_CRYPTO_LIBRARY=${opensslCryptoLibrary} \
+      -DOPENSSL_SSL_LIBRARY=${opensslSslLibrary} \
       -DZLIB_INCLUDE_DIR="$DARWIN_SDK_ROOT/usr/include" \
       -DZLIB_LIBRARY="$DARWIN_SDK_ROOT/usr/lib/libz.tbd" \
       -DZLIB_LIBRARY_RELEASE="$DARWIN_SDK_ROOT/usr/lib/libz.tbd" \
       -DLIBXML2_INCLUDE_DIR="$DARWIN_SDK_ROOT/usr/include/libxml2" \
       -DLIBXML2_LIBRARY="$DARWIN_SDK_ROOT/usr/lib/libxml2.tbd" \
-      -DPUREDARWIN_MACOSX_SDK="$DARWIN_SDK_ROOT"
+      -DPUREDARWIN_MACOSX_SDK="$DARWIN_SDK_ROOT" \
+      -DPUREDARWIN_ENABLE_PROJECTS=${if enableProjects then "ON" else "OFF"} \
+      -DPUREDARWIN_ENABLE_KERNEL=${if enableKernel then "ON" else "OFF"} \
+      -DPUREDARWIN_ENABLE_LIBRARIES=${if enableLibraries then "ON" else "OFF"} \
+      -DPUREDARWIN_ENABLE_USERSPACE=${if enableUserspace then "ON" else "OFF"} \
+      -DPUREDARWIN_ENABLE_TOOLS=${if enableTools then "ON" else "OFF"} \
+      -DPUREDARWIN_TCC_SOURCE=${tinycc.src} \
+      ${lib.optionalString (prebuiltLibSystem != null) "-DPUREDARWIN_PREBUILT_LIBSYSTEM_ROOT=${prebuiltLibSystem}"}
     runHook postConfigure
   '';
 
   buildPhase = ''
     runHook preBuild
     mkdir -p .nix-stubs
+  '' + lib.optionalString (!isDarwinHost) ''
     ln -sf "$PWD/tools/mig/mig.sh" .nix-stubs/mig
     ln -sf "${nativeMigcom}/bin/migcom" .nix-stubs/migcom
     ln -sf "${nativeUnifdef}/bin/unifdef" .nix-stubs/unifdef
@@ -126,6 +177,9 @@ exit 1
 EOF
     chmod +x .nix-stubs/libtool
     export PATH="$PWD/.nix-stubs:$PWD/build-nix/tools/mig:$PWD/build-nix/tools/cctools/misc:$PWD/build-nix/tools/dtrace_ctf/tools:$PATH"
+  '' + lib.optionalString isDarwinHost ''
+    export PATH="$PWD/.nix-stubs:$PATH"
+  '' + ''
     ninja -C build-nix ${lib.escapeShellArgs buildTargets}
     runHook postBuild
   '';
@@ -138,6 +192,7 @@ EOF
     cp build-nix/src/Userspace/helloapp/helloapp $out/bin/
     cp build-nix/src/Userspace/launchd/launchd $out/bin/
     cp build-nix/src/Userspace/busybox/build/busybox $out/bin/
+    cp build-nix/src/Userspace/tcc/build/tcc $out/bin/
   '' + lib.optionalString installKernel ''
     cp -R build-nix/src/Kernel/xnu/xnu/. $out/
   '' + lib.optionalString installXnuHeaders ''
@@ -146,6 +201,12 @@ EOF
     mkdir -p $out/System/Library/Extensions
     find build-nix/src/Kernel/Extensions -name '*.kext' -type d -prune \
       -exec cp -R '{}' $out/System/Library/Extensions/ ';'
+  '' + lib.optionalString installLibSystem ''
+    mkdir -p $out/usr/lib/system
+    cp build-nix/src/Libraries/libSystem/stub/libSystem.B.dylib $out/usr/lib/
+    cp -P build-nix/src/Libraries/libSystem/stub/libSystem.dylib $out/usr/lib/
+    cp build-nix/src/Libraries/libSystem/libdyld/libdyld.dylib $out/usr/lib/system/
+    cp build-nix/src/Libraries/dyld/dyld $out/usr/lib/
   '' + lib.optionalString installBaseSystem ''
     cmake --install build-nix --component BaseSystem --prefix $out
   '' + ''
@@ -160,6 +221,8 @@ EOF
   dontPatchELF = installBaseSystem;
 
   meta = with lib; {
-    platforms = platforms.linux;
+    platforms = platforms.linux ++ platforms.darwin;
   };
-}
+} // lib.optionalAttrs (!isDarwinHost) {
+  NIX_DARWIN_TOOLCHAIN_DIR = "${darwinCrossToolchain}/bin";
+})

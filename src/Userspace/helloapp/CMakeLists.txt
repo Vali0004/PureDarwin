@@ -18,9 +18,12 @@ target_compile_options(helloapp PRIVATE
 
 target_link_options(helloapp PRIVATE
     -nostdlib
+    -Wl,-L,$<TARGET_FILE_DIR:libSystem_B_stub>
     -Wl,-dylinker_install_name,/usr/lib/dyld
     -Wl,-platform_version,macos,11.0,11.5
     -lSystem
 )
+
+add_dependencies(helloapp libSystem_B_stub dyld)
 
 install(TARGETS helloapp DESTINATION bin COMPONENT BaseSystem)

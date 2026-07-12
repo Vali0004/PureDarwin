@@ -5,4 +5,4 @@ make_program=$1
 source_dir=$2
 build_dir=$3
 
-yes "" | "${make_program}" -C "${source_dir}" O="${build_dir}" oldconfig
+"${make_program}" -C "${source_dir}" O="${build_dir}" silentoldconfig

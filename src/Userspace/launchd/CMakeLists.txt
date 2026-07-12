@@ -19,6 +19,7 @@ target_compile_options(launchd PRIVATE
 target_link_options(launchd PRIVATE
     -nostdlib
     -isysroot ${PUREDARWIN_MACOSX_SDK}
+    -Wl,-L,$<TARGET_FILE_DIR:libSystem_B_stub>
     -Wl,-dylinker_install_name,/usr/lib/dyld
     -Wl,-platform_version,macos,11.0,11.5
     -lSystem
