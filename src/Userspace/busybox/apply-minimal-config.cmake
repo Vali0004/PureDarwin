@@ -27,12 +27,14 @@ foreach(symbol IN ITEMS
     MV
     PWD
     REBOOT
+    READLINK
     RM
     RMDIR
     SHUTDOWN
     SLEEP
     TEST
     TRUE
+    TRUNCATE
     UNAME
     BASENAME
     DIRNAME

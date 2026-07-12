@@ -239,7 +239,23 @@ struct ext4node {
 
 /* ext4_subr.c */
 int  ext4_read_super(struct ext4mount *emp);
+int  ext4_write_super(struct ext4mount *emp);
+uint64_t ext4_free_blocks_count(struct ext4mount *emp);
+int  ext4_read_group_desc(struct ext4mount *emp, uint32_t grp,
+               struct ext4_group_desc *gd);
+int  ext4_write_group_desc(struct ext4mount *emp, uint32_t grp,
+               const struct ext4_group_desc *gd);
 int  ext4_read_inode(struct ext4mount *emp, ino_t ino, struct ext4_inode *out);
+int  ext4_write_inode(struct ext4mount *emp, ino_t ino, const struct ext4_inode *in);
+int  ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out);
+int  ext4_free_inode(struct ext4mount *emp, ino_t ino, enum vtype type);
+int  ext4_alloc_block(struct ext4mount *emp, uint64_t goal, uint64_t *pblk_out);
+int  ext4_free_block(struct ext4mount *emp, uint64_t pblk);
+int  ext4_inode_append_extent(struct ext4mount *emp, struct ext4_inode *inode,
+               uint32_t lblk, uint64_t pblk);
+int  ext4_inode_free_extents(struct ext4mount *emp, struct ext4_inode *inode);
+int  ext4_inode_truncate_extents(struct ext4mount *emp, struct ext4_inode *inode,
+               uint64_t keep_blocks);
 int  ext4_bmap(struct ext4mount *emp, struct ext4_inode *inode,
                uint32_t lblk, uint64_t *pblk_out);
 int  ext4_indirect_lookup(struct ext4mount *emp, uint32_t blk, uint32_t lblk,

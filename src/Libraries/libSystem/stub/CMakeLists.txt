@@ -62,14 +62,7 @@ if(_libsystem_b_copts)
 endif()
 target_compile_options(libSystem_B_stub PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
 target_link_options(libSystem_B_stub PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
-# NB: do NOT link -lSystem here. The SDK's libSystem.tbd stub exports every one
-# of the symbols below, so with -lSystem present ld64 binds each -u root as a
-# two-level IMPORT from libSystem (shadowing our archives) instead of pulling the
-# defining member -- the umbrella would stay empty. The policy gate ("dynamic
-# output must declare a dependency") is now satisfied by the real LC_REEXPORT_DYLIB
-# on libdyld added below, so -lSystem is no longer needed.
 
-# --- Real umbrella content --------------------------------------------------
 # libSystem.B.dylib is no longer empty: /usr/lib/system/libdyld.dylib imports a
 # handful of libc/pthread/kernel/malloc symbols (___assert_rtn, _malloc/_free/
 # _malloc_size, _pthread_*, _strcmp/_strlen/_strncmp/_strrchr, ___cxa_*,

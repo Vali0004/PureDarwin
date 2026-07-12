@@ -80,17 +80,21 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 	(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&bsize, FWRITE, ctx);
 
 	vfs_setfsprivate(mp, emp);
-	vfs_setflags(mp, MNT_RDONLY | MNT_LOCAL);
+	/* The generic root mount object is born MNT_RDONLY|MNT_ROOTFS before
+	 * ext4_mount() runs, so explicitly clear MNT_RDONLY here or VFS rejects
+	 * open-for-write/create before our vnode operations can run. */
+	vfs_setflags(mp, MNT_LOCAL);
+	vfs_clearflags(mp, MNT_RDONLY);
 
 	/* fill in statfs */
 	sfs = vfs_statfs(mp);
 	sfs->f_bsize  = emp->em_blocksize;
 	sfs->f_iosize = emp->em_blocksize;
 	sfs->f_blocks = emp->em_blocks_count;
-	sfs->f_bfree  = 0;
-	sfs->f_bavail = 0;
+	sfs->f_bfree  = ext4_free_blocks_count(emp);
+	sfs->f_bavail = ext4_free_blocks_count(emp);
 	sfs->f_files  = emp->em_inodes_count;
-	sfs->f_ffree  = 0;
+	sfs->f_ffree  = le32(emp->em_sb.s_free_inodes_count);
 	sfs->f_fsid.val[0] = (int32_t)emp->em_dev;
 	sfs->f_fsid.val[1] = (int32_t)vfs_typenum(mp);
 	strlcpy(sfs->f_fstypename, "ext4", sizeof(sfs->f_fstypename));
@@ -159,11 +163,11 @@ ext4_vfs_getattr(struct mount *mp, struct vfs_attr *fsap,
 	VFSATTR_RETURN(fsap, f_bsize, emp->em_blocksize);
 	VFSATTR_RETURN(fsap, f_iosize, emp->em_blocksize);
 	VFSATTR_RETURN(fsap, f_blocks, emp->em_blocks_count);
-	VFSATTR_RETURN(fsap, f_bfree, 0);
-	VFSATTR_RETURN(fsap, f_bavail, 0);
-	VFSATTR_RETURN(fsap, f_bused, emp->em_blocks_count);
+	VFSATTR_RETURN(fsap, f_bfree, ext4_free_blocks_count(emp));
+	VFSATTR_RETURN(fsap, f_bavail, ext4_free_blocks_count(emp));
+	VFSATTR_RETURN(fsap, f_bused, emp->em_blocks_count - ext4_free_blocks_count(emp));
 	VFSATTR_RETURN(fsap, f_files, emp->em_inodes_count);
-	VFSATTR_RETURN(fsap, f_ffree, 0);
+	VFSATTR_RETURN(fsap, f_ffree, le32(emp->em_sb.s_free_inodes_count));
 	if (VFSATTR_IS_ACTIVE(fsap, f_capabilities)) {
 		vol_capabilities_attr_t *cap = &fsap->f_capabilities;
 		cap->capabilities[VOL_CAPABILITIES_FORMAT] =
@@ -190,14 +194,23 @@ ext4_sync(__unused struct mount *mp, __unused int waitfor,
 	return 0;   /* read-only */
 }
 
-/* ---- kext entry ---- */
-
-kern_return_t
-ext4_module_start(__unused kmod_info_t *ki, __unused void *data)
+/* ---- filesystem (de)registration ----
+ *
+ * Called from the ext4 IOService's start()/stop() (ext4_iokit.cpp) rather
+ * than a bare kmod MAIN_FUNCTION: in the fileset kernel collection a pure-C
+ * kext with only a kmod start routine is never actually started (nothing
+ * triggers it), so the filesystem was never registered with vfs_fsadd and
+ * every root mount attempt failed. hfs uses the same IOResources/IOBSD
+ * personality trick to get its registration invoked; ext4 now mirrors it. */
+int
+ext4_vfs_register(void)
 {
 	struct vfs_fsentry vfe;
 	struct vnodeopv_desc *opv[1];
 	int error;
+
+	if (ext4_vfsconf != NULL)
+		return 0;   /* already registered */
 
 	memset(&vfe, 0, sizeof(vfe));
 	opv[0] = &ext4_vnodeop_opv_desc;
@@ -206,26 +219,32 @@ ext4_module_start(__unused kmod_info_t *ki, __unused void *data)
 	vfe.vfe_vopcnt   = 1;
 	vfe.vfe_opvdescs = opv;
 	strlcpy(vfe.vfe_fsname, "ext4", sizeof(vfe.vfe_fsname));
+	/* VFS_TBLCANMOUNTROOT: without it vfs_mountroot() skips ext4 entirely
+	 * (it only tries filesystems with a vfc_mountroot routine or this flag),
+	 * so the root device never gets handed to ext4_mount and every mount
+	 * attempt "fails" without ever calling us. With it, the generic
+	 * VFS_MOUNT(mp, rootvp, 0, ctx) path invokes ext4_mount for the root. */
 	vfe.vfe_flags    = VFS_TBLTHREADSAFE | VFS_TBLFSNODELOCK |
 	                   VFS_TBL64BITREADY | VFS_TBLNOTYPENUM |
-	                   VFS_TBLLOCALVOL | VFS_TBLGENERICMNTARGS;
+	                   VFS_TBLLOCALVOL | VFS_TBLGENERICMNTARGS |
+	                   VFS_TBLCANMOUNTROOT;
 
 	error = vfs_fsadd(&vfe, &ext4_vfsconf);
 	if (error) {
 		E4LOG("vfs_fsadd failed: %d", error);
-		return KERN_FAILURE;
+		return error;
 	}
 	E4LOG("registered ext4 filesystem");
-	return KERN_SUCCESS;
+	return 0;
 }
 
-kern_return_t
-ext4_module_stop(__unused kmod_info_t *ki, __unused void *data)
+int
+ext4_vfs_unregister(void)
 {
 	if (ext4_vfsconf) {
 		if (vfs_fsremove(ext4_vfsconf) != 0)
-			return KERN_FAILURE;
+			return -1;
 		ext4_vfsconf = NULL;
 	}
-	return KERN_SUCCESS;
+	return 0;
 }

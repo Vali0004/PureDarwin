@@ -27,6 +27,7 @@
 #include <IOKit/storage/IOMedia.h>
 #include "RavynXHCIPort.h"
 #include "RavynXHCIMassStorageDisk.h"
+#include "RavynXHCIKeyboard.h"
 
 #define super IOService
 OSDefineMetaClassAndStructors(RavynXHCIPort, IOService);
@@ -272,6 +273,13 @@ bool RavynXHCIPort::start(IOService *provider)
         XHCI_Log("Failed to alloc command lock");
         return false;
     }
+    fEventLock = IOLockAlloc();
+    if (!fEventLock) {
+        XHCI_Log("Failed to alloc event lock");
+        return false;
+    }
+    bzero(fXferDone, sizeof(fXferDone));
+    fCmdDonePending = false;
 
     uint16_t vendor = fProvider->configRead16(kIOPCIConfigVendorID);
     uint16_t device = fProvider->configRead16(kIOPCIConfigDeviceID);
@@ -347,10 +355,13 @@ bool RavynXHCIPort::start(IOService *provider)
 
     bzero(fMSC, sizeof(fMSC));
     bzero(fDiskNubs, sizeof(fDiskNubs));
+    bzero(fKbd, sizeof(fKbd));
+    bzero(fKbdNubs, sizeof(fKbdNubs));
     bzero(fSlots, sizeof(fSlots));
 
     scanPorts();
 
+    XHCI_Log("start complete");
     registerService();
     return true;
 }
@@ -365,7 +376,12 @@ void RavynXHCIPort::free()
     for (int i = 0; i < 16; i++) {
         if (fDiskNubs[i]) { fDiskNubs[i]->release(); fDiskNubs[i] = NULL; }
     }
+    for (int i = 0; i < 8; i++) {
+        if (fKbdNubs[i]) { fKbdNubs[i]->release(); fKbdNubs[i] = NULL; }
+        if (fKbd[i].reportMem) { fKbd[i].reportMem->release(); fKbd[i].reportMem = NULL; }
+    }
     if (fCmdLock) { IOLockFree(fCmdLock); fCmdLock = NULL; }
+    if (fEventLock) { IOLockFree(fEventLock); fEventLock = NULL; }
     if (fBARMap) { fBARMap->release(); fBARMap = NULL; }
     if (fBARDesc) { fBARDesc->release(); fBARDesc = NULL; }
     if (fProvider) { fProvider->release(); fProvider = NULL; }
@@ -472,10 +488,12 @@ void RavynXHCIPort::parseExtendedCapabilities()
     }
 
     /* No explicit per-port pairing field exists in the generic Supported
-     * Protocol structure; the standard, widely-used heuristic (matching
-     * what real USB stacks do absent vendor-specific routing info) is
-     * positional: the i-th USB2 port pairs with the i-th USB3 port when
-     * both lists are the same length. */
+     * Protocol structure. Keep a best-effort positional companion map for
+     * diagnostics, but do not let it suppress scanning either protocol
+     * view: real USB3 hubs usually expose a SuperSpeed hub and a separate
+     * USB2 companion hub. The Realtek hub on Gemini Lake reports USB3
+     * ports [10..16] and USB2 ports [1..9]; the boot stick can be visible
+     * only through the USB2 view even while the SuperSpeed hub is present. */
     if (nUsb2 == nUsb3 && nUsb2 > 0) {
         for (UInt32 i = 0; i < nUsb2; i++) {
             fPairedPort[usb2Ports[i]] = usb3Ports[i];
@@ -483,7 +501,7 @@ void RavynXHCIPort::parseExtendedCapabilities()
             XHCI_Log("Paired port %u (USB2) <-> port %u (USB3)", usb2Ports[i], usb3Ports[i]);
         }
     } else if (nUsb2 > 0 || nUsb3 > 0) {
-        XHCI_Log("USB2 (%u) / USB3 (%u) port counts differ; cannot pair positionally",
+        XHCI_Log("USB2 (%u) / USB3 (%u) root-port counts differ; scanning protocol views independently",
                 nUsb2, nUsb3);
     }
 }
@@ -639,6 +657,46 @@ void RavynXHCIPort::pushTRB(volatile XHCITRB *ring, UInt32 &enqueue, UInt8 &cycl
     }
 }
 
+void RavynXHCIPort::serviceEventRing()
+{
+    /* Sole consumer of the event ring. Drains every currently-available
+     * event and files each completion into the per-(slot,DCI) transfer table
+     * or the command-completion slot, so concurrent waiters (disk I/O + the
+     * keyboard poll thread) never consume and discard each other's events. */
+    IOLockLock(fEventLock);
+    for (;;) {
+        UInt64 evParam   = fEventRing[fEventRingDequeue].param;
+        UInt32 evControl = fEventRing[fEventRingDequeue].control;
+        UInt32 evStatus  = fEventRing[fEventRingDequeue].status;
+        if ((evControl & TRB_CYCLE) != (fEventRingCycle ? TRB_CYCLE : 0))
+            break; /* ring empty (cycle bit doesn't match producer) */
+
+        UInt32 type = TRB_TYPE(evControl);
+        if (type == TRB_TYPE_CMD_COMPLETION) {
+            fCmdDoneParam   = evParam;
+            fCmdDoneCC      = TRB_CC(evStatus);
+            fCmdDoneSlot    = TRB_GET_SLOT(evControl);
+            fCmdDonePending = true;
+        } else if (type == TRB_TYPE_TRANSFER_EVENT) {
+            UInt32 slot = TRB_GET_SLOT(evControl);
+            UInt32 dci  = (evControl >> 16) & 0x1F; /* Endpoint ID field */
+            if (slot < 64 && dci < 32) {
+                fXferDone[slot][dci].cc      = TRB_CC(evStatus);
+                fXferDone[slot][dci].pending = true;
+            }
+        }
+
+        fEventRingDequeue++;
+        if (fEventRingDequeue == kRingTRBs) { fEventRingDequeue = 0; fEventRingCycle ^= 1; }
+        /* ERDP.EHB (Event Handler Busy, bit3) must be explicitly written as 1
+         * to acknowledge the event; real hardware stops posting new events
+         * until it's cleared (QEMU didn't enforce this). */
+        UInt64 newErdp = fEventRingMem->getPhysicalAddress() + fEventRingDequeue * sizeof(XHCITRB);
+        rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | XHCI_ERDP_EHB);
+    }
+    IOLockUnlock(fEventLock);
+}
+
 bool RavynXHCIPort::doCommand(UInt64 param, UInt32 status, UInt32 controlNoCycle,
                               UInt8 *outCC, UInt32 *outSlotId, UInt64 timeoutMs)
 {
@@ -654,34 +712,19 @@ bool RavynXHCIPort::doCommand(UInt64 param, UInt32 status, UInt32 controlNoCycle
      * poison enumeration of the next (real) port. */
     UInt64 cmdTRBPhys = fCmdRingMem->getPhysicalAddress() + (UInt64)fCmdRingEnqueue * sizeof(XHCITRB);
 
+    fCmdDonePending = false;
     pushTRB(fCmdRing, fCmdRingEnqueue, fCmdRingCycle, kRingTRBs, param, status, controlNoCycle);
     ringDoorbell(0, 0);
 
     bool ok = false;
     for (UInt64 waited = 0; waited < timeoutMs; waited++) {
-        UInt64 evParam   = fEventRing[fEventRingDequeue].param;
-        UInt32 evControl = fEventRing[fEventRingDequeue].control;
-        UInt32 evStatus  = fEventRing[fEventRingDequeue].status;
-        if ((evControl & TRB_CYCLE) == (fEventRingCycle ? TRB_CYCLE : 0)) {
-            if (TRB_TYPE(evControl) == TRB_TYPE_CMD_COMPLETION && evParam == cmdTRBPhys) {
-                if (outCC) *outCC = TRB_CC(evStatus);
-                if (outSlotId) *outSlotId = TRB_GET_SLOT(evControl);
-                ok = true;
-            }
-            fEventRingDequeue++;
-            if (fEventRingDequeue == kRingTRBs) { fEventRingDequeue = 0; fEventRingCycle ^= 1; }
-            /* ERDP.EHB (Event Handler Busy, bit3) must be explicitly written
-             * as 1 by software to acknowledge/clear it after consuming an
-             * event, not just passed through from a prior read. QEMU's
-             * emulated xHCI doesn't seem to enforce this and kept posting
-             * events regardless; real hardware can stop posting new events
-             * (including the Command Completion Event for Enable Slot)
-             * until EHB is cleared, which read like every doCommand() just
-             * timing out for no reason. */
-            UInt64 newErdp = fEventRingMem->getPhysicalAddress() + fEventRingDequeue * sizeof(XHCITRB);
-            rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | XHCI_ERDP_EHB);
-            if (ok) break;
-            continue;
+        serviceEventRing();
+        if (fCmdDonePending && fCmdDoneParam == cmdTRBPhys) {
+            if (outCC) *outCC = fCmdDoneCC;
+            if (outSlotId) *outSlotId = fCmdDoneSlot;
+            fCmdDonePending = false;
+            ok = true;
+            break;
         }
         IOSleep(1);
     }
@@ -712,7 +755,14 @@ bool RavynXHCIPort::doCommand(UInt64 param, UInt32 status, UInt32 controlNoCycle
 
 bool RavynXHCIPort::waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC, UInt32 timeoutMs)
 {
+    if (slotId >= 64 || epDCI >= 32) return false;
     for (UInt32 waited = 0; waited < timeoutMs; waited++) {
+        serviceEventRing();
+        if (fXferDone[slotId][epDCI].pending) {
+            if (outCC) *outCC = fXferDone[slotId][epDCI].cc;
+            fXferDone[slotId][epDCI].pending = false;
+            return true;
+        }
         /* Defend against a lost doorbell: real hardware intermittently
          * strands a Running endpoint whose queued TD never gets sampled (the
          * single doorbell we rang at submit time raced the TRB store, so the
@@ -721,30 +771,8 @@ bool RavynXHCIPort::waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC,
          * ring. Harmless if the transfer is already progressing. */
         if (waited && (waited % 50) == 0)
             ringDoorbell(slotId, epDCI);
-        UInt32 evControl = fEventRing[fEventRingDequeue].control;
-        UInt32 evStatus  = fEventRing[fEventRingDequeue].status;
-        if ((evControl & TRB_CYCLE) == (fEventRingCycle ? TRB_CYCLE : 0)) {
-            bool match = TRB_TYPE(evControl) == TRB_TYPE_TRANSFER_EVENT &&
-                         TRB_GET_SLOT(evControl) == slotId;
-            if (match && outCC) *outCC = TRB_CC(evStatus);
-            fEventRingDequeue++;
-            if (fEventRingDequeue == kRingTRBs) { fEventRingDequeue = 0; fEventRingCycle ^= 1; }
-            /* ERDP.EHB (Event Handler Busy, bit3) must be explicitly written
-             * as 1 by software to acknowledge/clear it after consuming an
-             * event, not just passed through from a prior read. QEMU's
-             * emulated xHCI doesn't seem to enforce this and kept posting
-             * events regardless; real hardware can stop posting new events
-             * (including the Command Completion Event for Enable Slot)
-             * until EHB is cleared, which read like every doCommand() just
-             * timing out for no reason. */
-            UInt64 newErdp = fEventRingMem->getPhysicalAddress() + fEventRingDequeue * sizeof(XHCITRB);
-            rtWrite64(XHCI_RT_IR0 + XHCI_IR_ERDP, (newErdp & ~0xFULL) | XHCI_ERDP_EHB);
-            if (match) return true;
-            continue;
-        }
         IOSleep(1);
     }
-    (void)epDCI;
     return false;
 }
 
@@ -773,37 +801,29 @@ void RavynXHCIPort::scanPorts()
     for (int pass = 0; pass < 10; pass++) {
         bool anyNew = false;
 
-        /* USB3-view ports first: a SuperSpeed-capable device must be
-         * enumerated through its USB3 port, not the USB2 companion port
-         * the same physical connector also exposes, or its link trains
-         * fine but every actual control transfer fails with a USB
-         * Transaction Error (the controller routes real bus traffic
-         * through whichever port number the Slot Context names). */
+        /* USB3-view ports first. Do not mark paired USB2 ports as consumed:
+         * USB3 hub silicon normally exposes two independent devices, a
+         * SuperSpeed hub on the USB3 protocol ports and a companion USB2 hub
+         * on the USB2 protocol ports. Boot media and keyboards behind that
+         * hub can be present only on the USB2 side. */
         for (UInt32 p = 0; p < fMaxPorts && p < 64; p++) {
             if (seen[p] || fPortMajorRev[p] != 3) continue;
             UInt32 portsc = portRead32(p, XHCI_PORTSC);
             if (!(portsc & XHCI_PORTSC_CCS)) continue;
             seen[p] = true;
-            if (fPairedPort[p] != 0xFF) seen[fPairedPort[p]] = true;
             anyNew = true;
             XHCI_Log("Port %u connected, portsc=%08x speed=%u", p, portsc, XHCI_PORTSC_SPEED(portsc));
             resetAndEnumeratePort(p);
         }
 
-        /* Everything else: USB2-only ports, or ports whose USB3 pair (if
-         * any) isn't showing connected right now. */
+        /* Everything else: USB2 protocol ports and unknown protocol ports.
+         * Even if a paired USB3 port is connected, enumerate this side too;
+         * it may be the companion hub carrying high-/full-/low-speed
+         * devices. */
         for (UInt32 p = 0; p < fMaxPorts && p < 64; p++) {
             if (seen[p] || fPortMajorRev[p] == 3) continue;
             UInt32 portsc = portRead32(p, XHCI_PORTSC);
             if (!(portsc & XHCI_PORTSC_CCS)) continue;
-            if (fPairedPort[p] != 0xFF && !seen[fPairedPort[p]] &&
-                (portRead32(fPairedPort[p], XHCI_PORTSC) & XHCI_PORTSC_CCS)) {
-                /* Paired USB3 port is also connected but hasn't been
-                 * handled yet this pass (its own reset may still be
-                 * pending) -- wait for it rather than racing it via the
-                 * USB2 view. */
-                continue;
-            }
             seen[p] = true;
             anyNew = true;
             XHCI_Log("Port %u connected, portsc=%08x speed=%u", p, portsc, XHCI_PORTSC_SPEED(portsc));
@@ -974,6 +994,27 @@ void RavynXHCIPort::disableSlot(UInt32 slotId)
         return;
     }
 
+    fDCBAA[slotId] = 0;
+}
+
+void RavynXHCIPort::freeSlotResources(UInt32 slotId)
+{
+    if (slotId == 0 || slotId >= 64) return;
+
+    SlotResources &sr = fSlots[slotId];
+    if (sr.deviceCtxMem) { sr.deviceCtxMem->release(); sr.deviceCtxMem = NULL; }
+    if (sr.inputCtxMem)  { sr.inputCtxMem->release();  sr.inputCtxMem = NULL; }
+    if (sr.ep0RingMem)  { sr.ep0RingMem->release();  sr.ep0RingMem = NULL; sr.ep0Ring = NULL; }
+    if (sr.bulkInRingMem) {
+        sr.bulkInRingMem->release();
+        sr.bulkInRingMem = NULL;
+        sr.bulkInRing = NULL;
+    }
+    if (sr.bulkOutRingMem) {
+        sr.bulkOutRingMem->release();
+        sr.bulkOutRingMem = NULL;
+        sr.bulkOutRing = NULL;
+    }
     fDCBAA[slotId] = 0;
 }
 
@@ -1187,6 +1228,91 @@ bool RavynXHCIPort::configureBulkEndpoints(UInt32 slotId, UInt8 inEp, UInt16 inM
     return true;
 }
 
+bool RavynXHCIPort::configureInterruptInEndpoint(UInt32 slotId, UInt8 epNum,
+                                                 UInt16 maxPkt, UInt8 interval)
+{
+    SlotResources &sr = fSlots[slotId];
+    XHCIInputContext *ic = (XHCIInputContext *)sr.inputCtxMem->getBytesNoCopy();
+    bzero(ic, sizeof(*ic));
+
+    UInt32 inDCI = epNum * 2 + 1;
+    ic->control.addFlags = (1U << 0) /* slot */ | (1U << inDCI);
+
+    XHCIDeviceContext *dc = (XHCIDeviceContext *)sr.deviceCtxMem->getBytesNoCopy();
+    ic->slot = dc->slot;
+    ic->slot.dword0 = (ic->slot.dword0 & ~((UInt32)0x1F << SLOT_CTX_ENTRIES_SHIFT)) |
+                      (inDCI << SLOT_CTX_ENTRIES_SHIFT);
+
+    /* A keyboard slot has no bulk endpoints, so reuse the bulk-IN ring fields
+     * (same convention markSlotAsHub uses for a hub's status-change EP). */
+    if (!allocRing(&sr.bulkInRingMem, &sr.bulkInRing, kRingTRBs)) return false;
+    sr.bulkInEnqueue = 0; sr.bulkInCycle = 1;
+    sr.bulkInRing[kRingTRBs - 1].param = sr.bulkInRingMem->getPhysicalAddress();
+    sr.bulkInRing[kRingTRBs - 1].control = TRB_SET_TYPE(TRB_TYPE_LINK) | TRB_TC | TRB_CYCLE;
+
+    /* EP Context dword0 bits 23:16 = Interval (already a 125us-microframe
+     * exponent for LS/FS/HS interrupt endpoints as reported in bInterval-
+     * derived form); pass through what enumeration computed. */
+    ic->ep[inDCI - 1].dword0 = ((UInt32)interval << 16);
+    ic->ep[inDCI - 1].dword1 = EP_CTX_CERR(3) | (EP_TYPE_INTERRUPT_IN << EP_CTX_TYPE_SHIFT) |
+                               ((UInt32)maxPkt << EP_CTX_MAXPKT_SHIFT);
+    ic->ep[inDCI - 1].trDequeuePtr = sr.bulkInRingMem->getPhysicalAddress() | 1;
+    ic->ep[inDCI - 1].avgTrbLen_maxEsitLo = maxPkt;
+
+    UInt8 cc = 0; UInt32 slotOut = 0;
+    bool ok = doCommand(sr.inputCtxMem->getPhysicalAddress(), 0,
+                        TRB_SET_TYPE(TRB_TYPE_CONFIGURE_EP) | TRB_SET_SLOT(slotId),
+                        &cc, &slotOut, 1000);
+    if (!ok || cc != TRB_CC_SUCCESS) {
+        XHCI_Log("Configure interrupt EP failed slot=%u cc=%u", slotId, cc);
+        return false;
+    }
+    return true;
+}
+
+bool RavynXHCIPort::hidSetProtocol(UInt32 slotId, UInt8 iface, UInt8 protocol)
+{
+    USBSetupPacket setup = { USB_HID_REQTYPE_SET, USB_HID_REQ_SET_PROTOCOL,
+                             protocol, iface, 0 };
+    return controlTransfer(slotId, setup, NULL, 0, false);
+}
+
+bool RavynXHCIPort::hidSetIdle(UInt32 slotId, UInt8 iface, UInt8 duration)
+{
+    USBSetupPacket setup = { USB_HID_REQTYPE_SET, USB_HID_REQ_SET_IDLE,
+                             (UInt16)((UInt16)duration << 8), iface, 0 };
+    return controlTransfer(slotId, setup, NULL, 0, false);
+}
+
+bool RavynXHCIPort::pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutMs)
+{
+    if (kbdIdx < 0 || kbdIdx >= 8 || !fKbd[kbdIdx].valid) return false;
+    KbdDevice &k = fKbd[kbdIdx];
+    SlotResources &sr = fSlots[k.slotId];
+    UInt32 dci = k.intrEp * 2 + 1;
+
+    if (!k.tdOutstanding) {
+        /* Arm one 8-byte interrupt-IN transfer. Under SET_IDLE(0) the device
+         * only completes it when a key state changes, so we submit once and
+         * keep waiting across idle poll intervals rather than re-queuing a TD
+         * every call (which would pile up on the ring). */
+        pushTRB(sr.bulkInRing, sr.bulkInEnqueue, sr.bulkInCycle, kRingTRBs,
+                k.reportPhys, 8, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
+        ringDoorbell(k.slotId, dci);
+        k.tdOutstanding = true;
+    }
+
+    UInt8 cc = 0;
+    if (!waitTransferEvent(k.slotId, dci, &cc, timeoutMs))
+        return false; /* still armed; caller loops and waits again */
+
+    k.tdOutstanding = false;
+    if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)
+        return false;
+    for (int i = 0; i < 8; i++) outReport[i] = k.reportVirt[i];
+    return true;
+}
+
 /* A Normal TRB's Transfer Length is only a 17-bit field in TRB.status
  * (bits 22-31 there are TD Size / Interrupter Target, not length) so any
  * single TRB is capped at 0x1FFFF bytes, and anything above ~64KB risks
@@ -1340,17 +1466,25 @@ bool RavynXHCIPort::hubGetPortStatus(UInt32 slotId, UInt8 port1based, UInt32 *ou
 bool RavynXHCIPort::enumerateHubPort(UInt32 hubSlotId, UInt32 rootPort0based, UInt32 hubRouteString,
                                      UInt8 port1based, bool superSpeedHub, int depth)
 {
+    if (depth >= 2) {
+        XHCI_Log("Hub slot=%u port=%u: depth limit reached (%d), skipping", hubSlotId, port1based, depth);
+        return false;
+    }
+
     hubSetPortFeature(hubSlotId, port1based, USB_HUB_FEAT_PORT_POWER);
     IOSleep(20);
 
     UInt32 status = 0;
     bool connected = false;
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 10; i++) {
         if (!hubGetPortStatus(hubSlotId, port1based, &status)) break;
         if (status & USB_PORTSTATUS_CONNECTION) { connected = true; break; }
         IOSleep(25);
     }
-    if (!connected) return false;
+    if (!connected) {
+        XHCI_Log("Hub slot=%u port=%u: no connection, status=%08x", hubSlotId, port1based, status);
+        return false;
+    }
     XHCI_Log("Hub slot=%u port=%u: device connected, status=%08x", hubSlotId, port1based, status);
 
     /* Unlike a root xHCI port (which the host controller itself resets and
@@ -1366,7 +1500,7 @@ bool RavynXHCIPort::enumerateHubPort(UInt32 hubSlotId, UInt32 rootPort0based, UI
     if (!hubSetPortFeature(hubSlotId, port1based, USB_HUB_FEAT_PORT_RESET)) return false;
 
     bool resetDone = false;
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 25; i++) {
         if (!hubGetPortStatus(hubSlotId, port1based, &status)) break;
         if (status & (USB_PORTCHANGE_C_RESET | USB_PORTCHANGE_C_BH_RESET)) { resetDone = true; break; }
         IOSleep(10);
@@ -1421,10 +1555,18 @@ bool RavynXHCIPort::enumerateHubPort(UInt32 hubSlotId, UInt32 rootPort0based, UI
     bool needsTT = !superSpeedHub && (speed == 1 || speed == 2);
     UInt32 ttHubSlot = needsTT ? hubSlotId : 0;
     UInt32 ttPortNum = needsTT ? port1based : 0;
-    if (!addressDevice(slotId, rootPort0based, routeString, speed, maxPkt0, ttHubSlot, ttPortNum))
+    if (!addressDevice(slotId, rootPort0based, routeString, speed, maxPkt0, ttHubSlot, ttPortNum)) {
+        disableSlot(slotId);
+        freeSlotResources(slotId);
         return false;
+    }
 
-    return enumerateSlotDevice(slotId, rootPort0based, routeString, speed, depth + 1);
+    if (!enumerateSlotDevice(slotId, rootPort0based, routeString, speed, depth + 1)) {
+        disableSlot(slotId);
+        freeSlotResources(slotId);
+        return false;
+    }
+    return true;
 }
 
 /* Given an addressed slot, decide whether it's a hub (recurse into its
@@ -1513,20 +1655,29 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
             return false;
         }
         UInt8 numPorts = hubDescBuf[2];
-        XHCI_Log("slot %u: %s hub, %u downstream ports, intrEp=%u(%u)", slotId,
-                superSpeedHub ? "SuperSpeed" : "USB2", numPorts, hubIntrEp, hubIntrMaxPkt);
+        UInt32 powerGoodMs = ((UInt32)hubDescBuf[5]) * 2;
+        if (powerGoodMs < 100) powerGoodMs = 100;
+        if (powerGoodMs > 1000) powerGoodMs = 1000;
+        XHCI_Log("slot %u: %s hub, %u downstream ports, intrEp=%u(%u), powerGood=%ums",
+                slotId, superSpeedHub ? "SuperSpeed" : "USB2", numPorts,
+                hubIntrEp, hubIntrMaxPkt, powerGoodMs);
         if (numPorts == 0 || numPorts > 32) return false;
 
         bool multiTT = (!superSpeedHub && devDesc.bDeviceProtocol == 2);
         if (!markSlotAsHub(slotId, numPorts, multiTT, hubIntrEp, hubIntrMaxPkt, hubIntrInterval))
             return false;
 
-        bool anyMSC = false;
+        for (UInt8 p = 1; p <= numPorts; p++)
+            hubSetPortFeature(slotId, p, USB_HUB_FEAT_PORT_POWER);
+        IOSleep(powerGoodMs);
+
+        bool anyUseful = false;
         for (UInt8 p = 1; p <= numPorts; p++) {
-            if (enumerateHubPort(slotId, rootPort0based, routeString, p, superSpeedHub, depth))
-                anyMSC = true;
+            if (enumerateHubPort(slotId, rootPort0based, routeString, p, superSpeedHub, depth)) {
+                anyUseful = true;
+            }
         }
-        return anyMSC;
+        return anyUseful;
     }
 
     /* Not a hub: walk descriptors for a Mass Storage / SCSI / Bulk-Only
@@ -1540,8 +1691,14 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
     UInt8 bulkInEp = 0, bulkOutEp = 0;
     UInt16 bulkInMaxPkt = 0, bulkOutMaxPkt = 0;
 
+    /* Also watch for a HID boot keyboard interface + its interrupt IN EP. */
+    bool foundKbd = false;
+    UInt8 kbdIface = 0, kbdIntrEp = 0, kbdInterval = 0;
+    UInt16 kbdIntrMaxPkt = 0;
+
     UInt32 off = 0;
     bool inMSCInterface = false;
+    bool inKbdInterface = false;
     while (off + 2 <= totalLen) {
         UInt8 len = cfgBuf[off];
         UInt8 type = cfgBuf[off + 1];
@@ -1553,9 +1710,16 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
                               ifd->bInterfaceSubClass == USB_IF_SUBCLASS_SCSI &&
                               ifd->bInterfaceProtocol == USB_IF_PROTOCOL_BULK_ONLY);
             if (inMSCInterface) foundMSC = true;
-        } else if (type == 5 /* endpoint */ && inMSCInterface && len >= sizeof(USBEndpointDescriptor)) {
+            inKbdInterface = (ifd->bInterfaceClass == USB_IF_CLASS_HID &&
+                              ifd->bInterfaceSubClass == USB_HID_SUBCLASS_BOOT &&
+                              ifd->bInterfaceProtocol == USB_HID_PROTOCOL_KEYBOARD);
+            if (inKbdInterface && !foundKbd) {
+                foundKbd = true;
+                kbdIface = ifd->bInterfaceNumber;
+            }
+        } else if (type == 5 /* endpoint */ && len >= sizeof(USBEndpointDescriptor)) {
             USBEndpointDescriptor *epd = (USBEndpointDescriptor *)(cfgBuf + off);
-            if ((epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_BULK) {
+            if (inMSCInterface && (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_BULK) {
                 if (epd->bEndpointAddress & USB_EP_DIR_IN) {
                     bulkInEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
                     bulkInMaxPkt = epd->wMaxPacketSize;
@@ -1563,14 +1727,33 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
                     bulkOutEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
                     bulkOutMaxPkt = epd->wMaxPacketSize;
                 }
+            } else if (inKbdInterface && !kbdIntrEp &&
+                       (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_INTERRUPT &&
+                       (epd->bEndpointAddress & USB_EP_DIR_IN)) {
+                kbdIntrEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
+                kbdIntrMaxPkt = epd->wMaxPacketSize;
+                kbdInterval = epd->bInterval;
             }
         }
         off += len;
     }
     IOFree(cfgBuf, totalLen);
 
+    /* HID boot keyboard: configure its interrupt IN endpoint, select boot
+     * protocol + report-on-change, and publish an IOHIKeyboard nub that runs
+     * its own poll thread and feeds keys into IOBSDConsole. */
+    if (foundKbd && kbdIntrEp) {
+        XHCI_Log("slot %u: HID boot keyboard, iface=%u intrEp=%u(%u) interval=%u",
+                slotId, kbdIface, kbdIntrEp, kbdIntrMaxPkt, kbdInterval);
+        if (!configureInterruptInEndpoint(slotId, kbdIntrEp, kbdIntrMaxPkt, kbdInterval))
+            return false;
+        hidSetProtocol(slotId, kbdIface, USB_HID_PROTOCOL_BOOT);
+        hidSetIdle(slotId, kbdIface, 0);
+        return publishKeyboard(slotId, kbdIntrEp, kbdIntrMaxPkt);
+    }
+
     if (!foundMSC || !bulkInEp || !bulkOutEp) {
-        XHCI_Log("slot %u: no bulk-only mass storage interface found", slotId);
+        XHCI_Log("slot %u: no bulk-only mass storage or HID keyboard interface found", slotId);
         return false;
     }
     XHCI_Log("slot %u: MSC interface found, bulkIn=ep%u(%u) bulkOut=ep%u(%u)",
@@ -1611,6 +1794,48 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
     return true;
 }
 
+bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt)
+{
+    int idx = -1;
+    for (int i = 0; i < 8; i++) if (!fKbd[i].valid) { idx = i; break; }
+    if (idx < 0) return false;
+
+    KbdDevice &k = fKbd[idx];
+    bzero(&k, sizeof(k));
+    k.reportMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut, 8,
+        0xFFFFFFFFFFFFFFFFULL);
+    if (!k.reportMem) return false;
+    bzero(k.reportMem->getBytesNoCopy(), 8);
+    k.valid       = true;
+    k.slotId      = slotId;
+    k.intrEp      = intrEp;
+    k.intrMaxPkt  = intrMaxPkt;
+    k.tdOutstanding = false;
+    k.reportVirt  = (volatile UInt8 *)k.reportMem->getBytesNoCopy();
+    k.reportPhys  = k.reportMem->getPhysicalAddress();
+
+    RavynXHCIKeyboard *kbd = new RavynXHCIKeyboard;
+    if (!kbd) { k.valid = false; return false; }
+    if (!kbd->initWithPort(this, idx) || !kbd->attach(this)) {
+        kbd->release();
+        k.valid = false;
+        return false;
+    }
+    fKbdNubs[idx] = kbd;
+    if (!kbd->start(this)) {
+        XHCI_Log("slot %u: keyboard nub start() failed", slotId);
+        kbd->detach(this);
+        kbd->release();
+        fKbdNubs[idx] = NULL;
+        k.valid = false;
+        return false;
+    }
+    kbd->registerService();
+    XHCI_Log("slot %u: usbkbd%d published", slotId, idx);
+    return true;
+}
+
 /* Full enumeration: Enable Slot -> Address -> GET_DESCRIPTOR -> hub or MSC */
 bool RavynXHCIPort::tryEnumerateMassStorage(UInt32 port0based, UInt32 speed)
 {
@@ -1623,9 +1848,18 @@ bool RavynXHCIPort::tryEnumerateMassStorage(UInt32 port0based, UInt32 speed)
     XHCI_Log("Port %u: slot %u enabled", port0based, slotId);
 
     UInt16 maxPkt0 = 8;
-    if (!addressDevice(slotId, port0based, 0, speed, maxPkt0)) return false;
+    if (!addressDevice(slotId, port0based, 0, speed, maxPkt0)) {
+        disableSlot(slotId);
+        freeSlotResources(slotId);
+        return false;
+    }
 
-    return enumerateSlotDevice(slotId, port0based, 0, speed, 0);
+    if (!enumerateSlotDevice(slotId, port0based, 0, speed, 0)) {
+        disableSlot(slotId);
+        freeSlotResources(slotId);
+        return false;
+    }
+    return true;
 }
 
 IOReturn RavynXHCIPort::botTransfer(UInt32 slotId,

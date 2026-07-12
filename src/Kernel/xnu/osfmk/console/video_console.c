@@ -1246,9 +1246,28 @@ gc_update_color(int color, boolean_t fore)
 	gc_ops.update_color(color, fore);
 }
 
+/* serial_putc has no shared prototype (serial_console.c declares it the same
+ * way); used below to mirror the video console to the UART. */
+extern void serial_putc(char);
+
 void
 vcputc(__unused int l, __unused int u, int c)
 {
+	/*
+	 * PD: mirror everything rendered on the video console to the serial
+	 * port. vcputc is the single sink for the VC_CONS_OPS console, so once
+	 * IOFramebuffer flips the active console to video, ALL output that would
+	 * otherwise only reach the framebuffer - including userland printf via
+	 * /dev/console (e.g. launchd) - passes through here. Mirroring at this
+	 * choke point (rather than the kprintf/ring paths, which miss the
+	 * userland tty path) is what makes the full boot visible on serial.
+	 * _cnputs() already injects '\r' before '\n', so no CR handling here.
+	 * Gated on serial output being requested; kprintf no longer emits its
+	 * own serial copy (PE_kputc is plain cnputc_unbuffered), so no doubling.
+	 */
+	if (serialmode & SERIALMODE_OUTPUT) {
+		serial_putc((char)c);
+	}
 	if (gc_initialized && gc_enabled) {
 		VCPUTC_LOCK_LOCK();
 		if (gc_enabled) {

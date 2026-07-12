@@ -957,9 +957,10 @@ consdebug_putc(char c)
 
 	debug_putc(c);
 
-	if (!console_is_serial() && !disable_serial_output) {
-		PE_kputc(c);
-	}
+	/* No separate PE_kputc() serial re-emit: cnputc() above already reaches
+	 * the serial port (via the serial cons_ops early, or vcputc()'s serial
+	 * mirror once the video console is active), so re-emitting here would
+	 * double every panic character on both screen and serial. */
 }
 
 void
@@ -971,9 +972,8 @@ consdebug_putc_unbuffered(char c)
 
 	debug_putc(c);
 
-	if (!console_is_serial() && !disable_serial_output) {
-		PE_kputc(c);
-	}
+	/* See consdebug_putc(): cnputc_unbuffered() already reaches serial via
+	 * vcputc(), so no separate PE_kputc() re-emit (it would double). */
 }
 
 void

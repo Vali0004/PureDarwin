@@ -37,11 +37,13 @@
 extern void XHCI_Log(const char *fmt, ...);
 
 class RavynXHCIMassStorageDisk;
+class RavynXHCIKeyboard;
 
 class RavynXHCIPort : public IOService
 {
     OSDeclareDefaultStructors(RavynXHCIPort);
     friend class RavynXHCIMassStorageDisk;
+    friend class RavynXHCIKeyboard;
 
 public:
     IOService *probe(IOService *provider, SInt32 *score) override;
@@ -54,6 +56,14 @@ public:
                          const void *cbwCB, UInt8 cbwLen,
                          UInt32 dataLen, bool dataIn,
                          IOMemoryDescriptor *buffer, UInt64 bufOff);
+
+    /* Called by the RavynXHCIKeyboard poll thread. Submits one interrupt-IN
+     * TD (only if none is outstanding for this device) and waits up to
+     * timeoutMs for its completion; on a report it copies the 8-byte HID
+     * boot report into outReport and returns true. A timeout leaves the TD
+     * armed so the next call keeps waiting the same transfer - a boot
+     * keyboard under SET_IDLE(0) only completes it when a key state changes. */
+    bool pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutMs);
 
 private:
     /* One tracked USB device slot that turned out to be Mass Storage. */
@@ -68,6 +78,18 @@ private:
         UInt32   blockSize;
         char     vendor[9];
         char     product[17];
+    };
+
+    /* One tracked USB device slot that turned out to be a HID boot keyboard. */
+    struct KbdDevice {
+        bool                       valid;
+        UInt32                     slotId;
+        UInt8                      intrEp;       /* interrupt IN endpoint number */
+        UInt16                     intrMaxPkt;
+        bool                       tdOutstanding; /* an interrupt-IN TD is armed */
+        IOBufferMemoryDescriptor * reportMem;    /* 8-byte DMA report buffer */
+        volatile UInt8           * reportVirt;
+        UInt64                     reportPhys;
     };
 
     IOPCIDevice        * fProvider;
@@ -116,6 +138,26 @@ private:
     UInt32                      fEventRingDequeue;
     UInt8                       fEventRingCycle;
 
+    /* Single-consumer event-ring dispatch. With a background keyboard poll
+     * thread running concurrently with disk I/O, multiple waiters share one
+     * event ring; letting each waiter consume the ring head directly would
+     * make one waiter discard another's completion (they matched by slot and
+     * dropped the rest). Instead serviceEventRing() is the sole consumer
+     * (under fEventLock) and records each completion here for the specific
+     * waiter to pick up. This is also the shape a real interrupt handler
+     * would take. */
+    IOLock              * fEventLock;
+    struct XferCompletion {
+        volatile bool pending;
+        UInt8         cc;
+    };
+    XferCompletion fXferDone[64][32]; /* [slotId][DCI] */
+    /* Last command completion (commands are serialized under fCmdLock). */
+    volatile UInt64 fCmdDoneParam;
+    volatile bool   fCmdDonePending;
+    UInt8           fCmdDoneCC;
+    UInt32          fCmdDoneSlot;
+
     /* Per-slot device context + input context + transfer rings (EP0, bulk IN/OUT). */
     struct SlotResources {
         IOBufferMemoryDescriptor * deviceCtxMem;
@@ -137,6 +179,9 @@ private:
 
     MSCDevice fMSC[16];
     RavynXHCIMassStorageDisk * fDiskNubs[16];
+
+    KbdDevice fKbd[8];
+    RavynXHCIKeyboard * fKbdNubs[8];
 
     inline UInt32 capRead32(UInt32 off) const
         { return *(volatile UInt32 *)(fCapRegs + off); }
@@ -203,8 +248,25 @@ private:
     /* Poll the event ring for a Transfer Event on the given slot/endpoint. */
     bool waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC, UInt32 timeoutMs = 1000);
 
+    /* Sole consumer of the event ring: drain all currently-available events
+     * under fEventLock, recording each into fXferDone[][]/fCmdDone* for the
+     * waiter that's looking for it. Safe to call from multiple threads. */
+    void serviceEventRing();
+
+    /* Configure a single interrupt IN endpoint (for a HID boot keyboard),
+     * reusing the slot's bulk-IN ring fields (a keyboard slot has no bulk). */
+    bool configureInterruptInEndpoint(UInt32 slotId, UInt8 epNum, UInt16 maxPkt, UInt8 interval);
+    /* HID class control requests on interface 0 (SET_PROTOCOL boot / SET_IDLE). */
+    bool hidSetProtocol(UInt32 slotId, UInt8 iface, UInt8 protocol);
+    bool hidSetIdle(UInt32 slotId, UInt8 iface, UInt8 duration);
+
+    /* Record a keyboard slot (allocating its DMA report buffer) and publish
+     * an IOHIKeyboard nub that polls it. */
+    bool publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt);
+
     bool enableSlot(UInt32 *outSlotId);
     void disableSlot(UInt32 slotId);
+    void freeSlotResources(UInt32 slotId);
     bool addressDevice(UInt32 slotId, UInt32 port0based, UInt32 routeString,
                        UInt32 speed, UInt16 &maxPacket0,
                        UInt32 parentHubSlot = 0, UInt32 parentPortNum = 0);

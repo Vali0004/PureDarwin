@@ -123,30 +123,92 @@ mapUsableBAR(IOPCIDevice *provider, UInt8 reg)
 }
 
 static bool
+readMemoryBARBaseAndSize(IOPCIDevice *provider,
+                         UInt8        reg,
+                         uint64_t   * outBase,
+                         uint64_t   * outSize)
+{
+    if (!provider || !outBase || !outSize) return false;
+
+    const uint16_t savedCmd = provider->configRead16(kIOPCIConfigCommand);
+    const uint32_t savedLo  = provider->configRead32(reg);
+    uint32_t savedHi = 0;
+
+    if (savedLo & 0x1) {
+        AHCI_Log("BAR%u is I/O space; not usable as ABAR",
+                 (reg - kIOPCIConfigBaseAddress0) / 4);
+        return false;
+    }
+
+    const bool is64 = ((savedLo & 0x6) == 0x4);
+    if (is64) {
+        if (reg > kIOPCIConfigBaseAddress4) {
+            AHCI_Log("BAR%u reports 64-bit but has no high BAR",
+                     (reg - kIOPCIConfigBaseAddress0) / 4);
+            return false;
+        }
+        savedHi = provider->configRead32(reg + 4);
+    }
+
+    provider->configWrite16(kIOPCIConfigCommand, savedCmd & ~(uint16_t)0x3);
+    provider->configWrite32(reg, 0xffffffffU);
+    if (is64) provider->configWrite32(reg + 4, 0xffffffffU);
+
+    const uint32_t maskLo = provider->configRead32(reg);
+    const uint32_t maskHi = is64 ? provider->configRead32(reg + 4) : 0xffffffffU;
+
+    provider->configWrite32(reg, savedLo);
+    if (is64) provider->configWrite32(reg + 4, savedHi);
+    provider->configWrite16(kIOPCIConfigCommand, savedCmd);
+
+    uint64_t base = savedLo & ~0x0fULL;
+    uint64_t sizeMask = maskLo & ~0x0fULL;
+    if (is64) {
+        base |= ((uint64_t)savedHi << 32);
+        sizeMask |= ((uint64_t)maskHi << 32);
+    }
+
+    if (!base || !sizeMask) return false;
+
+    uint64_t size = (~sizeMask) + 1;
+    if (!is64) size &= 0xffffffffULL;
+    if (size < 0x1000) size = 0x1000;
+    if (size > 0x1000000ULL) {
+        AHCI_Log("BAR%u sizing produced implausible size=0x%llx, ignoring",
+                 (reg - kIOPCIConfigBaseAddress0) / 4, size);
+        return false;
+    }
+
+    AHCI_Log("BAR%u sizing: is64=%d sizeMaskLo=%08x sizeMaskHi=%08x -> base=0x%llx size=0x%llx",
+             (reg - kIOPCIConfigBaseAddress0) / 4,
+             is64, maskLo, maskHi, base, size);
+
+    *outBase = base;
+    *outSize = size;
+    return true;
+}
+
+static bool
 mapABARFromConfigBAR(IOPCIDevice         * provider,
                      IOMemoryDescriptor ** outDesc,
                      IOMemoryMap        ** outMap)
 {
     if (!provider || !outDesc || !outMap) return false;
 
-    const uint32_t bar4 = provider->configRead32(kIOPCIConfigBaseAddress4);
-    const uint32_t bar5 = provider->configRead32(kIOPCIConfigBaseAddress5);
     uint64_t abarPhys = 0;
+    uint64_t abarSize = 0;
 
-    if (!(bar5 & 0x1) && (bar5 != 0xffffffffU) && (bar5 & ~0x0fU)) {
-        abarPhys = (uint64_t)(bar5 & ~0x0fU);
-    } else if (!(bar4 & 0x1) && (bar4 != 0xffffffffU) && (bar4 & ~0x0fU)) {
-        abarPhys = (uint64_t)(bar4 & ~0x0fU);
-        if ((bar4 & 0x6) == 0x4) {
-            abarPhys |= ((uint64_t)bar5 << 32);
-        }
-    }
+    if (!readMemoryBARBaseAndSize(provider, kIOPCIConfigBaseAddress5,
+                                  &abarPhys, &abarSize) &&
+        !readMemoryBARBaseAndSize(provider, kIOPCIConfigBaseAddress4,
+                                  &abarPhys, &abarSize))
+        return false;
 
-    if (!abarPhys) return false;
+    if (!abarPhys || !abarSize) return false;
 
     IOMemoryDescriptor *desc = IOMemoryDescriptor::withPhysicalAddress(
         (IOPhysicalAddress)abarPhys,
-        0x2000,
+        (IOByteCount)abarSize,
         kIODirectionNone | kIOMemoryMapperNone);
     if (!desc) return false;
 
@@ -158,8 +220,8 @@ mapABARFromConfigBAR(IOPCIDevice         * provider,
 
     *outDesc = desc;
     *outMap = map;
-    AHCI_Log("Mapped ABAR via config BAR fallback phys=%p",
-             (void *)(uintptr_t)abarPhys);
+    AHCI_Log("Mapped ABAR via config BAR fallback phys=%p size=0x%llx",
+             (void *)(uintptr_t)abarPhys, abarSize);
     return true;
 }
 

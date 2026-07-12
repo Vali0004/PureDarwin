@@ -83,17 +83,6 @@ static SIMPLE_LOCK_DECLARE(kprintf_lock, 0);
  * Only call cnputc_unbuffered() when the active console isn't already
  * serial.
  */
-extern uint32_t cons_ops_index;
-#define PE_SERIAL_CONS_OPS 0
-
-static void
-pe_kputc_mirrored(char c)
-{
-	pal_serial_putc(c);
-	if (cons_ops_index != PE_SERIAL_CONS_OPS) {
-		cnputc_unbuffered(c);
-	}
-}
 
 __startup_func
 static void
@@ -113,7 +102,13 @@ PE_init_kprintf(void)
 	 * call pal_serial_init() if our previous state was
 	 * not enabled */
 	if (!new_disable_serial_output && (!disable_serial_output || pal_serial_init())) {
-		PE_kputc = pe_kputc_mirrored;
+		/* cnputc_unbuffered routes through the active console's cons_ops:
+		 * the serial UART directly during early boot (SERIAL_CONS_OPS), and
+		 * the video console after IOFramebuffer flips to VC_CONS_OPS - where
+		 * vcputc() now mirrors every character to serial. So kprintf reaches
+		 * serial on both, with exactly one serial write per char (no separate
+		 * pal_serial_putc mirror that would double it). */
+		PE_kputc = cnputc_unbuffered;
 	} else {
 		PE_kputc = cnputc_unbuffered;
 	}

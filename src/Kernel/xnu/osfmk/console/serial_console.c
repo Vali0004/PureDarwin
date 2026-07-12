@@ -409,6 +409,9 @@ console_ring_try_empty(void)
 		if (nchars_out > 0) {
 			total_chars_out += nchars_out;
 			_cnputs(flush_buf, nchars_out);
+			/* Serial mirroring of video-console output happens in vcputc()
+			 * (osfmk/console/video_console.c), the single sink for the
+			 * VC_CONS_OPS console, so it catches the userland tty path too. */
 		}
 
 		if (__probable(!in_debugger)) {
