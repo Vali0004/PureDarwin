@@ -38,15 +38,22 @@
         installUserland = false;
         installKernel = true;
       };
+      xnuHeadersBuild = mkPureDarwinBuild {
+        pname = "puredarwin-xnu-headers";
+        buildTargets = [ "xnu_headers.extproj" ];
+        installUserland = false;
+        installKernel = false;
+        installXnuHeaders = true;
+      };
+      kextsBuild = mkPureDarwinBuild {
+        pname = "puredarwin-kexts";
+        buildTargets = [ "kexts" ];
+        installUserland = false;
+        installKernel = false;
+        installKexts = true;
+      };
       fullBuild = mkPureDarwinBuild {
         pname = "puredarwin";
-        # "kexts" is the umbrella target over every src/Kernel/Extensions
-        # kext (plain "all" is unusable: it also drags in tools/* as bogus
-        # cross-compiled targets). The BaseSystem component install then
-        # lays out the stage.sh/build-kc.sh-compatible tree.
-        # libsystem_kernel: the dylib flavor has its own BaseSystem install
-        # rule but nothing else in this set links it (they use the static
-        # archive), so name it explicitly or the component install fails.
         buildTargets = [ "helloapp" "launchd" "busybox" "xnu" "kexts" "libsystem_kernel" ];
         installUserland = false;
         installKernel = false;
@@ -66,7 +73,11 @@
         darwin-cross-toolchain = darwinCrossToolchain;
         native-ld = nativeLd;
         userland = userlandBuild;
+        xnu-headers = xnuHeadersBuild;
+        xnu = kernelBuild;
         kernel = kernelBuild;
+        kexts = kextsBuild;
+        basesystem = fullBuild;
         kc = kcBuild;
         image = imageBuild;
         default = fullBuild;
