@@ -212,7 +212,7 @@ target_compile_options(libsystem_kernel_static PRIVATE -fdollars-in-identifiers 
 
 # We define LIBSYSCALL_INTERFACE to pass to the MIG compiler below. This will indicate we don't want 'internal' versions of the given MIG files.
 target_compile_definitions(libsystem_kernel_static PRIVATE _FORTIFY_SOURCE=0 __DARWIN_VERS_1050=1 NO_SYSCALL_LEGACY SYSCALL_PRE1050 LIBSYSCALL_INTERFACE)
-if(PUREDARWIN_NIX_TOOLCHAIN)
+if(PUREDARWIN_USE_LD64_LLD)
     target_compile_definitions(libsystem_kernel_static PRIVATE PD_LD64LLD_WEAK_LIBC_FUNCPTR)
 endif()
 

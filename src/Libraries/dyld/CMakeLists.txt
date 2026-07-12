@@ -97,7 +97,7 @@ target_include_directories(dyld PRIVATE
 # ___memset_chk) which would otherwise need a libc we don't link.
 target_compile_definitions(dyld PRIVATE NDEBUG BUILDING_DYLD=1 BUILDING_LIBDYLD=1
     _DARWIN_C_SOURCE CORECRYPTO_DONOT_USE_TRANSPARENT_UNION _FORTIFY_SOURCE=0)
-if(PUREDARWIN_NIX_TOOLCHAIN)
+if(PUREDARWIN_USE_LD64_LLD)
     target_compile_definitions(dyld PRIVATE PD_LD64LLD_WEAK_DYLD_FALLBACKS)
 endif()
 
@@ -185,7 +185,7 @@ target_link_options(dyld PRIVATE
     # of which dyld's used call graph reaches.
     -Wl,-dead_strip
 )
-if(PUREDARWIN_NIX_TOOLCHAIN)
+if(PUREDARWIN_USE_LD64_LLD)
     # ld64.lld diagnoses duplicate archive members before ordinary dead_strip
     # can discard them. Apple's ld64 accepts this dyld link as-is.
     target_link_options(dyld PRIVATE -Wl,--dead-strip-duplicates)

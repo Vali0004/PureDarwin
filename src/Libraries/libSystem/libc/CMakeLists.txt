@@ -72,6 +72,7 @@ target_link_libraries(libc_public_headers INTERFACE libc_headers_gen)
 target_link_libraries(libc_kernel_headers INTERFACE libc_headers_gen)
 
 target_include_directories(libc_public_headers INTERFACE ${libc_headers_dir}/usr/include)
+target_include_directories(libc_public_headers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/wrappers)
 
 target_include_directories(libc_private_headers INTERFACE ${libc_headers_dir}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders)
 target_include_directories(libc_private_headers INTERFACE ${libc_headers_dir}/usr/local/include)

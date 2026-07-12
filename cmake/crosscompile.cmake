@@ -6,6 +6,15 @@
 # targeting Darwin) as "<triple>-ld"; prefer that, matching migcom's
 # seeded-via-package-manager pattern, and only fall back to host_ld if it
 # can't be found.
+if(PUREDARWIN_NIX_TOOLCHAIN AND DEFINED ENV{NIX_NATIVE_LD_PATH})
+    set(NATIVE_LD64_EXECUTABLE "$ENV{NIX_NATIVE_LD_PATH}" CACHE FILEPATH "Native host ld64 for Darwin links" FORCE)
+endif()
+
+set(PUREDARWIN_USE_LD64_LLD FALSE)
+if(PUREDARWIN_NIX_TOOLCHAIN AND NOT NATIVE_LD64_EXECUTABLE)
+    set(PUREDARWIN_USE_LD64_LLD TRUE)
+endif()
+
 if(NOT CMAKE_HOST_APPLE AND NOT NATIVE_LD64_EXECUTABLE)
     get_filename_component(_ld64_ar_name "${CMAKE_AR}" NAME)
     if(_ld64_ar_name MATCHES "^(.+)-ar$")
@@ -18,9 +27,7 @@ function(add_darwin_executable name)
 
     add_executable(${name})
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
-    if(PUREDARWIN_NIX_TOOLCHAIN)
-        # nop
-    elseif(CMAKE_HOST_APPLE)
+    if(CMAKE_HOST_APPLE)
         # PD own ld64 (host_ld) is built without TAPI support, so it cannot
         # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd), fall
         # back to the real Apple linker via xcrun, which handles them fine.
@@ -28,6 +35,8 @@ function(add_darwin_executable name)
         target_link_options(${name} PRIVATE -fuse-ld=${XCRUN_LD})
     elseif(NATIVE_LD64_EXECUTABLE)
         target_link_options(${name} PRIVATE -fuse-ld=${NATIVE_LD64_EXECUTABLE})
+    elseif(PUREDARWIN_USE_LD64_LLD)
+        target_link_options(${name} PRIVATE -fuse-ld=lld)
     else()
         add_dependencies(${name} host_ld)
         target_link_options(${name} PRIVATE -fuse-ld=$<TARGET_FILE:host_ld>)
@@ -80,9 +89,7 @@ function(add_darwin_shared_library name)
         add_library(${name} SHARED)
     endif()
 
-    if(PUREDARWIN_NIX_TOOLCHAIN)
-        # nop
-    elseif(CMAKE_HOST_APPLE)
+    if(CMAKE_HOST_APPLE)
         # PD own ld64 (host_ld) is built without TAPI support, so it cannot
         # resolve the SDK .tbd text-stub files (e.g. libSystem.tbd), fall
         # back to the real Apple linker via xcrun, which handles them fine.
@@ -90,6 +97,8 @@ function(add_darwin_shared_library name)
         target_link_options(${name} PRIVATE -fuse-ld=${XCRUN_LD})
     elseif(NATIVE_LD64_EXECUTABLE)
         target_link_options(${name} PRIVATE -fuse-ld=${NATIVE_LD64_EXECUTABLE})
+    elseif(PUREDARWIN_USE_LD64_LLD)
+        target_link_options(${name} PRIVATE -fuse-ld=lld)
     else()
         add_dependencies(${name} host_ld)
         target_link_options(${name} PRIVATE -fuse-ld=$<TARGET_FILE:host_ld>)

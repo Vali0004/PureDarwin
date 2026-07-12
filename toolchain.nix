@@ -27,20 +27,29 @@ let
   lld = llvmPackages_21.lld;
   bintools = llvmPackages_21.bintools-unwrapped;
 
-  # -fuse-ld must be the *name* "lld", not an absolute path to ld64.lld:
-  # clang's Darwin driver only auto-derives -arch/-platform_version/
-  # -syslibroot for the linker job when it recognizes the linker as its own
-  # lld integration (name-based dispatch); pointed at an arbitrary absolute
-  # binary path it falls back to a bare invocation and ld64.lld then fails
-  # with "missing -platform_version"/"missing -arch". So resolve it by
-  # PATH instead, with lld's bin dir prepended.
   compilerWrapper = name: realBin: writeShellScriptBin "${target}-${name}" ''
     SDK="''${DARWIN_SDK_ROOT:-${defaultSdkRoot}}"
     export PATH="${lld}/bin:$PATH"
+    # Default to lld, but only if the caller didn't already pass their own
+    # -fuse-ld (xnu's kernel Makefile does, pointed at the real cctools
+    # ld64 - see native-ld.nix): CMake's own internal "does this compiler
+    # work" sanity check (TryCompile, run at configure time, outside any
+    # of our CMakeLists) doesn't pass -fuse-ld at all, and without lld as
+    # a default there it falls back to plain "ld" (real ELF ld.bfd,
+    # "unrecognised emulation mode: llvm"). But passing -fuse-ld=lld
+    # AHEAD of a caller-supplied -fuse-ld=<real ld> on the same command
+    # line reliably segfaulted clang++ instead of the later flag cleanly
+    # overriding the earlier one.
+    fuseld=(-fuse-ld=lld)
+    for a in "$@"; do
+      case "$a" in
+        -fuse-ld=*) fuseld=() ;;
+      esac
+    done
     exec ${realBin} \
       -target ${clangTarget} \
       -isysroot "$SDK" \
-      -fuse-ld=lld \
+      "''${fuseld[@]}" \
       "$@"
   '';
 
@@ -49,9 +58,16 @@ let
   '';
 
   ldWrapper = writeShellScriptBin "${target}-ld" ''
+    args=()
+    for a in "$@"; do
+      case "$a" in
+        -kernel) ;;
+        *) args+=("$a") ;;
+      esac
+    done
     exec ${lld}/bin/ld64.lld \
-      -platform_version 11.0 11.3 \
-      "$@"
+      -platform_version macos 11.0 11.3 \
+      "''${args[@]}"
   '';
 
   # osxcross also exposes a bare (non-triple-prefixed) "dsymutil" on PATH,
@@ -79,13 +95,7 @@ let
         -show-sdk-platform-path|--show-sdk-platform-path) echo "$SDK/.."; exit 0 ;;
         -show-sdk-version|--show-sdk-version) echo "11.3"; exit 0 ;;
         -find|--find)
-          # -find PRINTS the resolved path (matching real xcrun - callers
-          # like xnu's makedefs do `export MIG := $(shell xcrun -find mig)`
-          # and expect text output, not execution).
           shift
-          # cc/c++ aren't wrapper names we ship - MIG and friends invoke
-          # bare "cc", which should mean our clang wrapper, same as real
-          # Apple/osxcross xcrun -find cc.
           case "$1" in
             cc) find_name=clang ;;
             c++) find_name=clang++ ;;
@@ -110,9 +120,7 @@ let
       c++) wrapped=clang++ ;;
       *) wrapped="$tool" ;;
     esac
-    # `exec --` (not bare `exec`): if $wrapped/$tool ever starts with "-"
-    # (has happened with a literal "--" token), bash's exec builtin
-    # misparses it as ITS OWN option rather than the command to run.
+
     if [ -x "$BINDIR/${target}-$wrapped" ]; then
       exec -- "$BINDIR/${target}-$wrapped" "$@"
     fi

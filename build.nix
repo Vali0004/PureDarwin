@@ -4,6 +4,9 @@
 , ninja
 , requireFile
 , darwinCrossToolchain
+, nativeLd
+, nativeUnifdef
+, nativeMigcom
 , openssl
 , bison
 , flex
@@ -27,6 +30,13 @@
 , buildTargets ? [ "helloapp" "launchd" ]
 , installUserland ? true
 , installKernel ? false
+# Run the project's real `cmake --install --component BaseSystem` into $out
+# instead of (or in addition to) the cherry-picked copies above - this is
+# the full build-install layout userland-test/stage.sh and
+# kc-tools/build-kc.sh consume: bin/, sbin/, usr/lib/{dyld,libSystem.B.dylib,
+# system/libdyld.dylib}, System/Library/Extensions/*.kext and
+# System/Library/Kernels/.
+, installBaseSystem ? false
 }:
 
 let
@@ -82,7 +92,7 @@ stdenv.mkDerivation {
   # cross-compiled side's configure) is a Mach-O stub, useless here.
   # libuuid: xnu's SETUP/kextsymboltool (a real host-native build tool,
   # see clang comment above) #includes <uuid/uuid.h>.
-  buildInputs = [ zlib libuuid ];
+  buildInputs = [ zlib libuuid openssl ];
 
   NIX_DARWIN_TOOLCHAIN_DIR = "${darwinCrossToolchain}/bin";
 
@@ -92,7 +102,7 @@ stdenv.mkDerivation {
     tar xf ${sdkTarball} -C sdk
     export DARWIN_SDK_ROOT="$PWD/sdk/MacOSX11.3.sdk"
 
-    sed -i 's#/bin/pwd#pwd#g' src/Kernel/xnu/Makefile
+    sed -i 's#/bin/pwd#pwd#g' src/Kernel/xnu/Makefile src/Userspace/busybox/upstream/Makefile
 
     sed -i "s#/usr/local/osxcross/bin/xcrun#${darwinCrossToolchain}/bin/xcrun#g" \
       src/Kernel/xnu/cmake/MakeInc.cmd.in tools/mig/mig.sh
@@ -111,6 +121,23 @@ EOF
     # patchShebangs does not rewrite this csh script, but /bin/csh is also
     # absent in the Nix sandbox.
     sed -i '1c#!${tcsh}/bin/tcsh -f' src/Kernel/xnu/SETUP/config/doconf
+
+    # Real cctools ld64 (host_ld target, tools/cctools/ld64) is what
+    # actually understands xnu's "-kernel -static" kernel-linking mode and
+    # emits a correct entry-point load command - nixpkgs' ld64.lld (used
+    # for every other cross-compiled target) doesn't implement either, and
+    # a kernel linked with it boots into "failed to find entry vmaddr".
+    # Built as its own Nix derivation (native-ld.nix) instead of inline
+    # here so unrelated source edits (xnu, userland, ...) don't force an
+    # ~8 minute rebuild of it on every iteration.
+    export NIX_NATIVE_LD_PATH="${nativeLd}/bin/ld"
+    export NIX_HOST_CC_PATH="${clang}/bin/clang"
+    # Same reasoning, same pattern - migcom.nix/unifdef.nix instead of
+    # in-tree native builds of these two, see tools/mig/CMakeLists.txt
+    # and tools/unifdef/CMakeLists.txt for the consuming side.
+    export NIX_MIGCOM_PATH="${nativeMigcom}/bin/migcom"
+    export NIX_UNIFDEF_PATH="${nativeUnifdef}/bin/unifdef"
+
     cmake -S . -B build-nix -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE=cmake/nix-toolchain.cmake \
       -DCMAKE_BUILD_TYPE=Debug \
@@ -130,7 +157,8 @@ EOF
     runHook preBuild
     mkdir -p .nix-stubs
     ln -sf "$PWD/tools/mig/mig.sh" .nix-stubs/mig
-    ln -sf "$PWD/build-nix/tools/mig/migcom_native/migcom.native" .nix-stubs/migcom
+    ln -sf "${nativeMigcom}/bin/migcom" .nix-stubs/migcom
+    ln -sf "${nativeUnifdef}/bin/unifdef" .nix-stubs/unifdef
     cat > .nix-stubs/libtool <<'EOF'
 #!/bin/sh
 if [ "$1" = "-static" ] && [ "$2" = "-o" ]; then
@@ -142,7 +170,7 @@ echo "unsupported libtool invocation: $*" >&2
 exit 1
 EOF
     chmod +x .nix-stubs/libtool
-    export PATH="$PWD/.nix-stubs:$PWD/build-nix/tools/mig:$PWD/build-nix/tools/cctools/misc:$PWD/build-nix/tools/unifdef:$PWD/build-nix/tools/dtrace_ctf/tools:$PATH"
+    export PATH="$PWD/.nix-stubs:$PWD/build-nix/tools/mig:$PWD/build-nix/tools/cctools/misc:$PWD/build-nix/tools/dtrace_ctf/tools:$PATH"
     ninja -C build-nix ${lib.escapeShellArgs buildTargets}
     runHook postBuild
   '';
@@ -153,12 +181,32 @@ EOF
     mkdir -p $out/bin
     cp build-nix/src/Userspace/helloapp/helloapp $out/bin/
     cp build-nix/src/Userspace/launchd/launchd $out/bin/
+    cp build-nix/src/Userspace/busybox/build/busybox $out/bin/
   '' + lib.optionalString installKernel ''
     mkdir -p $out
     cp -R build-nix/src/Kernel/xnu/xnu/. $out/
+  '' + lib.optionalString installBaseSystem ''
+    cmake --install build-nix --component BaseSystem --prefix $out
   '' + ''
     runHook postInstall
   '';
+
+  # xnu's own install legitimately produces a dangling
+  # System.framework/Resources -> Versions/Current/Resources symlink
+  # (Current -> A, but A/Resources is never populated for this bare
+  # framework skeleton) - real Darwin ships the same layout; only Nix's
+  # fixupPhase objects.
+  dontCheckForBrokenSymlinks = installKernel || installBaseSystem;
+
+  # For the BaseSystem tree, keep Nix's fixups entirely away from the
+  # output: it force-moves sbin/ into bin/ (stage.sh stages /sbin/launchd
+  # from sbin/), runs host llvm-install-name-tool/strip over Mach-O
+  # binaries ("unsupported load command"), and none of its ELF-oriented
+  # rewrites apply to a Darwin rootfs anyway.
+  forceShare = lib.optionals (!installBaseSystem) [ "man" "doc" "info" ];
+  dontMoveSbin = installBaseSystem;
+  dontStrip = installBaseSystem;
+  dontPatchELF = installBaseSystem;
 
   meta = with lib; {
     description = "Smoke test: PureDarwin userspace targets built via nixpkgs LLVM instead of osxcross";

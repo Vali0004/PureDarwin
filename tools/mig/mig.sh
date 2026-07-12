@@ -190,7 +190,6 @@ do
     fi
     rm -f "${temp}.c" "${temp}.d"
     (echo '#line 1 '\"${file}\" ; cat "${file}" ) > "${temp}.c"
-    echo "DEBUG C=[$C] M=[$M] MIGCC=[$MIGCC] xcrunPath=[$xcrunPath] sdkRoot=[$sdkRoot]" >&2
     "$C" -E -arch ${arch} "${target[@]}" "${cppflags[@]}" -I "${sourcedir}" "${iSysRootParm[@]}" "${temp}.c" | "$M" "${migflags[@]}"
     if [ $? -ne 0 ]
     then

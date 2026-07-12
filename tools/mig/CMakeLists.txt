@@ -29,6 +29,12 @@ if(CMAKE_HOST_APPLE)
     target_sources(migcom PRIVATE ${MIGCOM_SRCS})
     target_compile_definitions(migcom PRIVATE MIG_VERSION=\"\")
     target_include_directories(migcom PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+elseif(DEFINED ENV{NIX_MIGCOM_PATH})
+    # Prebuilt by the standalone migcom.nix Nix derivation (see build.nix)
+    # instead of built in-tree here, so an edit anywhere else in the
+    # project doesn't force rebuilding it.
+    add_executable(migcom IMPORTED GLOBAL)
+    set_property(TARGET migcom PROPERTY IMPORTED_LOCATION "$ENV{NIX_MIGCOM_PATH}")
 else()
     # migcom is a pure source-to-source generator (MIG stub .c files); it
     # never needs to be Mach-O, only to actually RUN during the build. But

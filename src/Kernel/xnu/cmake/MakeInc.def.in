@@ -512,11 +512,7 @@ SFLAGS	= $(SFLAGS_GEN) \
 #
 # Linker command
 #
-ifeq ($(UNAME_S),Linux)
-LD	= $(KC++) -fuse-ld=$(shell xcrun --find ld)
-else
 LD	= $(KC++) -fuse-ld=@LD_PATH@
-endif
 
 #
 # Default LDFLAGS

@@ -11,9 +11,80 @@ else()
 endif()
 
 if(PUREDARWIN_NIX_TOOLCHAIN)
-    set(XNU_LD_PATH "$ENV{NIX_DARWIN_TOOLCHAIN_DIR}/x86_64-apple-darwin20.4-ld")
+    # Real cctools ld64 (see the native-ld configure in build.nix), not
+    # nixpkgs' ld64.lld - lld's Mach-O port doesn't implement "-kernel
+    # -static" kernel-linking mode (drops -kernel silently, mis-parses
+    # -platform_version) and never emits a correct entry-point load
+    # command, so a kernel linked with it fails to boot ("failed to find
+    # entry vmaddr"). Everything else still links fine with lld.
+    set(XNU_LD_PATH "$ENV{NIX_NATIVE_LD_PATH}")
+    # cctools/misc's host_strip/host_lipo/host_nm are add_executable()
+    # targets built with the project's main (cross) toolchain, so under
+    # PUREDARWIN_NIX_TOOLCHAIN they come out as Mach-O binaries that can't
+    # run as build-time host tools on Linux - same Canadian-cross gap as
+    # host_ld above. toolchain.nix already ships native ELF wrapper scripts
+    # for these three (they just exec nixpkgs' llvm-strip/-lipo/-nm), so use
+    # those instead. NMEDIT/LIBTOOL/CODESIGN_ALLOCATE/CTFINSERT have no
+    # nixpkgs equivalent and still use the (currently working, since never
+    # actually exec'd until now) host_* cctools builds.
+    # Real cctools strip (built next to the native ld, see native-ld.nix):
+    # llvm-strip refuses the linked kernel ("shared library is not yet
+    # supported"). Fall back to the llvm wrapper only if the native-ld
+    # derivation predates the strip addition.
+    get_filename_component(_nix_native_ld_dir "$ENV{NIX_NATIVE_LD_PATH}" DIRECTORY)
+    if(EXISTS "${_nix_native_ld_dir}/strip")
+        set(XNU_STRIP_PATH "${_nix_native_ld_dir}/strip")
+    else()
+        set(XNU_STRIP_PATH "$ENV{NIX_DARWIN_TOOLCHAIN_DIR}/x86_64-apple-darwin20.4-strip")
+    endif()
+    set(XNU_LIPO_PATH "$ENV{NIX_DARWIN_TOOLCHAIN_DIR}/x86_64-apple-darwin20.4-lipo")
+    set(XNU_NM_PATH "$ENV{NIX_DARWIN_TOOLCHAIN_DIR}/x86_64-apple-darwin20.4-nm")
+    set(XNU_HOST_CC_PATH "$ENV{NIX_HOST_CC_PATH}")
 else()
-    set(XNU_LD_PATH "$<TARGET_FILE:host_ld>")
+    # On a non-Apple host the in-tree host_ld/host_strip/host_lipo/host_nm
+    # add_executable() targets are built by the CROSS toolchain and come out
+    # as Mach-O binaries the build host can't exec ("posix_spawn failed:
+    # Exec format error" at the kernel link). osxcross ships native ELF
+    # builds of the same tools as "<triple>-ld" etc - its ld is a real
+    # ld64 (TAPI-capable, supports "-kernel -static"), so prefer those,
+    # mirroring what cmake/crosscompile.cmake does for userland links.
+    # On a macOS host the host_* targets are runnable, keep using them.
+    if(NOT CMAKE_HOST_APPLE)
+        get_filename_component(_xnu_ar_name "${CMAKE_AR}" NAME)
+        if(_xnu_ar_name MATCHES "^(.+)-ar$")
+            set(_xnu_triple "${CMAKE_MATCH_1}")
+            find_program(XNU_NATIVE_LD_EXECUTABLE NAMES "${_xnu_triple}-ld")
+            find_program(XNU_NATIVE_STRIP_EXECUTABLE NAMES "${_xnu_triple}-strip")
+            find_program(XNU_NATIVE_LIPO_EXECUTABLE NAMES "${_xnu_triple}-lipo")
+            find_program(XNU_NATIVE_NM_EXECUTABLE NAMES "${_xnu_triple}-nm")
+        endif()
+    endif()
+    if(XNU_NATIVE_LD_EXECUTABLE)
+        set(XNU_LD_PATH "${XNU_NATIVE_LD_EXECUTABLE}")
+    else()
+        set(XNU_LD_PATH "$<TARGET_FILE:host_ld>")
+    endif()
+    if(XNU_NATIVE_STRIP_EXECUTABLE)
+        set(XNU_STRIP_PATH "${XNU_NATIVE_STRIP_EXECUTABLE}")
+    else()
+        set(XNU_STRIP_PATH "$<TARGET_FILE:host_strip>")
+    endif()
+    if(XNU_NATIVE_LIPO_EXECUTABLE)
+        set(XNU_LIPO_PATH "${XNU_NATIVE_LIPO_EXECUTABLE}")
+    else()
+        set(XNU_LIPO_PATH "$<TARGET_FILE:host_lipo>")
+    endif()
+    if(XNU_NATIVE_NM_EXECUTABLE)
+        set(XNU_NM_PATH "${XNU_NATIVE_NM_EXECUTABLE}")
+    else()
+        set(XNU_NM_PATH "$<TARGET_FILE:host_nm>")
+    endif()
+    set(XNU_HOST_CC_PATH "")
+endif()
+if(XNU_HOST_CC_PATH)
+    set(XNU_HOST_CC_ENV "HOST_CC=${XNU_HOST_CC_PATH}")
+else()
+    set(XNU_HOST_CC_ENV "")
 endif()
 
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install)
@@ -32,16 +103,20 @@ externalproject_add(xnu_headers.extproj
             -D AVAILABILITY_PL_PATH=$<TARGET_FILE:availability.pl>
             -D MIG_PATH=${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh
             -D MIGCOM_PATH=$<TARGET_FILE:migcom>
-            -D STRIP_PATH=$<TARGET_FILE:host_strip>
-            -D LIPO_PATH=$<TARGET_FILE:host_lipo>
-            -D NM_PATH=$<TARGET_FILE:host_nm>
+            -D STRIP_PATH=${XNU_STRIP_PATH}
+            -D LIPO_PATH=${XNU_LIPO_PATH}
+            -D NM_PATH=${XNU_NM_PATH}
             -D NMEDIT_PATH=$<TARGET_FILE:host_nmedit>
             -D LIBTOOL_PATH=$<TARGET_FILE:host_libtool>
             -D UNIFDEF_PATH=$<TARGET_FILE:unifdef>
             -D DSYMUTIL_PATH=${dsymutil_path}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/preprocess_files.cmake
     COMMAND
-        ${CMAKE_COMMAND} -E env --unset=CC --unset=CXX
+        # installhdrs builds XNU's SETUP helpers as native Linux host tools.
+        # Do not export the Mach-O kernel linker here: native clang will pass
+        # ELF linker options (for example --hash-style=gnu), which cctools
+        # ld64 correctly rejects.
+        ${CMAKE_COMMAND} -E env ${XNU_HOST_CC_ENV} --unset=LD --unset=CC --unset=CXX --unset=STRIP --unset=NM --unset=CTFCONVERT --unset=CTFMERGE --unset=CTFINSERT
         make -C <SOURCE_DIR> installhdrs ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
             BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
@@ -97,9 +172,9 @@ externalproject_add(xnu
             -D LD_PATH=${XNU_LD_PATH}
             -D MIG_PATH=${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh
             -D MIGCOM_PATH=$<TARGET_FILE:migcom>
-            -D STRIP_PATH=$<TARGET_FILE:host_strip>
-            -D LIPO_PATH=$<TARGET_FILE:host_lipo>
-            -D NM_PATH=$<TARGET_FILE:host_nm>
+            -D STRIP_PATH=${XNU_STRIP_PATH}
+            -D LIPO_PATH=${XNU_LIPO_PATH}
+            -D NM_PATH=${XNU_NM_PATH}
             -D NMEDIT_PATH=$<TARGET_FILE:host_nmedit>
             -D LIBTOOL_PATH=$<TARGET_FILE:host_libtool>
             -D UNIFDEF_PATH=$<TARGET_FILE:unifdef>
@@ -109,7 +184,21 @@ externalproject_add(xnu
             -D PTHREAD_HEADER_PATH=$<TARGET_PROPERTY:pthread_common_headers,INTERFACE_INCLUDE_DIRECTORIES>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/preprocess_files.cmake
     COMMAND
-        ${CMAKE_COMMAND} -E env --unset=CC --unset=CXX
+        # LD=${XNU_LD_PATH}: the "-D LD_PATH=..." passed to preprocess_files.cmake
+        # above is a no-op - MakeInc.cmd.in never references an @LD_PATH@
+        # substitution token at all, for either the Darwin or Linux branch.
+        # $(LD) is therefore GNU Make's own builtin default ("ld", origin
+        # "default", no ifeq($(origin LD),default) guard exists to swap it
+        # for the right cross tool the way CC/CXX get one) - so whatever LD
+        # happens to be in the inherited environment silently wins instead.
+        # Setting it explicitly here is the only way to actually control
+        # which linker the kernel gets built with.
+        # STRIP is passed via env like LD (not just -D STRIP_PATH): on Linux
+        # makedefs' UNAME_S branch ignores @STRIP_PATH@ and resolves strip
+        # with `xcrun -find strip`, which finds the llvm-strip wrapper - and
+        # llvm-strip can't strip the linked kernel ("shared library is not
+        # yet supported").
+        ${CMAKE_COMMAND} -E env LD=${XNU_LD_PATH} STRIP=${XNU_STRIP_PATH} ${XNU_HOST_CC_ENV} --unset=CC --unset=CXX --unset=NM --unset=CTFCONVERT --unset=CTFMERGE --unset=CTFINSERT
         make -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
             BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>

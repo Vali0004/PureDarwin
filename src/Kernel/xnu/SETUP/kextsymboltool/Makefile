@@ -22,7 +22,7 @@ endif
 
 kextsymboltool: $(OBJS)
 	@$(LOG_HOST_LD) "$@"
-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
+	$(_v)$(HOST_CC) -o $@ $^ $(LDFLAGS)
 
 %.o: %.c
 	@$(LOG_HOST_CC) "$@"

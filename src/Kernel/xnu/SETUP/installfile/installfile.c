@@ -1,3 +1,7 @@
+#ifndef __APPLE__
+#define _GNU_SOURCE
+#endif
+
 /*
  * Copyright (c) 2012 Apple, Inc. All rights reserved.
  *
@@ -71,7 +75,7 @@ int main(int argc, char *argv[]) {
 	int srcfd, dstfd;
 	const char *src = NULL;
 	const char *dst = NULL;
-	char dsttmpname[MAXPATHLEN];
+	char *dsttmpname = NULL;
 
 	while ((ch = getopt(argc, argv, "cSm:")) != -1) {
 		switch (ch) {
@@ -116,7 +120,9 @@ int main(int argc, char *argv[]) {
 
 	if (!S_ISREG(sb.st_mode)) err(EX_USAGE, "%s is not a regular file", src);
 
-	snprintf(dsttmpname, sizeof(dsttmpname), "%s.XXXXXX", dst);
+	if (asprintf(&dsttmpname, "%s.XXXXXX", dst) < 0) {
+		err(EX_UNAVAILABLE, "asprintf(%s)", dst);
+	}
 	dstfd = mkstemp(dsttmpname);
 	if (dstfd < 0) err(EX_UNAVAILABLE, "mkstemp(%s)", dsttmpname);
 
@@ -140,6 +146,7 @@ int main(int argc, char *argv[]) {
 
 	close(dstfd);
 	close(srcfd);
+	free(dsttmpname);
 	return 0;
 }
 

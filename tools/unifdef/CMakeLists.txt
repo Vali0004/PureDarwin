@@ -1,6 +1,12 @@
 if(CMAKE_HOST_APPLE)
     add_executable(unifdef)
     target_sources(unifdef PRIVATE unifdef.c)
+elseif(DEFINED ENV{NIX_UNIFDEF_PATH})
+    # Prebuilt by the standalone unifdef.nix Nix derivation (see
+    # build.nix) instead of built in-tree here, so an edit anywhere else
+    # in the project doesn't force rebuilding this trivial one-file tool.
+    add_executable(unifdef IMPORTED GLOBAL)
+    set_property(TARGET unifdef PROPERTY IMPORTED_LOCATION "$ENV{NIX_UNIFDEF_PATH}")
 else()
     # Same Canadian-cross gap as tools/mig/migcom (see that CMakeLists for
     # the full explanation): plain add_executable() here would inherit the

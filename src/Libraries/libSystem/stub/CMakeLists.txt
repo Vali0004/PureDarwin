@@ -26,6 +26,11 @@ add_darwin_shared_library(libSystem_B_stub
     MACOSX_VERSION_MIN 11.0
     INSTALL_NAME /usr/lib/libSystem.B.dylib)
 set_property(TARGET libSystem_B_stub PROPERTY OUTPUT_NAME "System.B")
+add_custom_command(TARGET libSystem_B_stub POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E create_symlink
+        "$<TARGET_FILE_NAME:libSystem_B_stub>"
+        "$<TARGET_FILE_DIR:libSystem_B_stub>/libSystem.dylib"
+    VERBATIM)
 
 target_sources(libSystem_B_stub PRIVATE
     empty.c
@@ -94,7 +99,7 @@ add_dependencies(libSystem_B_stub
     libsystem_kernel_static libplatform_static pthread_static
     libc_static libc_internal_static libmalloc_static
     corecrypto_static CrashReporterClient)
-if(PUREDARWIN_NIX_TOOLCHAIN)
+if(PUREDARWIN_USE_LD64_LLD)
     # ld64.lld resolves archive roots before its duplicate-dead-strip pass can
     # discard libsystem_kernel's _libc_funcptr dispatch wrappers. Let the real
     # pthread/platform/libc archives satisfy their public symbols first, then
@@ -142,7 +147,7 @@ target_link_options(libSystem_B_stub PRIVATE
     # eager -- no lazy stubs, no dyld_stub_binder -- exactly as libdyld.dylib does.
     -Wl,-fixup_chains
     -Wl,-exported_symbols_list,${LIBSYSTEM_EXPORTS})
-if(PUREDARWIN_NIX_TOOLCHAIN)
+if(PUREDARWIN_USE_LD64_LLD)
     # ld64.lld diagnoses duplicate archive members before ordinary dead_strip
     # can discard them; Apple's ld64 accepts this link. Keep the compatibility
     # switch scoped to the Nix/LLVM linker path.

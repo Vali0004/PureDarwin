@@ -30,6 +30,7 @@
 #include "Options.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <memory>
 
 namespace generic {
 namespace dylib {

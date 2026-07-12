@@ -134,9 +134,13 @@ endif
 override SDKROOT = $(SDKROOT_RESOLVED)
 
 ifeq ($(HOST_SDKROOT_RESOLVED),)
+ifeq ($(UNAME_S),Linux)
+export HOST_SDKROOT_RESOLVED := /
+else
 export HOST_SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -show-sdk-path)
 ifeq ($(strip $(HOST_SDKROOT_RESOLVED)),)
 export HOST_SDKROOT_RESOLVED := /
+endif
 endif
 endif
 override HOST_SDKROOT = $(HOST_SDKROOT_RESOLVED)
