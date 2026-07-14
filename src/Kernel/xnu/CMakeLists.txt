@@ -87,6 +87,16 @@ else()
     set(XNU_HOST_CC_ENV "")
 endif()
 
+set(PUREDARWIN_XNU_KERNEL_CONFIG "RELEASE" CACHE STRING
+    "XNU kernel configuration to build: RELEASE, DEVELOPMENT, DEBUG, or KASAN")
+set_property(CACHE PUREDARWIN_XNU_KERNEL_CONFIG PROPERTY STRINGS
+    RELEASE DEVELOPMENT DEBUG KASAN)
+string(TOUPPER "${PUREDARWIN_XNU_KERNEL_CONFIG}" PUREDARWIN_XNU_KERNEL_CONFIG)
+if(NOT PUREDARWIN_XNU_KERNEL_CONFIG MATCHES "^(RELEASE|DEVELOPMENT|DEBUG|KASAN)$")
+    message(FATAL_ERROR
+        "Unsupported PUREDARWIN_XNU_KERNEL_CONFIG='${PUREDARWIN_XNU_KERNEL_CONFIG}'")
+endif()
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install)
 externalproject_add(xnu_headers.extproj
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_build
@@ -118,7 +128,7 @@ externalproject_add(xnu_headers.extproj
         # ld64 correctly rejects.
         ${CMAKE_COMMAND} -E env ${XNU_HOST_CC_ENV} --unset=LD --unset=CC --unset=CXX --unset=STRIP --unset=NM --unset=CTFCONVERT --unset=CTFMERGE --unset=CTFINSERT
         make -C <SOURCE_DIR> installhdrs ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
-            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
+            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=${PUREDARWIN_XNU_KERNEL_CONFIG}
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
             DSTROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install
     INSTALL_COMMAND true # installed during build
@@ -199,8 +209,8 @@ externalproject_add(xnu
         # llvm-strip can't strip the linked kernel ("shared library is not
         # yet supported").
         ${CMAKE_COMMAND} -E env LD=${XNU_LD_PATH} STRIP=${XNU_STRIP_PATH} ${XNU_HOST_CC_ENV} --unset=CC --unset=CXX --unset=NM --unset=CTFCONVERT --unset=CTFMERGE --unset=CTFINSERT
-        make -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
-            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=DEBUG
+        make --output-sync=recurse -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
+            BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=${PUREDARWIN_XNU_KERNEL_CONFIG}
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
             SYMROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu_sym DSTROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu
     INSTALL_COMMAND true # installed during build

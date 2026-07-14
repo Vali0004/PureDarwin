@@ -1283,7 +1283,7 @@ extern void     pmap_alias(
 	vm_prot_t       prot,
 	unsigned int options);
 
-#if     DEBUG
+#ifdef  PMAP_DEBUG
 #define DPRINTF(x...)   kprintf(x)
 #else
 #define DPRINTF(x...)

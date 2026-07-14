@@ -45,6 +45,7 @@
 , installLibSystem ? false
 , installBaseSystem ? false
 , prebuiltLibSystem ? null
+, xnuKernelConfig ? "RELEASE"
 }:
 
 let
@@ -161,6 +162,7 @@ EOF
       -DPUREDARWIN_ENABLE_TOOLS=${if enableTools then "ON" else "OFF"} \
       -DPUREDARWIN_ENABLE_TCC=${if enableTcc then "ON" else "OFF"} \
       -DPUREDARWIN_ENABLE_IOGRAPHICS_FAMILY=${if enableIOGraphicsFamily then "ON" else "OFF"} \
+      -DPUREDARWIN_XNU_KERNEL_CONFIG=${lib.escapeShellArg xnuKernelConfig} \
       -DPUREDARWIN_TCC_SOURCE=${tinycc.src} \
       ${lib.optionalString (prebuiltLibSystem != null) "-DPUREDARWIN_PREBUILT_LIBSYSTEM_ROOT=${prebuiltLibSystem}"}
     runHook postConfigure

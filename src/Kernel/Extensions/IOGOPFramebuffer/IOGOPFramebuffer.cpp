@@ -14,8 +14,6 @@
 #define kIOGOPFBMapCacheMode kIOMapInhibitCache
 #endif
 
-#define DEBUG(x, ...) kprintf("IOGOPFramebuffer: " x, ##__VA_ARGS__)
-
 extern "C" int switch_to_video_console(void);
 extern "C" int devfs_is_ready(void);
 extern "C" boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
@@ -32,9 +30,26 @@ static size_t gFb0Size;
 static thread_call_t gFb0RetryCall;
 static IONotifier *gFb0BSDNotifier;
 static unsigned gFb0RetryCount;
+static bool gIOGOPDebug;
+static bool gIOGOPDebugChecked;
 
 static void fb0_publish_retry(thread_call_param_t, thread_call_param_t);
 static bool fb0_iobsd_published(void *, void *, IOService *, IONotifier *);
+
+static bool
+gop_debug_enabled()
+{
+    if (!gIOGOPDebugChecked) {
+        PE_parse_boot_argn("gop_debug", &gIOGOPDebug, sizeof(gIOGOPDebug));
+        gIOGOPDebugChecked = true;
+    }
+    return gIOGOPDebug;
+}
+
+#define DEBUG(x, ...) do {                                      \
+    if (gop_debug_enabled())                                    \
+        kprintf("IOGOPFramebuffer: " x, ##__VA_ARGS__);         \
+} while (0)
 
 static void
 fb0_schedule_retry()
@@ -250,10 +265,10 @@ IOGOPFramebuffer::probe(IOService *provider, SInt32 *score)
 bool
 IOGOPFramebuffer::start(IOService *provider)
 {
-    kprintf("IOGOPFramebuffer::start called with provider %p\n", provider);
+    DEBUG("start provider=%p\n", provider);
 
     if (!super::start(provider)) {
-        kprintf("IOGOPFramebuffer::start - super::start failed\n");
+        DEBUG("super::start failed\n");
         return false;
     }
 
@@ -387,6 +402,12 @@ IOGOPFramebuffer::getApertureRange(IOPixelAperture)
         (mach_vm_address_t)fbBase,
         pitch * height
     );
+}
+
+IODeviceMemory *
+IOGOPFramebuffer::getVRAMRange(void)
+{
+    return getApertureRange(kIOFBSystemAperture);
 }
 
 IOReturn

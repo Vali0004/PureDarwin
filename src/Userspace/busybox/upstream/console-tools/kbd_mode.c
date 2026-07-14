@@ -6,6 +6,8 @@
  *   written using Andries Brouwer <aeb@cwi.nl>'s kbd_mode from
  *   console-utils v0.2.3, licensed under GNU GPLv2
  *
+ * Darwin termios port.
+ *
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 //config:config KBD_MODE
@@ -21,18 +23,20 @@
 //usage:#define kbd_mode_trivial_usage
 //usage:       "[-a|k|s|u] [-C TTY]"
 //usage:#define kbd_mode_full_usage "\n\n"
-//usage:       "Report or set VT console keyboard mode\n"
-//usage:     "\n	-a	Default (ASCII)"
-//usage:     "\n	-k	Medium-raw (keycode)"
-//usage:     "\n	-s	Raw (scancode)"
-//usage:     "\n	-u	Unicode (utf-8)"
+//usage:       "Report or set terminal keyboard mode\n"
+//usage:     "\n	-a	Default (ASCII/canonical)"
+//usage:     "\n	-k	Medium-raw (keycode-like)"
+//usage:     "\n	-s	Raw (byte stream)"
+//usage:     "\n	-u	Unicode (UTF-8/canonical)"
 //usage:     "\n	-C TTY	Affect TTY"
 
 #include "libbb.h"
-#include <linux/kd.h>
 
-int kbd_mode_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
-int kbd_mode_main(int argc UNUSED_PARAM, char **argv)
+#if defined(__linux__)
+
+# include <linux/kd.h>
+
+static int linux_kbd_mode(unsigned opt, int fd)
 {
 	enum {
 		SCANCODE  = (1 << 0),
@@ -40,28 +44,13 @@ int kbd_mode_main(int argc UNUSED_PARAM, char **argv)
 		MEDIUMRAW = (1 << 2),
 		UNICODE   = (1 << 3),
 	};
-	int fd;
-	unsigned opt;
-	const char *tty_name;
 
-	opt = getopt32(argv, "sakuC:", &tty_name);
-	if (opt & 0x10) {
-		opt &= 0xf; /* clear -C bit, see (*) */
-		fd = xopen_nonblocking(tty_name);
-	} else {
-		/* kbd-2.0.3 tries in sequence:
-		 * fd#0, /dev/tty, /dev/tty0.
-		 * get_console_fd_or_die: /dev/console, /dev/tty0, /dev/tty.
-		 * kbd-2.0.3 checks KDGKBTYPE, get_console_fd_or_die checks too.
-		 */
-		fd = get_console_fd_or_die();
-	}
-
-	if (!opt) { /* print current setting */
+	if (!opt) {
 		const char *mode = "unknown";
 		int m;
 
 		xioctl(fd, KDGKBMODE, &m);
+
 		if (m == K_RAW)
 			mode = "raw (scancode)";
 		else if (m == K_XLATE)
@@ -70,25 +59,213 @@ int kbd_mode_main(int argc UNUSED_PARAM, char **argv)
 			mode = "mediumraw (keycode)";
 		else if (m == K_UNICODE)
 			mode = "Unicode (UTF-8)";
-		else if (m == 4 /*K_OFF*/) /* kbd-2.0.3 does not show this mode, says "unknown" */
+		else if (m == 4 /* K_OFF */)
 			mode = "off";
+
 		printf("The keyboard is in %s mode\n", mode);
 	} else {
-		/* here we depend on specific bits assigned to options (*)
-		 * KDSKBMODE constants have these values:
-		 * #define K_RAW           0x00
-		 * #define K_XLATE         0x01
-		 * #define K_MEDIUMRAW     0x02
-		 * #define K_UNICODE       0x03
-		 * #define K_OFF           0x04
-		 * (looks like "-ak" together would cause the same effect as -u)
+		/*
+		 * KDSKBMODE values correspond to the option-bit arrangement:
+		 *
+		 * K_RAW       = 0
+		 * K_XLATE     = 1
+		 * K_MEDIUMRAW = 2
+		 * K_UNICODE   = 3
 		 */
 		opt = opt & UNICODE ? 3 : opt >> 1;
-		/* double cast prevents warnings about widening conversion */
-		xioctl(fd, KDSKBMODE, (void*)(ptrdiff_t)opt);
+		xioctl(fd, KDSKBMODE, (void *)(ptrdiff_t)opt);
 	}
 
-	if (ENABLE_FEATURE_CLEAN_UP)
+	return EXIT_SUCCESS;
+}
+
+#else
+
+# include <termios.h>
+
+enum {
+	KBD_SCANCODE  = (1 << 0),
+	KBD_ASCII     = (1 << 1),
+	KBD_MEDIUMRAW = (1 << 2),
+	KBD_UNICODE   = (1 << 3),
+};
+
+static void get_termios_or_die(int fd, struct termios *tio)
+{
+	if (tcgetattr(fd, tio) != 0)
+		bb_perror_msg_and_die("tcgetattr");
+}
+
+static void set_termios_or_die(int fd, const struct termios *tio)
+{
+	if (tcsetattr(fd, TCSANOW, tio) != 0)
+		bb_perror_msg_and_die("tcsetattr");
+}
+
+/*
+ * Darwin does not expose Linux VT keyboard translation modes.
+ *
+ * Approximate them with terminal input modes:
+ *
+ *   ASCII / Unicode:
+ *       canonical, cooked terminal input
+ *
+ *   Medium-raw:
+ *       noncanonical input, but retain ISIG so interrupt/suspend keys work
+ *
+ *   Scancode/raw:
+ *       cfmakeraw() byte-stream input
+ */
+static int darwin_kbd_mode(unsigned opt, int fd)
+{
+	struct termios tio;
+
+	get_termios_or_die(fd, &tio);
+
+	if (!opt) {
+		const char *mode;
+
+		if (tio.c_lflag & ICANON) {
+			/*
+			 * Darwin has no separate ASCII versus Unicode keyboard
+			 * translation mode. Canonical input is reported as the
+			 * default mode.
+			 */
+			mode = "default (ASCII/UTF-8)";
+		} else if (tio.c_lflag & ISIG) {
+			mode = "mediumraw (keycode-like)";
+		} else {
+			mode = "raw (byte stream)";
+		}
+
+		printf("The keyboard is in %s mode\n", mode);
+		return EXIT_SUCCESS;
+	}
+
+	/*
+	 * getopt32 allows combinations, but retain the upstream precedence:
+	 * Unicode wins, followed by medium-raw, ASCII, then scancode.
+	 */
+	if (opt & KBD_UNICODE) {
+		/*
+		 * Restore normal cooked input. IUTF8 is not universally
+		 * available on Darwin-derived systems, so do not require it.
+		 */
+		tio.c_iflag |= BRKINT | ICRNL | IXON;
+		tio.c_iflag &= ~(IGNBRK | IGNCR | INLCR | IXOFF);
+
+		tio.c_oflag |= OPOST;
+
+		tio.c_lflag |= ICANON | ISIG | IEXTEN | ECHO;
+		tio.c_lflag |= ECHOE | ECHOK;
+
+		tio.c_cflag |= CREAD;
+		tio.c_cflag &= ~(CSIZE | PARENB);
+		tio.c_cflag |= CS8;
+
+		tio.c_cc[VMIN] = 1;
+		tio.c_cc[VTIME] = 0;
+	} else if (opt & KBD_MEDIUMRAW) {
+		/*
+		 * Deliver bytes immediately while preserving terminal signals
+		 * such as VINTR, VQUIT, and VSUSP.
+		 */
+		tio.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+		tio.c_oflag &= ~OPOST;
+
+		tio.c_cflag |= CREAD;
+		tio.c_cflag &= ~(CSIZE | PARENB);
+		tio.c_cflag |= CS8;
+
+		tio.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN);
+		tio.c_lflag |= ISIG;
+
+		tio.c_cc[VMIN] = 1;
+		tio.c_cc[VTIME] = 0;
+	} else if (opt & KBD_ASCII) {
+		tio.c_iflag |= BRKINT | ICRNL | IXON;
+		tio.c_iflag &= ~(IGNBRK | IGNCR | INLCR | IXOFF);
+
+		tio.c_oflag |= OPOST;
+
+		tio.c_lflag |= ICANON | ISIG | IEXTEN | ECHO;
+		tio.c_lflag |= ECHOE | ECHOK;
+
+		tio.c_cflag |= CREAD;
+		tio.c_cflag &= ~(CSIZE | PARENB);
+		tio.c_cflag |= CS8;
+
+		tio.c_cc[VMIN] = 1;
+		tio.c_cc[VTIME] = 0;
+	} else {
+		/*
+		 * There are no hardware keyboard scancodes available through
+		 * a Darwin tty. The closest useful equivalent is raw terminal
+		 * byte input.
+		 */
+		cfmakeraw(&tio);
+		tio.c_cc[VMIN] = 1;
+		tio.c_cc[VTIME] = 0;
+	}
+
+	set_termios_or_die(fd, &tio);
+	return EXIT_SUCCESS;
+}
+
+#endif
+
+int kbd_mode_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int kbd_mode_main(int argc UNUSED_PARAM, char **argv)
+{
+	int fd;
+	unsigned opt;
+	const char *tty_name = NULL;
+
+	opt = getopt32(argv, "sakuC:", &tty_name);
+
+	if (opt & (1 << 4)) {
+		/*
+		 * Clear the -C bit, preserving only the four mode bits.
+		 */
+		opt &= 0x0f;
+		fd = xopen_nonblocking(tty_name);
+	} else {
+#if defined(__linux__)
+		fd = get_console_fd_or_die();
+#else
+		/*
+		 * get_console_fd_or_die() is Linux-console-oriented and may
+		 * probe /dev/tty0 or issue Linux-specific ioctls. On Darwin,
+		 * use the controlling terminal directly.
+		 */
+		fd = open("/dev/tty", O_RDWR | O_NONBLOCK);
+
+		if (fd < 0) {
+			if (isatty(STDIN_FILENO))
+				fd = STDIN_FILENO;
+			else if (isatty(STDOUT_FILENO))
+				fd = STDOUT_FILENO;
+			else if (isatty(STDERR_FILENO))
+				fd = STDERR_FILENO;
+			else
+				bb_simple_perror_msg_and_die("/dev/tty");
+		}
+#endif
+	}
+
+#if defined(__linux__)
+	linux_kbd_mode(opt, fd);
+#else
+	darwin_kbd_mode(opt, fd);
+#endif
+
+	if (ENABLE_FEATURE_CLEAN_UP
+	 && fd != STDIN_FILENO
+	 && fd != STDOUT_FILENO
+	 && fd != STDERR_FILENO
+	) {
 		close(fd);
+	}
+
 	return EXIT_SUCCESS;
 }

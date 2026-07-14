@@ -508,6 +508,7 @@ typedef unsigned smalluint;
 #if defined(__APPLE__)
 # include <arpa/inet.h>
 # undef HAVE_MEMPCPY
+# undef HAVE_MEMRCHR
 # undef HAVE_STRCHRNUL
 static ALWAYS_INLINE int bb_darwin_inet_aton(const char *name, struct in_addr *addr)
 {

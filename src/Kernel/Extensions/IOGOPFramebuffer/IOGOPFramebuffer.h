@@ -32,6 +32,7 @@ public:
                                     IOIndex depth) override;
 
     virtual IODeviceMemory * getApertureRange(IOPixelAperture aperture) override;
+    virtual IODeviceMemory * getVRAMRange(void) override;
 
     virtual IOReturn getInformationForDisplayMode(
         IODisplayModeID displayMode,

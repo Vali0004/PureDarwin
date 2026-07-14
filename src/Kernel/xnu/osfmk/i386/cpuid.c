@@ -1663,13 +1663,11 @@ cpuid_vmm_family(void)
     return cpuid_vmm_info()->cpuid_vmm_family;
 }
 
-#if DEBUG || DEVELOPMENT
 uint64_t
 cpuid_vmm_get_applepv_features(void)
 {
     return cpuid_vmm_info()->cpuid_vmm_applepv_features;
 }
-#endif /* DEBUG || DEVELOPMENT */
 
 cwa_classifier_e
 cpuid_wa_required(cpu_wa_e wa)

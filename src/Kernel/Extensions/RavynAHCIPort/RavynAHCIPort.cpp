@@ -24,11 +24,28 @@
 
 #include <IOKit/IOLib.h>
 #include <IOKit/storage/IOMedia.h>
+#include <pexpert/pexpert.h>
 #include "RavynAHCIPort.h"
 #include "RavynAHCIDisk.h"
 
 #define super IOService
 OSDefineMetaClassAndStructors(RavynAHCIPort, IOService);
+
+static bool gAHCIDebug = false;
+
+static void
+AHCI_Debug(const char *fmt, ...)
+{
+    if (!gAHCIDebug)
+        return;
+
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf) - 1, fmt, args);
+    va_end(args);
+    kprintf("[RavynAHCIPort] %s\n", buf);
+}
 
 static bool
 mapABARFromAssignedAddresses(IOPCIDevice         * provider,
@@ -54,14 +71,14 @@ mapABARFromAssignedAddresses(IOPCIDevice         * provider,
         uint64_t base = ((uint64_t)a->physMid << 32) | a->physLo;
         uint64_t size = ((uint64_t)a->lengthHi << 32) | a->lengthLo;
 
-        AHCI_Log("assigned-addresses BAR%u space=%u base=%p size=%llu",
+        AHCI_Debug("assigned-addresses BAR%u space=%u base=%p size=%llu",
                  (reg - kIOPCIConfigBaseAddress0) / 4,
                  a->physHi.s.space,
                  (void *)(uintptr_t)base,
                  (uint64_t)size);
 
         if (a->physHi.s.space == 1) {
-            AHCI_Log("assigned-addresses BAR%u is I/O space; ignoring for ABAR",
+            AHCI_Debug("assigned-addresses BAR%u is I/O space; ignoring for ABAR",
                      (reg - kIOPCIConfigBaseAddress0) / 4);
             continue;
         }
@@ -101,20 +118,20 @@ mapUsableBAR(IOPCIDevice *provider, UInt8 reg)
 
     IODeviceMemory *range = provider->getDeviceMemoryWithRegister(reg);
     if (!range) {
-        AHCI_Log("BAR%u has no IODeviceMemory range", (reg - kIOPCIConfigBaseAddress0) / 4);
+        AHCI_Debug("BAR%u has no IODeviceMemory range", (reg - kIOPCIConfigBaseAddress0) / 4);
         return NULL;
     }
 
     IOByteCount length = range->getLength();
     IOPhysicalAddress phys = range->getPhysicalAddress();
-    AHCI_Log("BAR%u IODeviceMemory phys=%p len=%llu tag=%08x",
+    AHCI_Debug("BAR%u IODeviceMemory phys=%p len=%llu tag=%08x",
              (reg - kIOPCIConfigBaseAddress0) / 4,
              (void *)(uintptr_t)phys,
              (uint64_t)length,
              (uint32_t)range->getTag());
 
     if (!length) {
-        AHCI_Log("BAR%u IODeviceMemory has zero length; skipping provider map",
+        AHCI_Debug("BAR%u IODeviceMemory has zero length; skipping provider map",
                  (reg - kIOPCIConfigBaseAddress0) / 4);
         return NULL;
     }
@@ -135,7 +152,7 @@ readMemoryBARBaseAndSize(IOPCIDevice *provider,
     uint32_t savedHi = 0;
 
     if (savedLo & 0x1) {
-        AHCI_Log("BAR%u is I/O space; not usable as ABAR",
+        AHCI_Debug("BAR%u is I/O space; not usable as ABAR",
                  (reg - kIOPCIConfigBaseAddress0) / 4);
         return false;
     }
@@ -143,7 +160,7 @@ readMemoryBARBaseAndSize(IOPCIDevice *provider,
     const bool is64 = ((savedLo & 0x6) == 0x4);
     if (is64) {
         if (reg > kIOPCIConfigBaseAddress4) {
-            AHCI_Log("BAR%u reports 64-bit but has no high BAR",
+            AHCI_Debug("BAR%u reports 64-bit but has no high BAR",
                      (reg - kIOPCIConfigBaseAddress0) / 4);
             return false;
         }
@@ -174,12 +191,12 @@ readMemoryBARBaseAndSize(IOPCIDevice *provider,
     if (!is64) size &= 0xffffffffULL;
     if (size < 0x1000) size = 0x1000;
     if (size > 0x1000000ULL) {
-        AHCI_Log("BAR%u sizing produced implausible size=0x%llx, ignoring",
+        AHCI_Debug("BAR%u sizing produced implausible size=0x%llx, ignoring",
                  (reg - kIOPCIConfigBaseAddress0) / 4, size);
         return false;
     }
 
-    AHCI_Log("BAR%u sizing: is64=%d sizeMaskLo=%08x sizeMaskHi=%08x -> base=0x%llx size=0x%llx",
+    AHCI_Debug("BAR%u sizing: is64=%d sizeMaskLo=%08x sizeMaskHi=%08x -> base=0x%llx size=0x%llx",
              (reg - kIOPCIConfigBaseAddress0) / 4,
              is64, maskLo, maskHi, base, size);
 
@@ -220,7 +237,7 @@ mapABARFromConfigBAR(IOPCIDevice         * provider,
 
     *outDesc = desc;
     *outMap = map;
-    AHCI_Log("Mapped ABAR via config BAR fallback phys=%p size=0x%llx",
+    AHCI_Debug("Mapped ABAR via config BAR fallback phys=%p size=0x%llx",
              (void *)(uintptr_t)abarPhys, abarSize);
     return true;
 }
@@ -239,7 +256,7 @@ IOService *
 RavynAHCIPort::probe(IOService *provider, SInt32 *score)
 {
     IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
-    kprintf("RavynAHCIPort::probe(%p) called, pci = %p\n", provider, pci);
+    AHCI_Debug("probe provider=%p pci=%p", provider, pci);
     if (!pci)
         return NULL;
 
@@ -248,13 +265,14 @@ RavynAHCIPort::probe(IOService *provider, SInt32 *score)
     }
 
     IOService * result = super::probe(provider, score);
-    kprintf("RavynAHCIPort::probe result=%p score=%d\n", result, score ? *score : -1);
+    AHCI_Debug("probe result=%p score=%d", result, score ? *score : -1);
     return result;
 }
 
 bool RavynAHCIPort::start(IOService *provider)
 {
-    kprintf("RavynAHCIPort::start(%p) called\n", provider);
+    PE_parse_boot_argn("ahci_debug", &gAHCIDebug, sizeof(gAHCIDebug));
+    AHCI_Debug("start provider=%p", provider);
     fProvider = OSDynamicCast(IOPCIDevice, provider);
     if (!fProvider || !super::start(provider)) return false;
 
@@ -272,13 +290,13 @@ bool RavynAHCIPort::start(IOService *provider)
     uint16_t device    = fProvider->configRead16(kIOPCIConfigDeviceID);
     uint32_t classCode = fProvider->configRead32(kIOPCIConfigRevisionID) >> 8;
 
-    AHCI_Log("start provider=%p pci%x,%x pciclass,%06x",
+    AHCI_Debug("start provider=%p pci%x,%x pciclass,%06x",
              provider, vendor, device, classCode);
 
     const uint32_t bar4 = fProvider->configRead32(kIOPCIConfigBaseAddress4);
     const uint32_t bar5 = fProvider->configRead32(kIOPCIConfigBaseAddress5);
     const uint16_t cmd  = fProvider->configRead16(kIOPCIConfigCommand);
-    AHCI_Log("PCI CMD=%04x BAR4=%08x BAR5=%08x", cmd, bar4, bar5);
+    AHCI_Debug("PCI CMD=%04x BAR4=%08x BAR5=%08x", cmd, bar4, bar5);
 
     fABARMap = mapUsableBAR(fProvider, kIOPCIConfigBaseAddress5);
 
@@ -324,7 +342,7 @@ bool RavynAHCIPort::start(IOService *provider)
         uint32_t tfd  = portRead32(p, PORT_TFD);
         uint32_t det  = PORT_SSTS_DET(ssts);
 
-        AHCI_Log("Port %d  SSTS=%08x SIG=%08x TFD=%08x  DET=%d %s",
+        AHCI_Debug("Port %d  SSTS=%08x SIG=%08x TFD=%08x  DET=%d %s",
                 p, ssts, sig, tfd, det,
                 det == PORT_SSTS_DET_PRESENT
                  ? "<<DEVICE PRESENT>>" : "(no device)");
@@ -354,7 +372,7 @@ bool RavynAHCIPort::start(IOService *provider)
                                    ((uint32_t)sector0[446 + 9] << 8) |
                                    ((uint32_t)sector0[446 + 10] << 16) |
                                    ((uint32_t)sector0[446 + 11] << 24);
-            AHCI_Log("Port %d LBA0 MBR sig=0x%04x part0 type=0x%02x lba=%u",
+            AHCI_Debug("Port %d LBA0 MBR sig=0x%04x part0 type=0x%02x lba=%u",
                     p, mbrSig, partType, partLBA);
         }
 
@@ -365,7 +383,7 @@ bool RavynAHCIPort::start(IOService *provider)
             char gptSig[9];
             bcopy(sector1, gptSig, 8);
             gptSig[8] = '\0';
-            AHCI_Log("Port %d LBA1 signature='%.8s'", p, gptSig);
+            AHCI_Debug("Port %d LBA1 signature='%.8s'", p, gptSig);
         }
 
         RavynAHCIDisk *diskNub = new RavynAHCIDisk();
@@ -401,9 +419,9 @@ bool RavynAHCIPort::start(IOService *provider)
     /* We return true past here regardless -- driver is attached even if no
        (or only some) disks came up; upper layers see whichever nubs matched. */
     if (disksPublished == 0)
-        AHCI_Log("No usable SATA disk found on any port");
+        AHCI_Debug("No usable SATA disk found on any port");
     else
-        AHCI_Log("Published %d disk nub(s)", disksPublished);
+        AHCI_Debug("Published %d disk nub(s)", disksPublished);
 
     return true;
 }
@@ -411,7 +429,7 @@ bool RavynAHCIPort::start(IOService *provider)
 void
 RavynAHCIPort::stop(IOService *provider)
 {
-    kprintf("RavynAHCIPort::stop(%p) called\n", provider);
+    AHCI_Debug("stop provider=%p", provider);
     for (int p = 0; p < 32; p++) {
         RavynAHCIDisk *diskNub = fDiskNubs[p];
         if (!diskNub) continue;
@@ -1066,12 +1084,12 @@ RavynAHCIPort::parseIdentifyData(PortState &portState, const uint16_t *id)
             ((uint64_t)id[60] <<  0);
     }
 
-    AHCI_Log("port %u IDENTIFY ok", portState.port);
-    AHCI_Log("  model    : %s", portState.model);
-    AHCI_Log("  serial   : %s", portState.serial);
-    AHCI_Log("  firmware : %s", portState.firmware);
-    AHCI_Log("  lba48    : %d", portState.lba48 ? 1 : 0);
-    AHCI_Log("  sectors  : 0x%llx (%llu)",
+    AHCI_Debug("port %u IDENTIFY ok", portState.port);
+    AHCI_Debug("  model    : %s", portState.model);
+    AHCI_Debug("  serial   : %s", portState.serial);
+    AHCI_Debug("  firmware : %s", portState.firmware);
+    AHCI_Debug("  lba48    : %d", portState.lba48 ? 1 : 0);
+    AHCI_Debug("  sectors  : 0x%llx (%llu)",
              portState.sectorCount,
              portState.sectorCount);
 }

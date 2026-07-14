@@ -100,7 +100,8 @@ main(void)
 
 	kr = PDGOPOpen(&fb);
 	if (kr != KERN_SUCCESS) {
-		fprintf(stderr, "iokittest: PDGOPOpen failed: 0x%x\n", kr);
+		fprintf(stderr, "iokittest: PDGOPOpen failed at %s: 0x%x\n",
+		    PDGOPLastErrorStage(), kr);
 		return 1;
 	}
 

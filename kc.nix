@@ -11,13 +11,18 @@ stdenv.mkDerivation {
     KERNEL_EXTS=${kernel}/System/Library/Extensions
     KEXTS=${kexts}/System/Library/Extensions
 
+    # The kernel binary's filename depends on which build variant xnu was
+    # configured for (RELEASE -> kernel, DEBUG -> kernel.debug, etc.) -
+    # pick whichever one is actually present rather than hardcoding it.
+    KERNEL_BIN=$(ls "${kernel}"/System/Library/Kernels/kernel* | head -n1)
+
     codeless=()
     for p in "$KERNEL_EXTS"/System.kext/PlugIns/*.kext; do
       codeless+=( -codeless "$p" )
     done
 
     ${kcTools}/bin/kc-builder \
-      -kernel ${kernel}/System/Library/Kernels/kernel.debug \
+      -kernel "$KERNEL_BIN" \
       -kext "$KEXTS/corecrypto.kext" \
       -kext "$KEXTS/pthread.kext" \
       -kext "$KEXTS/IOACPIFamily.kext" \

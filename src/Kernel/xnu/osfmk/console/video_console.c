@@ -2926,8 +2926,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 #ifndef __LP64__
 			new_vinfo.v_physaddr |= (((uint64_t) boot_vinfo->v_baseAddrHigh) << 32);
 #endif
-			kprintf("initialize_screen: b=%08llX, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
-			    new_vinfo.v_physaddr, new_vinfo.v_width, new_vinfo.v_height, new_vinfo.v_rowbytes, new_vinfo.v_type);       /* (BRINGUP) */
 		}
 
 		if (!newVideoVirt && !new_vinfo.v_physaddr) {                                                   /* Check to see if we have a framebuffer */

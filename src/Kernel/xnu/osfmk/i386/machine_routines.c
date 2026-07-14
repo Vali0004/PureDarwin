@@ -61,7 +61,7 @@
 #endif
 #include <architecture/i386/pio.h>
 #include <i386/cpu_data.h>
-#if DEBUG
+#ifdef PMAP_DEBUG
 #define DBG(x...)       kprintf("DBG: " x)
 #else
 #define DBG(x...)

@@ -8,6 +8,10 @@
 #define kIOFBGetCurrentDisplayModeSelector 2
 #define kIOFBSystemAperture 0
 
+static const char *gPDGOPLastErrorStage = "none";
+
+#define PDGOP_SET_STAGE(stage) do { gPDGOPLastErrorStage = (stage); } while (0)
+
 typedef uint32_t IODisplayModeID;
 typedef uint32_t IOIndex;
 typedef uint32_t IOPixelAperture;
@@ -40,21 +44,26 @@ PDGOPOpen(PDGOPFramebuffer *fb)
     size_t pixelInfoSize = sizeof(pixelInfo);
 
     if (fb == NULL) {
+        PDGOP_SET_STAGE("argument");
         return KERN_INVALID_ARGUMENT;
     }
     memset(fb, 0, sizeof(*fb));
+    PDGOP_SET_STAGE("none");
 
+    PDGOP_SET_STAGE("IOMasterPort");
     kr = IOMasterPort(MACH_PORT_NULL, &fb->masterPort);
     if (kr != KERN_SUCCESS) {
         goto fail;
     }
 
+    PDGOP_SET_STAGE("IOServiceMatching");
     matching = IOServiceMatching("IOGOPFramebuffer");
     if (matching == NULL) {
         kr = KERN_RESOURCE_SHORTAGE;
         goto fail;
     }
 
+    PDGOP_SET_STAGE("IOServiceGetMatchingService");
     kr = IOServiceGetMatchingService(fb->masterPort, matching, &fb->service);
     if (kr != KERN_SUCCESS || fb->service == IO_OBJECT_NULL) {
         if (kr == KERN_SUCCESS) {
@@ -63,11 +72,13 @@ PDGOPOpen(PDGOPFramebuffer *fb)
         goto fail;
     }
 
+    PDGOP_SET_STAGE("IOServiceOpen");
     kr = IOServiceOpen(fb->service, mach_task_self(), 0, &fb->connect);
     if (kr != KERN_SUCCESS) {
         goto fail;
     }
 
+    PDGOP_SET_STAGE("GetCurrentDisplayMode");
     kr = IOConnectCallScalarMethod(fb->connect,
         kIOFBGetCurrentDisplayModeSelector, NULL, 0, scalarOut, &scalarOutCnt);
     if (kr != KERN_SUCCESS || scalarOutCnt < 2) {
@@ -78,6 +89,7 @@ PDGOPOpen(PDGOPFramebuffer *fb)
     scalarIn[1] = (IOIndex)scalarOut[1];
     scalarIn[2] = kIOFBSystemAperture;
     memset(&pixelInfo, 0, sizeof(pixelInfo));
+    PDGOP_SET_STAGE("GetPixelInformation");
     kr = IOConnectCallMethod(fb->connect,
         kIOFBGetPixelInformationSelector, scalarIn, 3, NULL, 0,
         NULL, NULL, &pixelInfo, &pixelInfoSize);
@@ -85,6 +97,7 @@ PDGOPOpen(PDGOPFramebuffer *fb)
         goto fail;
     }
 
+    PDGOP_SET_STAGE("MapVRAM");
     kr = IOConnectMapMemory64(fb->connect, kIOFBVRAMMemory, mach_task_self(),
         &fb->address, &fb->size, kIOMapAnywhere);
     if (kr != KERN_SUCCESS) {
@@ -100,6 +113,7 @@ PDGOPOpen(PDGOPFramebuffer *fb)
     fb->componentMasks[1] = pixelInfo.componentMasks[1];
     fb->componentMasks[2] = pixelInfo.componentMasks[2];
 
+    PDGOP_SET_STAGE("none");
     return KERN_SUCCESS;
 
 fail:
@@ -128,4 +142,10 @@ PDGOPClose(PDGOPFramebuffer *fb)
         (void)mach_port_deallocate(mach_task_self(), fb->masterPort);
     }
     memset(fb, 0, sizeof(*fb));
+}
+
+const char *
+PDGOPLastErrorStage(void)
+{
+    return gPDGOPLastErrorStage;
 }

@@ -207,9 +207,6 @@ bool AppleAPIC::start( IOService * provider )
           (uint32_t) GET_FIELD( indexRead( kIndexVER ), kVERVersion ),
           (uint32_t) _vectorBase, (uint32_t) (_vectorBase + _vectorCount - 1));
 
-    getPlatform()->registerInterruptController( (OSSymbol *) sym, this );
-    sym->release();
-
     getPlatform()->setCPUInterruptProperties( provider );
     {
         IOInterruptAction primaryHandler = getInterruptHandlerAddress();
@@ -221,8 +218,10 @@ bool AppleAPIC::start( IOService * provider )
             goto fail;
         }
         provider->enableInterrupt( 0 );
-        kprintf("AppleAPIC-%ld: primary interrupt handler installed\n", _vectorBase);
     }
+
+    getPlatform()->registerInterruptController( (OSSymbol *) sym, this );
+    sym->release();
 
     registerService();
 
@@ -425,11 +424,6 @@ IOReturn AppleAPIC::registerInterrupt( IOService *        nub,
     vectorData       = interruptSources[source].vectorData;
     vectorNumber     = DATA_TO_VECTOR( vectorData );
 
-    kprintf("IOAPIC-%ld: registerInterrupt nub='%s' source=%d vectorNumber=%u vectorCount=%ld dataLen=%u\n",
-            _vectorBase, nub ? nub->getName() : "(null)", source,
-            (unsigned)vectorNumber, _vectorCount,
-            (unsigned)(vectorData ? vectorData->getLength() : 0));
-
     // Check that the vectorNumber is within bounds.
     // Proceed to the superclass method if valid.
 
@@ -439,9 +433,7 @@ IOReturn AppleAPIC::registerInterrupt( IOService *        nub,
         return kIOReturnBadArgument;
     }
 
-    IOReturn rr = super::registerInterrupt( nub, source, target, handler, refCon );
-    kprintf("IOAPIC-%ld: super::registerInterrupt -> 0x%x\n", _vectorBase, rr);
-    return rr;
+    return super::registerInterrupt( nub, source, target, handler, refCon );
 }
 
 //---------------------------------------------------------------------------

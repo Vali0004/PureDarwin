@@ -628,15 +628,11 @@ KLDBootstrap::loadKernelExternalComponents(void)
 
 		theKext = OSDynamicCast(OSKext, extensionsDict->getObject(bundleID));
 		if (!theKext) {
-			printf("KECDBG: %s has no OSKext object\n", bundle_id);
 			continue;
 		}
 
 		isKernelExternalComponent = OSDynamicCast(OSBoolean,
 		    theKext->getPropertyForHostArch(kAppleKernelExternalComponentKey));
-		printf("KECDBG: candidate %s AppleKernelExternalComponent=%s\n",
-		    bundle_id,
-		    (isKernelExternalComponent && isKernelExternalComponent->isTrue()) ? "true" : "false");
 		if (isKernelExternalComponent && isKernelExternalComponent->isTrue()) {
 			OSReturn loadResult;
 
@@ -646,7 +642,6 @@ KLDBootstrap::loadKernelExternalComponents(void)
 			    "Loading kernel external component %s.", bundleID->getCStringNoCopy());
 			loadResult = OSKext::loadKextWithIdentifier(bundleID->getCStringNoCopy(),
 			    /* allowDefer */ false);
-			printf("KECDBG: load %s -> 0x%x\n", bundle_id, loadResult);
 		}
 	}
 

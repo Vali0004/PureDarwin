@@ -91,6 +91,9 @@ target_sources(libc_static PRIVATE
     string/pd_strtok_r.c         # _strtok_r forwarder (__weak_reference alias not emitted)
     stdlib/FreeBSD/setenv.c      # _setenv/_unsetenv (init sets HOME/PATH/etc)
     gen/FreeBSD/waitpid.c        # _waitpid (init reaps/respawns children)
+    gen/FreeBSD/wait.c           # __wait (BusyBox tar --seamless-compression child reaping)
+    gen/pd_wait.c                # _wait forwarder (__weak_reference alias not emitted)
+    gen/pd_popen.c               # popen/pclose (BusyBox awk pipe redirection; fork+pipe based)
     gen/FreeBSD/pause.c          # _pause (init halt loop)
     string/FreeBSD/strrchr.c
     string/FreeBSD/strsep.c      # _strsep (exec.c PATH split)

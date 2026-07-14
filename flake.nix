@@ -346,6 +346,16 @@
             enableUserspace = false;
             installUserland = false;
             installKernel = true;
+            xnuKernelConfig = "RELEASE";
+          };
+          kernelDebugBuild = mkPureDarwinBuild {
+            pname = "puredarwin-kernel-debug";
+            src = kernelSource;
+            buildTargets = [ "xnu" ];
+            enableUserspace = false;
+            installUserland = false;
+            installKernel = true;
+            xnuKernelConfig = "DEBUG";
           };
           xnuHeadersBuild = mkPureDarwinBuild {
             pname = "puredarwin-xnu-headers";
@@ -355,6 +365,7 @@
             installUserland = false;
             installKernel = false;
             installXnuHeaders = true;
+            xnuKernelConfig = "RELEASE";
           };
           kextsBuild = mkPureDarwinBuild {
             pname = "puredarwin-kexts";
@@ -420,7 +431,9 @@
             libSystem = libSystemBuild;
             xnu-headers = xnuHeadersBuild;
             xnu = kernelBuild;
+            xnu-debug = kernelDebugBuild;
             kernel = kernelBuild;
+            kernel-debug = kernelDebugBuild;
             kexts = kextsBuild;
             iographics = iographicsBuild;
             basesystem = fullBuild;

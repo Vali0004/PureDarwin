@@ -107,6 +107,18 @@
 #include "libbb.h"
 #include "common_bufsiz.h"
 
+/* Darwin's struct stat names the timespec fields st_atimespec/st_mtimespec/
+ * st_ctimespec instead of the Linux/glibc st_atim/st_mtim/st_ctim. */
+#if defined(__APPLE__)
+# define BB_ST_ATIM st_atimespec
+# define BB_ST_MTIM st_mtimespec
+# define BB_ST_CTIM st_ctimespec
+#else
+# define BB_ST_ATIM st_atim
+# define BB_ST_MTIM st_mtim
+# define BB_ST_CTIM st_ctim
+#endif
+
 enum {
 	OPT_TERSE       = (1 << 0),
 	OPT_DEREFERENCE = (1 << 1),
@@ -380,19 +392,19 @@ static void FAST_FUNC print_stat(char *pformat, const char m,
 		strcat(pformat, "lu");
 		printf(pformat, (unsigned long) statbuf->st_blksize);
 	} else if (m == 'x') {
-		printfs(pformat, human_time(&statbuf->st_atim));
+		printfs(pformat, human_time(&statbuf->BB_ST_ATIM));
 	} else if (m == 'X') {
 		strcat(pformat, TYPE_SIGNED(time_t) ? "ld" : "lu");
 		/* note: (unsigned long) would be wrong:
 		 * imagine (unsigned long64)int32 */
 		printf(pformat, (long) statbuf->st_atime);
 	} else if (m == 'y') {
-		printfs(pformat, human_time(&statbuf->st_mtim));
+		printfs(pformat, human_time(&statbuf->BB_ST_MTIM));
 	} else if (m == 'Y') {
 		strcat(pformat, TYPE_SIGNED(time_t) ? "ld" : "lu");
 		printf(pformat, (long) statbuf->st_mtime);
 	} else if (m == 'z') {
-		printfs(pformat, human_time(&statbuf->st_ctim));
+		printfs(pformat, human_time(&statbuf->BB_ST_CTIM));
 	} else if (m == 'Z') {
 		strcat(pformat, TYPE_SIGNED(time_t) ? "ld" : "lu");
 		printf(pformat, (long) statbuf->st_ctime);
@@ -747,9 +759,9 @@ static bool do_stat(const char *filename, const char *format)
 		if (option_mask32 & OPT_SELINUX)
 			printf("   S_Context: %s\n", scontext);
 # endif
-		printf("Access: %s\n", human_time(&statbuf.st_atim));
-		printf("Modify: %s\n", human_time(&statbuf.st_mtim));
-		printf("Change: %s\n", human_time(&statbuf.st_ctim));
+		printf("Access: %s\n", human_time(&statbuf.BB_ST_ATIM));
+		printf("Modify: %s\n", human_time(&statbuf.BB_ST_MTIM));
+		printf("Change: %s\n", human_time(&statbuf.BB_ST_CTIM));
 	}
 #endif  /* FEATURE_STAT_FORMAT */
 	return 1;

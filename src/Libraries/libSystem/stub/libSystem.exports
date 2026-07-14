@@ -435,3 +435,15 @@ _feof
 _islower
 _strlcat
 _memccpy
+# BusyBox: stty (already compiled in for tcgetattr), diff/more (fseeko's
+# underlying implementation was already pulled in for rewind.c), tar
+# --seamless-compression child reaping, awk pipe redirection
+_cfgetispeed
+_cfgetospeed
+_cfsetispeed
+_cfsetospeed
+_fseeko
+_ftello
+_wait
+_popen
+_pclose

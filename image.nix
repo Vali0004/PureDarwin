@@ -118,10 +118,73 @@ EOF
       ln -sf /bin/helloapp $staging/sbin/helloapp
     fi
 
-    for applet in ash cat chmod cp echo false ln ls mkdir mv pwd rm rmdir sh sleep test true uname \
-      basename dirname head tail wc cut tr sort uniq grep sed find xargs touch date env id \
-      printf seq yes which hostname du dd kill clear truncate readlink; do
-      ln -sf busybox $staging/bin/$applet
+    for applet in \
+      ash \
+      awk \
+      basename \
+      cat \
+      chmod \
+      clear \
+      cmp \
+      cp \
+      cut \
+      date \
+      dd \
+      df \
+      diff \
+      dirname \
+      du \
+      echo \
+      env \
+      expr \
+      false \
+      find \
+      grep \
+      gunzip \
+      gzip \
+      head \
+      hostname \
+      id \
+      kill \
+      ln \
+      ls \
+      mkdir \
+      mknod \
+      more \
+      mv \
+      patch \
+      printf \
+      pwd \
+      readlink \
+      realpath \
+      reset \
+      rm \
+      rmdir \
+      sed \
+      seq \
+      sh \
+      sleep \
+      sort \
+      stat \
+      stty \
+      tail \
+      tar \
+      test \
+      touch \
+      tr \
+      true \
+      truncate \
+      tty \
+      uname \
+      uniq \
+      vi \
+      wc \
+      which \
+      whoami \
+      xargs \
+      yes
+    do
+      ln -s busybox "$staging/bin/$applet"
     done
 
     for applet in reboot shutdown; do

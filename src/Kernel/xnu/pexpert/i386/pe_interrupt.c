@@ -58,8 +58,6 @@ PE_incoming_interrupt(int interrupt)
 	vector = &PE_interrupt_handler;
 
 	if (vector->handler == NULL) {
-		kprintf("PE_incoming_interrupt: no platform handler for interrupt 0x%x\n",
-		    interrupt);
 		lapic_end_of_interrupt();
 		return;
 	}

@@ -98,7 +98,6 @@ bool AppleI386PlatformExpert::start(IOService *provider) {
 	setBootROMType(kBootROMTypeNewWorld);
 
 	bool superOK = super::start(provider);
-	kprintf(">>> AppleI386PlatformExpert::start super::start=%d\n", superOK);
 	if (!superOK) return false;
 	PE_halt_restart = handlePEHaltRestart;
 	registerService();
@@ -120,8 +119,6 @@ bool AppleI386PlatformExpert::configure(IOService *provider) {
 	IOService *nub;
 
 	topLevel = OSDynamicCast(OSArray, getProperty("top-level"));
-	kprintf(">>> configure: top-level=%p count=%u\n",
-	        topLevel, topLevel ? topLevel->getCount() : 0);
 
 	if (topLevel) {
 		unsigned int count = topLevel->getCount();
