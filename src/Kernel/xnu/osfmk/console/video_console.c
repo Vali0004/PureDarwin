@@ -355,8 +355,14 @@ gc_enable( boolean_t enable )
 	spl_t s;
 
 	if (enable == FALSE) {
-		// only disable console output if it goes to the graphics console
-		if (console_is_serial() == FALSE) {
+		/* Only disable console output if it goes solely to the graphics
+		 * console. PD routes the whole console through VC_CONS_OPS and
+		 * mirrors it to serial in vcputc(); disableConsoleOutput would
+		 * starve that mirror and mute serial whenever the screen is
+		 * released (e.g. IOFramebuffer::open() when Xorg starts). The
+		 * framebuffer itself is already protected by gc_enabled below. */
+		if (console_is_serial() == FALSE &&
+		    !(serialmode & SERIALMODE_OUTPUT)) {
 			disableConsoleOutput = TRUE;
 		}
 		gc_enabled           = FALSE;
@@ -2816,7 +2822,9 @@ gc_pause( boolean_t pause, boolean_t graphics_now )
 	s = splhigh();
 	VCPUTC_LOCK_LOCK();
 
-	disableConsoleOutput = (pause && !console_is_serial());
+	/* Same serial-mirror consideration as gc_enable(). */
+	disableConsoleOutput = (pause && !console_is_serial() &&
+	    !(serialmode & SERIALMODE_OUTPUT));
 	gc_enabled           = (!pause && !graphics_now);
 
 	VCPUTC_LOCK_UNLOCK();

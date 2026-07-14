@@ -439,6 +439,19 @@ dlsym(void *handle, const char *symbol)
     return fn(handle, symbol, __builtin_return_address(0));
 }
 
+char *
+dlerror(void)
+{
+    typedef char *(*dlerror_fn)(void);
+    static dlerror_fn fn;
+
+    if (fn == NULL && !_dyld_func_lookup("__dyld_dlerror", (void **)&fn)) {
+        return NULL;
+    }
+
+    return fn();
+}
+
 void *
 dispatch_semaphore_create(long value)
 {

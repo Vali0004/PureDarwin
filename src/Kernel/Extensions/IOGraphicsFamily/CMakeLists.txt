@@ -36,6 +36,9 @@ target_compile_options(IOGraphicsFamily.kext PRIVATE
 target_compile_definitions(IOGraphicsFamily.kext PRIVATE
     GTRACE_REVISION=0
     ENABLE_TELEMETRY=0
-    ENABLE_IONDRV_TELEMETRY=0)
+    ENABLE_IONDRV_TELEMETRY=0
+    # Compile in DEBG/D() kprintf tracing; runtime-masked by the iogdebg
+    # boot-arg / debug.iogdebg sysctl (default: everything but NOTIFICATIONS).
+    DEBG_CATEGORIES_BUILD=0x1ffull)
 set_property(TARGET IOGraphicsFamily.kext PROPERTY CXX_STANDARD 14)
 install(TARGETS IOGraphicsFamily.kext DESTINATION System/Library/Extensions COMPONENT BaseSystem)

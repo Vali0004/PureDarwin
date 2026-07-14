@@ -1,23 +1,31 @@
 add_darwin_executable(iokittest MACOSX_VERSION_MIN 11.0)
+add_darwin_executable(ioreg MACOSX_VERSION_MIN 11.0)
 
-get_target_property(_iokittest_opts iokittest COMPILE_OPTIONS)
-if(_iokittest_opts)
-    list(REMOVE_ITEM _iokittest_opts -nostdinc)
-    set_target_properties(iokittest PROPERTIES COMPILE_OPTIONS "${_iokittest_opts}")
-endif()
+foreach(_pd_tgt iokittest ioreg)
+    get_target_property(_pd_tgt_opts ${_pd_tgt} COMPILE_OPTIONS)
+    if(_pd_tgt_opts)
+        list(REMOVE_ITEM _pd_tgt_opts -nostdinc)
+        set_target_properties(${_pd_tgt} PROPERTIES COMPILE_OPTIONS "${_pd_tgt_opts}")
+    endif()
+
+    target_compile_options(${_pd_tgt} PRIVATE
+        -isysroot ${PUREDARWIN_MACOSX_SDK}
+        -fno-builtin
+        -fno-stack-protector
+    )
+endforeach()
 
 target_sources(iokittest PRIVATE
     iokittest.c
 )
 
-target_compile_options(iokittest PRIVATE
-    -isysroot ${PUREDARWIN_MACOSX_SDK}
-    -fno-builtin
-    -fno-stack-protector
+target_sources(ioreg PRIVATE
+    ioreg.c
 )
 
 if(TARGET PDGOP)
     target_link_libraries(iokittest PRIVATE PDGOP)
+    target_link_libraries(ioreg PRIVATE IOKit)
 else()
     if(NOT TARGET migcom AND DEFINED ENV{NIX_MIGCOM_PATH})
         add_executable(migcom IMPORTED GLOBAL)
@@ -53,23 +61,28 @@ else()
         PRIVATE ${CMAKE_SOURCE_DIR}/src/Libraries/libSystem/libsystem_kernel/mach
     )
     target_link_libraries(iokittest PRIVATE iokittest_PDGOP iokittest_IOKit)
-    if(TARGET libsystem_kernel_static)
-        target_link_libraries(iokittest PRIVATE libsystem_kernel_static)
-    endif()
-    if(TARGET libsyscall_traps)
-        target_link_libraries(iokittest PRIVATE libsyscall_traps)
-    endif()
+    target_link_libraries(ioreg PRIVATE iokittest_IOKit)
+    foreach(_pd_tgt iokittest ioreg)
+        if(TARGET libsystem_kernel_static)
+            target_link_libraries(${_pd_tgt} PRIVATE libsystem_kernel_static)
+        endif()
+        if(TARGET libsyscall_traps)
+            target_link_libraries(${_pd_tgt} PRIVATE libsyscall_traps)
+        endif()
+    endforeach()
 endif()
 
-target_link_options(iokittest PRIVATE
-    -nostdlib
-    -Wl,-L,$<TARGET_FILE_DIR:libSystem_B_stub>
-    -Wl,-dylinker_install_name,/usr/lib/dyld
-    -Wl,-platform_version,macos,11.0,11.5
-)
+foreach(_pd_tgt iokittest ioreg)
+    target_link_options(${_pd_tgt} PRIVATE
+        -nostdlib
+        -Wl,-L,$<TARGET_FILE_DIR:libSystem_B_stub>
+        -Wl,-dylinker_install_name,/usr/lib/dyld
+        -Wl,-platform_version,macos,11.0,11.5
+    )
 
-target_link_libraries(iokittest PRIVATE System)
+    target_link_libraries(${_pd_tgt} PRIVATE System)
 
-add_dependencies(iokittest libSystem_B_stub dyld)
+    add_dependencies(${_pd_tgt} libSystem_B_stub dyld)
 
-install(TARGETS iokittest DESTINATION bin COMPONENT BaseSystem)
+    install(TARGETS ${_pd_tgt} DESTINATION bin COMPONENT BaseSystem)
+endforeach()

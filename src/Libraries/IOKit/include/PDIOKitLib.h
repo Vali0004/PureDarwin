@@ -25,6 +25,7 @@ typedef mach_port_t io_object_t;
 typedef io_object_t io_service_t;
 typedef io_object_t io_connect_t;
 typedef io_object_t io_iterator_t;
+typedef io_object_t io_registry_entry_t;
 
 #define IO_OBJECT_NULL ((io_object_t)0)
 #define IO_SERVICE_NULL ((io_service_t)0)
@@ -94,6 +95,15 @@ kern_return_t IOObjectConformsTo(io_object_t object, const char *className,
 io_object_t IOIteratorNext(io_iterator_t iterator);
 
 kern_return_t IOIteratorReset(io_iterator_t iterator);
+
+kern_return_t IORegistryGetRootEntry(mach_port_t masterPort,
+    io_registry_entry_t *root);
+
+kern_return_t IORegistryEntryGetName(io_registry_entry_t entry,
+    io_name_t name);
+
+kern_return_t IORegistryEntryGetChildIterator(io_registry_entry_t entry,
+    const io_name_t plane, io_iterator_t *iterator);
 
 /* Just a mach port deallocate - io_object_t cleanup happens via the
  * kernel's no-more-senders notification (iokit_remove_reference), there is

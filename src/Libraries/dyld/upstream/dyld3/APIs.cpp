@@ -814,7 +814,18 @@ struct PerThreadErrorMessage
 static void dlerror_perThreadKey_once(void* ctx)
 {
     pthread_key_t* dlerrorPThreadKeyPtr = (pthread_key_t*)ctx;
-    pthread_key_create(dlerrorPThreadKeyPtr, &free);
+    // PureDarwin: pthread_key_create() only writes *key on success - on failure
+    // (EAGAIN, no TSD slot available) it leaves the caller's variable untouched.
+    // Upstream drops the return value, so a failure left dlerrorPThreadKey at its
+    // static-zero init. Key 0 is not an unallocated key on Darwin: TSD slot 0 holds
+    // the pthread_self pointer. pthread_getspecific(0) therefore returned a valid
+    // non-NULL pointer, setErrorString() read sizeAllocated out of the pthread
+    // struct, decided the buffer was too small, and called free(pthread_self) -
+    // "pointer being freed was not allocated", on every dyld error path (failed
+    // dlopen, failed module load), in every process. Pin the key to 0 explicitly on
+    // failure so it is unambiguously "no key", and make the users below skip TSD.
+    if ( pthread_key_create(dlerrorPThreadKeyPtr, &free) != 0 )
+        *dlerrorPThreadKeyPtr = 0;
 }
 
 static pthread_key_t dlerror_perThreadKey()
@@ -825,9 +836,19 @@ static pthread_key_t dlerror_perThreadKey()
     return dlerrorPThreadKey;
 }
 
+// PureDarwin: 0 means pthread_key_create() failed (see dlerror_perThreadKey_once).
+// Slot 0 is pthread_self, not our buffer - never read or free it.
+static PerThreadErrorMessage* dlerrorBuffer()
+{
+    pthread_key_t key = dlerror_perThreadKey();
+    if ( key == 0 )
+        return nullptr;
+    return (PerThreadErrorMessage*)pthread_getspecific(key);
+}
+
 static void clearErrorString()
 {
-    PerThreadErrorMessage* errorBuffer = (PerThreadErrorMessage*)pthread_getspecific(dlerror_perThreadKey());
+    PerThreadErrorMessage* errorBuffer = dlerrorBuffer();
     if ( errorBuffer != nullptr )
         errorBuffer->valid = false;
 }
@@ -843,7 +864,14 @@ static void setErrorString(const char* format, ...)
         va_end(list);
         size_t strLen = strlen(_simple_string(buf)) + 1;
         size_t sizeNeeded = sizeof(PerThreadErrorMessage) + strLen;
-        PerThreadErrorMessage* errorBuffer = (PerThreadErrorMessage*)pthread_getspecific(dlerror_perThreadKey());
+        // PureDarwin: with no usable TSD key there is nowhere to stash the message.
+        // Drop it rather than fall back on slot 0 (pthread_self) and free() it.
+        pthread_key_t key = dlerror_perThreadKey();
+        if ( key == 0 ) {
+            _simple_sfree(buf);
+            return;
+        }
+        PerThreadErrorMessage* errorBuffer = (PerThreadErrorMessage*)pthread_getspecific(key);
         if ( errorBuffer != nullptr ) {
             if ( errorBuffer->sizeAllocated < sizeNeeded ) {
                 free(errorBuffer);
@@ -853,9 +881,13 @@ static void setErrorString(const char* format, ...)
         if ( errorBuffer == nullptr ) {
             size_t allocSize = std::max(sizeNeeded, (size_t)256);
             PerThreadErrorMessage* p = (PerThreadErrorMessage*)malloc(allocSize);
+            if ( p == nullptr ) {
+                _simple_sfree(buf);
+                return;
+            }
             p->sizeAllocated = allocSize;
             p->valid = false;
-            pthread_setspecific(dlerror_perThreadKey(), p);
+            pthread_setspecific(key, p);
             errorBuffer = p;
         }
         strcpy(errorBuffer->message, _simple_string(buf));
@@ -868,7 +900,7 @@ char* dlerror()
 {
     log_apis("dlerror()\n");
 
-    PerThreadErrorMessage* errorBuffer = (PerThreadErrorMessage*)pthread_getspecific(dlerror_perThreadKey());
+    PerThreadErrorMessage* errorBuffer = dlerrorBuffer();
     if ( errorBuffer != nullptr ) {
         if ( errorBuffer->valid ) {
             // you can only call dlerror() once, then the message is cleared
@@ -1569,6 +1601,24 @@ static const struct dyld_func dyld_funcs[] = {
     // <rdar://problem/59265987> support old licenseware plug ins on macOS
     {"__dyld_lookup_and_bind",          (void*)dyld3::_dyld_lookup_and_bind },
 #endif
+    // PureDarwin: the *_internal dl* entry points. PD's libSystem does not ship
+    // Apple's dyldAPIsInLibSystem.cpp; its dlopen/dlsym/dlclose/dlerror shims
+    // (Libraries/libSystem/stub/pd_libSystem_compat.c) reach dyld through
+    // _dyld_func_lookup by these exact names. They were absent from this table,
+    // so every one of those lookups fell through the loop below - which, with no
+    // sentinel (see next entry), then ran off the end of this array. dyld3
+    // already implements all four; just publish them. The _internal variants take
+    // the caller's return address as a third argument, which is what the shims
+    // pass, so the signatures line up.
+    {"__dyld_dlopen_internal",          (void*)dyld3::dlopen_internal },
+    {"__dyld_dlsym_internal",           (void*)dyld3::dlsym_internal },
+    {"__dyld_dlclose",                  (void*)dyld3::dlclose },
+    {"__dyld_dlerror",                  (void*)dyld3::dlerror },
+    // PureDarwin: compatFuncLookup() below walks this array until p->name is
+    // NULL, but there was no terminating entry - so any name not matched above
+    // read past the end of the array and strcmp'd whatever happened to follow it
+    // in __DATA_CONST. Terminate it.
+    {NULL,                              NULL },
 };
 #endif
 

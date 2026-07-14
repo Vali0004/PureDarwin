@@ -322,6 +322,7 @@ set_target_properties(libc_internal_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_sources(libc_internal_static PRIVATE
     gen/FreeBSD/opendir.c        # _opendir$INODE64
     gen/FreeBSD/readdir.c        # _readdir$INODE64 / _readdir_r$INODE64
+    gen/FreeBSD/scandir.c        # _scandir$INODE64 / _alphasort$INODE64
     gen/FreeBSD/closedir.c       # _closedir
     gen/FreeBSD/telldir.c        # telldir/seekdir support used by the above
     gen/FreeBSD/getcwd.c         # _getcwd / ___private_getcwd

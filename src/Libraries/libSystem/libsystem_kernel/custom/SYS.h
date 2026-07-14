@@ -131,20 +131,27 @@ LEAF(pseudo, 0)					;\
 	movq	%rcx, %r10		;\
 	syscall
 
+/* On success %rdi must be preserved: custom wrappers (__pipe, __fork, ...)
+ * use their first argument after the syscall returns. Only the error path
+ * may move the errno value into %rdi for cerror. */
 #define UNIX_SYSCALL(name, nargs)						 \
 	.globl	cerror								;\
 LEAF(_##name, 0)								;\
 	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
 	UNIX_SYSCALL_SYSCALL							;\
+	jae	2f								;\
 	movq	%rax, %rdi							;\
-	jb	_cerror
+	jmp	_cerror								;\
+2:
 
 #define UNIX_SYSCALL_NONAME(name, nargs, cerror)		 \
 	.globl	cerror								;\
 	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
 	UNIX_SYSCALL_SYSCALL							;\
+	jae	2f								;\
 	movq	%rax, %rdi							;\
-	jb	_##cerror
+	jmp	_##cerror							;\
+2:
 
 #define PSEUDO(pseudo, name, nargs, cerror)			\
 LEAF(pseudo, 0)					;\

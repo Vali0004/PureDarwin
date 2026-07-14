@@ -114,7 +114,8 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "helloapp" "launchd" "busybox" "sw_vers" "ps" "mkfile" "sync" "fbtri" "iokittest" ];
+            buildTargets = [ "helloapp" "launchd" "busybox" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "iokittest" "ioreg" ]
+              ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" ];
             enableProjects = false;
             enableKernel = false;
             enableLibraries = false;
@@ -122,6 +123,12 @@
             installUserland = true;
             installKernel = false;
             prebuiltLibSystem = libSystemBuild;
+            xorgDriverIncludes = if isDarwin then null else [
+              "${xorgBuild}/usr/include/xorg"
+              "${xorgBuild}/usr/include"
+              "${lib.getDev pkgs.xorgproto}/include"
+              "${xvfbPixmanBuild}/include/pixman-1"
+            ];
           };
           tccBuild = mkPureDarwinBuild {
             pname = "puredarwin-tcc";
@@ -178,10 +185,6 @@
               libSystem = libSystemBuild;
               inherit (pkgs) zlib;
             };
-          # Real font stack (replaces the old no-op xfont2 stub): freetype2 ->
-          # libfontenc -> libXfont2, all built with the same generic autotools
-          # cross-helper used for libX11/libxcb. harfbuzz/png/bzip2/brotli are
-          # disabled to keep the cross build's dependency surface small.
           freetype2Build =
             if isDarwin then null else pkgs.callPackage ./xvfb-freetype.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -314,6 +317,29 @@
               libxkbfile = xvfbLibXkbfileBuild;
               libXdmcp = pkgs.libxdmcp;
             };
+          xvfbLibxcvtBuild =
+            if isDarwin then null else pkgs.callPackage ./xvfb-libxcvt.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              inherit (pkgs) libxcvt;
+            };
+          xorgBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              xorg-server = pkgs.xorg-server;
+              pixman = xvfbPixmanBuild;
+              libXau = xvfbLibXauBuild;
+              libXfont2 = xvfbLibXfont2Build;
+              zlib = xvfbZlibBuild;
+              freetype2 = freetype2Build;
+              libfontenc = libfontencBuild;
+              xvfbZlib = xvfbZlibBuild;
+              inherit (pkgs) xorgproto xtrans;
+              libxkbfile = xvfbLibXkbfileBuild;
+              libXdmcp = pkgs.libxdmcp;
+              libxcvt = xvfbLibxcvtBuild;
+            };
           xeyesBuild =
             if isDarwin then null else pkgs.callPackage ./xeyes.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -328,6 +354,7 @@
             if isDarwin then null else pkgs.callPackage ./startx.nix {
               xvfb = xvfbBuild;
               xeyes = xeyesBuild;
+              xorg = xorgBuild;
             };
           libSystemBuild = mkPureDarwinBuild {
             pname = "puredarwin-libsystem";
@@ -462,6 +489,8 @@
                 baseSystem = splitBaseSystem;
                 extraPackages = [
                   xvfbBuild
+                  xorgBuild
+                  xvfbLibxcvtBuild
                   xeyesBuild
                   startxBuild
                   xkbcompBuild
@@ -507,7 +536,7 @@
                     -drive if=pflash,format=raw,unit=0,readonly=on,file="$ovmf_code" \
                     -drive if=pflash,format=raw,unit=1,file="$ovmf_vars" \
                     -drive id=root,format=raw,file="$image" \
-                    -serial stdio \
+                    -serial mon:stdio \
                     -no-reboot \
                     -no-shutdown \
                     "$@"
@@ -557,8 +586,7 @@
                     -usb \
                     -device usb-kbd \
                     -device usb-tablet \
-                    -serial stdio \
-                    -monitor none \
+                    -serial mon:stdio \
                     -no-reboot \
                     -no-shutdown \
                     "$@"
@@ -569,6 +597,9 @@
               native-ld = nativeLd;
               kc = kcBuild;
               image = imageBuild;
+              xorg = xorgBuild;
+              libxcvt = xvfbLibxcvtBuild;
+              userland = userlandBuild;
               vm-runner = runVm;
               kvm-runner = runKvm;
             };

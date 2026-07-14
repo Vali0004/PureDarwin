@@ -46,6 +46,7 @@
 , installBaseSystem ? false
 , prebuiltLibSystem ? null
 , xnuKernelConfig ? "RELEASE"
+, xorgDriverIncludes ? null
 }:
 
 let
@@ -164,6 +165,7 @@ EOF
       -DPUREDARWIN_ENABLE_IOGRAPHICS_FAMILY=${if enableIOGraphicsFamily then "ON" else "OFF"} \
       -DPUREDARWIN_XNU_KERNEL_CONFIG=${lib.escapeShellArg xnuKernelConfig} \
       -DPUREDARWIN_TCC_SOURCE=${tinycc.src} \
+      ${lib.optionalString (xorgDriverIncludes != null) "-DPUREDARWIN_XORG_INCLUDE_DIRS=${lib.escapeShellArg (lib.concatStringsSep ";" xorgDriverIncludes)}"} \
       ${lib.optionalString (prebuiltLibSystem != null) "-DPUREDARWIN_PREBUILT_LIBSYSTEM_ROOT=${prebuiltLibSystem}"}
     runHook postConfigure
   '';
@@ -208,7 +210,10 @@ EOF
       build-nix/src/Userspace/system_cmds/sync \
       build-nix/src/Userspace/tcc/build/tcc \
       build-nix/src/Userspace/fbtri/fbtri \
-      build-nix/src/Userspace/iokittest/iokittest
+      build-nix/src/Userspace/malloctest/malloctest \
+      build-nix/src/Userspace/sockettest/sockettest \
+      build-nix/src/Userspace/iokittest/iokittest \
+      build-nix/src/Userspace/iokittest/ioreg
     do
       if [ -x "$bin" ]; then
         cp "$bin" $out/bin/
@@ -216,6 +221,12 @@ EOF
     done
     if [ -x build-nix/src/Userspace/launchd/launchd ]; then
       cp build-nix/src/Userspace/launchd/launchd $out/sbin/
+    fi
+    _pdgop_drv="$(find build-nix -name 'puredarwingop_drv.dylib' -print -quit 2>/dev/null || true)"
+    echo "puredarwingop driver module: ''${_pdgop_drv:-<not built>}"
+    if [ -n "$_pdgop_drv" ]; then
+      mkdir -p $out/usr/lib/xorg/modules/drivers
+      cp "$_pdgop_drv" $out/usr/lib/xorg/modules/drivers/puredarwingop_drv.so
     fi
   '' + lib.optionalString installKernel ''
     cp -R build-nix/src/Kernel/xnu/xnu/. $out/

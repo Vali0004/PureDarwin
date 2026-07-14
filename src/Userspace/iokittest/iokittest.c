@@ -1,12 +1,4 @@
 /*
- * First real end-to-end boot test of the userspace IOKit client
- * (src/Libraries/IOKit). Everything up to this point (device.defs mig'd
- * cleanly, libIOKit.a compiles, right symbols defined) was only verified by
- * build + nm - this is the first thing that actually exercises the chain
- * client -> kernel MIG dispatch (iokit_server/is_iokit_subsystem, already
- * built into the kernel by xnu's stock Makefiles) -> iokit_rpc.c port
- * translation -> IOFramebufferUserClient::getVRAMRange, at runtime.
- *
  * Looks up IOGOPFramebuffer, opens a user client connection, maps its VRAM
  * (kIOFBVRAMMemory, from IOGraphicsTypesPrivate.h), and draws a plain fill +
  * a triangle into it - same drawing code as fbtri.c, just backed by a real

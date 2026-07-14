@@ -114,6 +114,42 @@ export PS1='\u@\h:\w \$ '
 EOF
     chmod 644 $staging/etc/passwd $staging/etc/group $staging/etc/profile
 
+    # Xorg config selecting the PureDarwin GOP framebuffer driver. No input
+    # autodetection (no udev/hal on PD); the driver reads its geometry live
+    # from IOGOPFramebuffer, so no Modeline/resolution is needed here.
+    mkdir -p $staging/etc/X11
+    cat > $staging/etc/X11/xorg.conf <<'EOF'
+Section "ServerFlags"
+    Option "AutoAddDevices" "false"
+    Option "AutoAddGPU"     "false"
+    Option "AutoEnableDevices" "false"
+    Option "DontVTSwitch"   "true"
+    Option "AllowEmptyInput" "true"
+EndSection
+
+Section "Device"
+    Identifier "GOP0"
+    Driver     "puredarwingop"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor0"
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Device     "GOP0"
+    Monitor    "Monitor0"
+    DefaultDepth 24
+EndSection
+
+Section "ServerLayout"
+    Identifier "Layout0"
+    Screen     "Screen0"
+EndSection
+EOF
+    chmod 644 $staging/etc/X11/xorg.conf
+
     if [ -x $staging/bin/helloapp ] && [ ! -e $staging/sbin/helloapp ]; then
       ln -sf /bin/helloapp $staging/sbin/helloapp
     fi
@@ -199,7 +235,7 @@ EOF
     chmod 700  $staging/var/root
 
     echo "Image X11 executables:"
-    for executable in Xvfb xeyes startx; do
+    for executable in Xvfb Xorg xeyes startx startx-gop; do
       found=
       for candidate in \
         "$staging/bin/$executable" \

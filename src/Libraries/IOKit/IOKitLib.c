@@ -10,6 +10,7 @@
  */
 #include <PDIOKitLib.h>
 #include <mach/mach.h>
+#include <mach/mach_traps.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,10 +18,22 @@
 
 const mach_port_t kIOMasterPortDefault = MACH_PORT_NULL;
 
+
+extern mach_port_t mach_task_self_;
+
+static void
+IOKitEnsureTaskSelf(void)
+{
+	if (mach_task_self_ == MACH_PORT_NULL) {
+		mach_task_self_ = task_self_trap();
+	}
+}
+
 kern_return_t
 IOMasterPort(mach_port_t bootstrapPort, mach_port_t *masterPort)
 {
 	(void)bootstrapPort;
+	IOKitEnsureTaskSelf();
 	return host_get_io_master(mach_host_self(), masterPort);
 }
 
@@ -74,6 +87,11 @@ IOServiceOpen(io_service_t service, task_t owningTask, uint32_t type,
 	kern_return_t result = KERN_FAILURE;
 	kern_return_t kr;
 
+	IOKitEnsureTaskSelf();
+	if (owningTask == MACH_PORT_NULL) {
+		owningTask = mach_task_self_;
+	}
+
 	kr = io_service_open_extended(service, owningTask, type, NDR_record,
 	    NULL, 0, &result, connect);
 	if (kr != KERN_SUCCESS) {
@@ -93,6 +111,10 @@ IOConnectMapMemory64(io_connect_t connect, uint32_t memoryType,
     task_t intoTask, mach_vm_address_t *address, mach_vm_size_t *size,
     uint32_t options)
 {
+	IOKitEnsureTaskSelf();
+	if (intoTask == MACH_PORT_NULL) {
+		intoTask = mach_task_self_;
+	}
 	return io_connect_map_memory_into_task(connect, memoryType, intoTask,
 	    address, size, options);
 }
@@ -101,6 +123,10 @@ kern_return_t
 IOConnectUnmapMemory64(io_connect_t connect, uint32_t memoryType,
     task_t fromTask, mach_vm_address_t address)
 {
+	IOKitEnsureTaskSelf();
+	if (fromTask == MACH_PORT_NULL) {
+		fromTask = mach_task_self_;
+	}
 	return io_connect_unmap_memory_from_task(connect, memoryType,
 	    fromTask, address);
 }
@@ -235,6 +261,35 @@ kern_return_t
 IOIteratorReset(io_iterator_t iterator)
 {
 	return io_iterator_reset(iterator);
+}
+
+kern_return_t
+IORegistryGetRootEntry(mach_port_t masterPort, io_registry_entry_t *root)
+{
+	return io_registry_get_root_entry(masterPort, root);
+}
+
+kern_return_t
+IORegistryEntryGetName(io_registry_entry_t entry, io_name_t name)
+{
+	return io_registry_entry_get_name(entry, name);
+}
+
+kern_return_t
+IORegistryEntryGetChildIterator(io_registry_entry_t entry,
+    const io_name_t plane, io_iterator_t *iterator)
+{
+	io_name_t planeCopy;
+	size_t i;
+
+	for (i = 0; i < sizeof(planeCopy); i++) {
+		planeCopy[i] = plane[i];
+		if (plane[i] == '\0') {
+			return io_registry_entry_get_child_iterator(entry,
+			    planeCopy, iterator);
+		}
+	}
+	return KERN_INVALID_ARGUMENT;
 }
 
 kern_return_t

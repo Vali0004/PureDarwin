@@ -61,11 +61,6 @@ _pthread_mutex_lock
 _pthread_mutex_unlock
 _pthread_setspecific
 _pthread_once
-# Rest of the pthread API: libpthread_static.a already implements the full
-# surface, but only the handful above had ever been added here, so anything
-# using pthreads beyond TSD/mutex/once (Xlib's locking, real threads, rwlocks,
-# condvars, ...) failed at dyld lazy-bind time with "Symbol not found" even
-# though the code was linked in. Export the rest of what's actually compiled.
 _pthread_attr_destroy
 _pthread_attr_getdetachstate
 _pthread_attr_getguardsize
@@ -353,6 +348,7 @@ _strspn
 _ungetc
 _utimensat
 _dlclose
+_dlerror
 _dlopen
 _dlsym
 _fdopen$DARWIN_EXTSN
@@ -408,7 +404,6 @@ _hypot
 _log
 _pow
 _sin
-# xeyes (Xlib) needs these; all already compiled in, just never exported.
 _connect
 _isascii
 _mbtowc
@@ -417,9 +412,9 @@ _setlocale
 _wctomb
 ___darwin_check_fd_set_overflow
 _inet_addr
+_inet_aton
 _mblen
 _recv
-# real font stack (freetype2/libfontenc/libXfont2) config/encoding parsing
 _atof
 _fscanf
 _localeconv
@@ -428,16 +423,12 @@ _munmap
 _msync
 _setpgid
 _strlcpy
-# xkbcomp
 __DefaultRuneLocale
 ___maskrune
 _feof
 _islower
 _strlcat
 _memccpy
-# BusyBox: stty (already compiled in for tcgetattr), diff/more (fseeko's
-# underlying implementation was already pulled in for rewind.c), tar
-# --seamless-compression child reaping, awk pipe redirection
 _cfgetispeed
 _cfgetospeed
 _cfsetispeed
@@ -447,3 +438,27 @@ _ftello
 _wait
 _popen
 _pclose
+_alphasort$INODE64
+_scandir$INODE64
+_isupper
+# Mach / MIG. libSystem.B.dylib already links libsystem_kernel_static, so these
+# are present in the image - they were just never exported, which forced every
+# IOKit client (iokittest, ioreg, and the Xorg puredarwingop driver) to static
+# link libsystem_kernel.a instead. For a dlopen'd plugin that is actively
+# harmful: the archive drags in libkernel's _malloc/_free shims, whose dispatch
+# table only libSystem's initializer fills in, so the module's first free() runs
+# off a NULL table. Exporting them lets clients just link -lSystem.
+_NDR_record
+_mach_msg
+_mach_msg_destroy
+_mach_host_self
+_mach_task_self_
+_task_self_trap
+_mach_port_deallocate
+_mach_port_mod_refs
+_host_get_io_master
+_mig_get_reply_port
+_mig_put_reply_port
+_mig_dealloc_reply_port
+_mig_strncpy
+_mig_strncpy_zerofill
