@@ -194,9 +194,9 @@ void *aligned_alloc(size_t alignment, size_t size)
 
 /* arc4random/arc4random_buf: real getentropy()-backed implementation, same
  * approach as libc's darwin/pd_arc4random.c (real corecrypto-based
- * arc4random.c is deferred -- see that file's comment for why). The
+ * arc4random.c is deferred - see that file's comment for why). The
  * previous version here was a fixed-seed xorshift PRNG: deterministic
- * across every boot, not real randomness -- a genuine correctness gap for
+ * across every boot, not real randomness - a genuine correctness gap for
  * anything security-adjacent (ASLR-adjacent pointer obfuscation, hash
  * seeding) that dyld uses these for. */
 extern int getentropy(void *buf, size_t buflen);
@@ -225,7 +225,7 @@ void arc4random_buf(void *buf, size_t nbytes)
 void arc4random_stir(void) { /* no persistent state to restir */ }
 void arc4random_addrandom(unsigned char *data, int datalen)
 {
-	(void)data; (void)datalen;   /* getentropy() needs no caller-supplied entropy */
+	(void)data; (void)datalen; /* getentropy() needs no caller-supplied entropy */
 }
 
 extern void _ZN4dyld4haltEPKc(const char *msg) __attribute__((noreturn));

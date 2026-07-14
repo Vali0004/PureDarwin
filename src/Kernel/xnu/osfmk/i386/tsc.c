@@ -237,6 +237,7 @@ void
 tsc_init(void)
 {
 	boolean_t       N_by_2_bus_ratio = FALSE;
+	boolean_t       sync_amd_tsc = FALSE;
 
 	if (cpuid_vmm_present()) {
 		kprintf("VMM vendor %s TSC frequency %u KHz bus frequency %u KHz\n",
@@ -374,7 +375,7 @@ tsc_init(void)
 			}
 		}
 
-		if (infop->cpuid_family >= 0x17) {
+		if (infop->cpuid_family >= 0x17 && !cpuid_vmm_present()) {
 			msr = rdmsr64(MSR_AMD_HARDWARE_CFG);
 			msr |= MSR_AMD_HARDWARE_CFG_TSC_LOCK_AT_P0;
 			wrmsr64(MSR_AMD_HARDWARE_CFG, msr);
@@ -385,12 +386,7 @@ tsc_init(void)
 			tscGranularity = 1;
 		}
 
-		clock_interval_to_absolutetime_interval(tsc_sync_interval_msecs,
-		    NSEC_PER_MSEC, &tsc_sync_interval_abs);
-		timer_call_setup(&sync_tsc_timer, tsc_sync, NULL);
-		tsc_sync_next_deadline = mach_absolute_time() + tsc_sync_interval_abs;
-		timer_call_enter_with_leeway(&sync_tsc_timer, NULL,
-		    tsc_sync_next_deadline, 0, TIMER_CALL_SYS_NORMAL, FALSE);
+		sync_amd_tsc = !cpuid_vmm_present();
 		break;
 	}
 	default: {
@@ -509,6 +505,15 @@ tsc_init(void)
 	    (uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
 	    (uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
 	    tscGranularity, N_by_2_bus_ratio ? " (N/2)" : "");
+
+	if (sync_amd_tsc) {
+		clock_interval_to_absolutetime_interval(tsc_sync_interval_msecs,
+		    NSEC_PER_MSEC, &tsc_sync_interval_abs);
+		timer_call_setup(&sync_tsc_timer, tsc_sync, NULL);
+		tsc_sync_next_deadline = mach_absolute_time() + tsc_sync_interval_abs;
+		timer_call_enter_with_leeway(&sync_tsc_timer, NULL,
+		    tsc_sync_next_deadline, 0, TIMER_CALL_SYS_NORMAL, FALSE);
+	}
 }
 
 void

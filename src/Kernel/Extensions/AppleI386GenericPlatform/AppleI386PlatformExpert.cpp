@@ -35,6 +35,7 @@ extern "C" {
 #include <pexpert/i386/protos.h>
 }
 
+#include "../AppleAPIC/PICShared.h"
 #include "AppleI386PlatformExpert.h"
 
 // kprintf writes straight to the serial console, bypassing os_log (which drops
@@ -181,7 +182,6 @@ void AppleI386PlatformExpert::setupPIC(IOService *nub) {
 	OSArray *controller;
 	OSArray *specifier;
 	OSData *tmpData;
-	long tmpLong;
 
 	propTable = nub->getPropertyTable();
 
@@ -193,9 +193,14 @@ void AppleI386PlatformExpert::setupPIC(IOService *nub) {
 	assert(specifier);
 
 	for (i = 0; i < kSystemIRQCount; i++) {
-		tmpLong = i;
-		tmpData = OSData::withBytes(&tmpLong, sizeof(tmpLong));
+		UInt32 spec[2];
+		spec[0] = i;
+		spec[1] = kInterruptTriggerModeEdge |
+		    kInterruptPolarityHigh |
+		    kInterruptNotShareable;
+		tmpData = OSData::withBytes(spec, sizeof(spec));
 		specifier->setObject(tmpData);
+		tmpData->release();
 	}
 
 	controller = OSArray::withCapacity(kSystemIRQCount);

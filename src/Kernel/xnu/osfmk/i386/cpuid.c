@@ -330,10 +330,12 @@ cpuid_determine_vendor( i386_cpu_info_t * info_p )
 {
     DBG("cpuid_determine_ven(%p)\n", info_p);
 
-    if (!strncmp(CPUID_VID_INTEL, info_p->cpuid_vendor, min(strlen(CPUID_STRING_UNKNOWN) + 1, sizeof(info_p->cpuid_vendor)))) {
+    if (!strncmp(CPUID_VID_INTEL, info_p->cpuid_vendor, strlen(CPUID_VID_INTEL))) {
         info_p->cpuid_ven = CPUID_VEN_INTEL;
-    } else if (!strncmp(CPUID_VID_AMD, info_p->cpuid_vendor, min(strlen(CPUID_STRING_UNKNOWN) + 1, sizeof(info_p->cpuid_vendor)))) {
+    } else if (!strncmp(CPUID_VID_AMD, info_p->cpuid_vendor, strlen(CPUID_VID_AMD))) {
         info_p->cpuid_ven = CPUID_VEN_AMD;
+    } else {
+        info_p->cpuid_ven = CPUID_VEN_UNKNOWN;
     }
 }
 
@@ -598,6 +600,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
     bcopy((char *)&reg[ecx], &info_p->cpuid_vendor[8], 4);
     bcopy((char *)&reg[edx], &info_p->cpuid_vendor[4], 4);
     info_p->cpuid_vendor[12] = 0;
+    cpuid_determine_vendor(info_p);
 
     /* get extended cpuid results */
     cpuid_fn(0x80000000, reg);

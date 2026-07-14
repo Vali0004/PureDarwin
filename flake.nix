@@ -500,17 +500,70 @@
                     "$@"
                 '';
               };
+              runKvm = pkgs.writeShellApplication {
+                name = "puredarwin-kvm";
+                runtimeInputs = [ pkgs.qemu ];
+                text = ''
+                  set -euo pipefail
+
+                  state_dir="''${PUREDARWIN_VM_STATE_DIR:-$PWD/.puredarwin-kvm}"
+                  image="''${PUREDARWIN_IMAGE:-}"
+                  ovmf_code="''${PUREDARWIN_OVMF_CODE:-${pkgs.OVMF.fd}/FV/OVMF_CODE.fd}"
+                  ovmf_vars_template="''${PUREDARWIN_OVMF_VARS_TEMPLATE:-${pkgs.OVMF.fd}/FV/OVMF_VARS.fd}"
+                  ovmf_vars="''${PUREDARWIN_OVMF_VARS:-$state_dir/OVMF_VARS.fd}"
+
+                  if [ -z "$image" ]; then
+                    if [ -e "$PWD/puredarwin.img" ]; then
+                      image="$PWD/puredarwin.img"
+                    elif [ -e "$PWD/result/puredarwin.img" ]; then
+                      image="$PWD/result/puredarwin.img"
+                    else
+                      echo "puredarwin-kvm: no image found; set PUREDARWIN_IMAGE or run nix build .#image" >&2
+                      exit 1
+                    fi
+                  fi
+
+                  mkdir -p "$state_dir"
+                  if [ ! -e "$ovmf_vars" ]; then
+                    cp "$ovmf_vars_template" "$ovmf_vars"
+                    chmod u+w "$ovmf_vars"
+                  fi
+
+                  exec qemu-system-x86_64 \
+                    -machine q35,accel=kvm \
+                    -cpu "''${PUREDARWIN_KVM_CPU:-host}" \
+                    -smp "''${PUREDARWIN_VM_SMP:-4}" \
+                    -m "''${PUREDARWIN_VM_MEMORY:-4096}" \
+                    -drive if=pflash,format=raw,unit=0,readonly=on,file="$ovmf_code" \
+                    -drive if=pflash,format=raw,unit=1,file="$ovmf_vars" \
+                    -device ich9-ahci,id=sata \
+                    -drive if=none,id=system,file="$image",format=raw,cache=writeback \
+                    -device ide-hd,bus=sata.0,drive=system \
+                    -device e1000-82545em,netdev=net0 \
+                    -netdev user,id=net0 \
+                    -usb \
+                    -device usb-kbd \
+                    -device usb-tablet \
+                    -serial stdio \
+                    -monitor none \
+                    -no-reboot \
+                    -no-shutdown \
+                    "$@"
+                '';
+              };
             in {
               darwin-cross-toolchain = darwinCrossToolchain;
               native-ld = nativeLd;
               kc = kcBuild;
               image = imageBuild;
               vm-runner = runVm;
+              kvm-runner = runKvm;
             };
 
           linuxApps =
             let
               runVm = linuxPackages.vm-runner;
+              runKvm = linuxPackages.kvm-runner;
             in {
               default = {
                 type = "app";
@@ -519,6 +572,10 @@
               vm = {
                 type = "app";
                 program = "${runVm}/bin/puredarwin-vm";
+              };
+              kvm = {
+                type = "app";
+                program = "${runKvm}/bin/puredarwin-kvm";
               };
             };
 

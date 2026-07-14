@@ -34,6 +34,7 @@
 #endif
 
 void PE_incoming_interrupt(int);
+extern void lapic_end_of_interrupt(void);
 
 
 struct i386_interrupt_handler {
@@ -55,6 +56,13 @@ PE_incoming_interrupt(int interrupt)
 	i386_interrupt_handler_t        *vector;
 
 	vector = &PE_interrupt_handler;
+
+	if (vector->handler == NULL) {
+		kprintf("PE_incoming_interrupt: no platform handler for interrupt 0x%x\n",
+		    interrupt);
+		lapic_end_of_interrupt();
+		return;
+	}
 
 #if CONFIG_DTRACE && DEVELOPMENT
 	DTRACE_INT5(interrupt_start, void *, vector->nub, int, 0,
