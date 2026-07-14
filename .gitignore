@@ -131,6 +131,6 @@ CMakeCache.txt
 *.fd
 
 # Nix files
-result
+result*
 */output.txt
 output.txt
