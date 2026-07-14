@@ -11,6 +11,12 @@ OSDefineMetaClassAndStructors(RavynXHCIKeyboard, IOHIKeyboard);
 
 #define DEADKEY 0xFF
 
+enum {
+    kUSBHIDInterfaceClass       = 3,
+    kUSBBootInterfaceSubClass   = 1,
+    kUSBKeyboardInterfaceProtocol = 1
+};
+
 static const UInt8 gUSBToADB[256] = {
     DEADKEY, DEADKEY, DEADKEY, DEADKEY,
     0x00, 0x0b, 0x08, 0x02, 0x0e, 0x03, 0x05, 0x04, 0x22, 0x26, 0x28, 0x25,
@@ -43,6 +49,18 @@ bool RavynXHCIKeyboard::initWithPort(RavynXHCIPort * port, int kbdIndex)
     _kbdIndex = kbdIndex;
     _running = false;
     bzero(_lastReport, sizeof(_lastReport));
+
+    setName("RavynXHCIKeyboard");
+    setProperty("HIDKeyboardKeysDefined", kOSBooleanTrue);
+    setProperty(kIOHIDVirtualHIDevice, kOSBooleanFalse);
+    setProperty(kIOHIDKindKey, kHIKeyboardDevice, 32);
+    setProperty(kIOHIDInterfaceIDKey, NX_EVS_DEVICE_INTERFACE_ADB, 32);
+    setProperty(kIOHIDSubinterfaceIDKey, NX_EVS_DEVICE_TYPE_KEYBOARD, 32);
+    setProperty("Transport", "USB");
+    setProperty("USB Product Name", "Ravyn USB Keyboard");
+    setProperty("bInterfaceClass", kUSBHIDInterfaceClass, 8);
+    setProperty("bInterfaceSubClass", kUSBBootInterfaceSubClass, 8);
+    setProperty("bInterfaceProtocol", kUSBKeyboardInterfaceProtocol, 8);
     return true;
 }
 

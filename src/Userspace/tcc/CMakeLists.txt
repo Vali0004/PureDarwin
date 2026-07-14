@@ -30,6 +30,7 @@ add_custom_command(
     OUTPUT "${PUREDARWIN_TCC_BIN}"
     COMMAND "${CMAKE_COMMAND}" -E rm -rf "${PUREDARWIN_TCC_SOURCE_COPY}" "${PUREDARWIN_TCC_BUILD_DIR}"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${PUREDARWIN_TCC_SOURCE}" "${PUREDARWIN_TCC_SOURCE_COPY}"
+    COMMAND "${CMAKE_COMMAND}" -D "PUREDARWIN_TCC_SOURCE_COPY=${PUREDARWIN_TCC_SOURCE_COPY}" -P "${CMAKE_CURRENT_SOURCE_DIR}/patch-tcc.cmake"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${PUREDARWIN_TCC_BUILD_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E chdir "${PUREDARWIN_TCC_BUILD_DIR}"
             "${CMAKE_COMMAND}" -E env
@@ -64,6 +65,7 @@ add_custom_command(
         DEPENDS
             "$<TARGET_FILE:libSystem_B_stub>"
             "$<TARGET_FILE:libdyld>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/patch-tcc.cmake"
             ${PUREDARWIN_TCC_SOURCES}
         VERBATIM
     )

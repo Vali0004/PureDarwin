@@ -550,14 +550,19 @@ IOReturn AppleAPIC::handleInterrupt( void *      savedState,
     // Convert the system interrupt to a vector table entry offset.
 
     vectorNumber = SYS_TO_PIC_VECTOR(source);
-    assert( vectorNumber >= 0 );
-    assert( vectorNumber < _vectorCount );
+    if ( vectorNumber < 0 || vectorNumber >= _vectorCount )
+    {
+        lapic_end_of_interrupt();
+        return kIOReturnBadArgument;
+    }
 
     vector = &vectors[ vectorNumber ];
 
     vector->interruptActive = 1;
 
-    if ( !vector->interruptDisabledSoft && vector->interruptRegistered )
+    if ( !vector->interruptDisabledSoft &&
+         vector->interruptRegistered &&
+         vector->handler )
     {
         vector->handler( vector->target, vector->refCon,
                          vector->nub, vector->source );
@@ -581,6 +586,7 @@ IOReturn AppleAPIC::handleInterrupt( void *      savedState,
 
     vector->interruptActive = 0;
 
+    lapic_end_of_interrupt();
 
     return kIOReturnSuccess;
 }

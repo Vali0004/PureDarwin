@@ -72,6 +72,10 @@
 #include "IOHIDSystemCursorHelper.h"
 #include "IOHIDDebug.h"
 
+#ifndef PUREDARWIN_ENABLE_IOHID_SHIMS
+#define PUREDARWIN_ENABLE_IOHID_SHIMS 0
+#endif
+
 #include <sys/kdebug.h>
 #include <sys/proc.h>
 #include <string.h>
@@ -600,10 +604,10 @@ bool IOHIDSystem::start(IOService * provider)
                                                                    kIOReportUnit_us,
                                                                    sizeof(configs)/sizeof(configs[0]),
                                                                    configs);
-        require(_diags.cursorTotalHistReporter, exit_early);
-
-        ret = IOReportLegend::addReporterLegend(this, _diags.cursorTotalHistReporter, "Cursor", "Total");
-        require(ret == kIOReturnSuccess, exit_early);
+        if (_diags.cursorTotalHistReporter) {
+            ret = IOReportLegend::addReporterLegend(this, _diags.cursorTotalHistReporter, "Cursor", "Total");
+            require(ret == kIOReturnSuccess, exit_early);
+        }
 
         _diags.cursorGraphicsHistReporter = IOHistogramReporter::with(this,
                                                               kIOReportCategoryPeripheral | kIOReportCategoryPerformance,
@@ -612,10 +616,10 @@ bool IOHIDSystem::start(IOService * provider)
                                                               kIOReportUnit_us,
                                                               sizeof(configs)/sizeof(configs[0]),
                                                               configs);
-        require(_diags.cursorGraphicsHistReporter, exit_early);
-
-        ret = IOReportLegend::addReporterLegend(this, _diags.cursorGraphicsHistReporter, "Cursor", "Graphics");
-        require(ret == kIOReturnSuccess, exit_early);
+        if (_diags.cursorGraphicsHistReporter) {
+            ret = IOReportLegend::addReporterLegend(this, _diags.cursorGraphicsHistReporter, "Cursor", "Graphics");
+            require(ret == kIOReturnSuccess, exit_early);
+        }
     }
     
     /*
@@ -759,7 +763,7 @@ bool IOHIDSystem::handlePublishNotification(
 {
     IOHIDSystem * self = (IOHIDSystem *) target;
 
-    if (newService->isInactive()) {
+    if (!self || !newService || newService->isInactive()) {
         // device went away before we could add it. ignore.
         return true;
     }
@@ -772,6 +776,7 @@ bool IOHIDSystem::handlePublishNotification(
         }
         return true;
     }
+#if PUREDARWIN_ENABLE_IOHID_SHIMS
     if(OSDynamicCast(IOHIPointing, newService) && !OSDynamicCast(IOHIDPointing, newService)) {
       IOHIDPointingEventDevice * shim = IOHIDPointingEventDevice::newPointingDeviceAndStart(newService);
       if (shim) {
@@ -784,6 +789,7 @@ bool IOHIDSystem::handlePublishNotification(
         shim->release();
       }
     }
+#endif
   
     if (self->attach( newService ) == false) {
         return true;
@@ -920,11 +926,15 @@ IOReturn IOHIDSystem::configureReport(IOReportChannelList *channels,
 {
     IOReturn ret;
 
-    ret = _diags.cursorTotalHistReporter->configureReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorTotalHistReporter) {
+        ret = _diags.cursorTotalHistReporter->configureReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
-    ret = _diags.cursorGraphicsHistReporter->configureReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorGraphicsHistReporter) {
+        ret = _diags.cursorGraphicsHistReporter->configureReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
     ret = super::configureReport(channels, action, result, destination);
     require(ret == kIOReturnSuccess, exit);
@@ -940,11 +950,15 @@ IOReturn IOHIDSystem::updateReport(IOReportChannelList *channels,
 {
     IOReturn ret;
 
-    ret = _diags.cursorTotalHistReporter->updateReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorTotalHistReporter) {
+        ret = _diags.cursorTotalHistReporter->updateReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
-    ret = _diags.cursorGraphicsHistReporter->updateReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorGraphicsHistReporter) {
+        ret = _diags.cursorGraphicsHistReporter->updateReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
     ret = super::updateReport(channels, action, result, destination);
     require(ret == kIOReturnSuccess, exit);
@@ -2160,7 +2174,11 @@ IOReturn IOHIDSystem::updateParamPropertiesGated(IOService * source) {
 bool IOHIDSystem::registerEventSource(IOService * source)
 {
     bool success = true;
-    if ( OSDynamicCast(IOHIDKeyboard, source)) {
+    if (!source) {
+        return true;
+    }
+
+    if ( OSDynamicCast(IOHIKeyboard, source)) {
       success = ((IOHIKeyboard*)source)->open(this, kIOServiceSeize,0,
                     (KeyboardEventCallback)        _keyboardEvent,
                     (KeyboardSpecialEventCallback) _keyboardSpecialEvent,
@@ -3363,6 +3381,7 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
 
     if ( event->setFlags & kIOHIDPostHIDManagerEvent )
     {
+#if PUREDARWIN_ENABLE_IOHID_SHIMS
         if ((typeMask & (MOUSEEVENTMASK | MOVEDEVENTMASK | NX_SCROLLWHEELMOVEDMASK)) &&
             (_hidPointingDevice || (_hidPointingDevice = IOHIDPointingDevice::newPointingDeviceAndStart(this, 8, 400, true, 2))))
         {
@@ -3397,6 +3416,7 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
 
             isSeized |= _hidKeyboardDevice->isSeized();
         }
+#endif
     }
 
     if ( !isSeized )
@@ -3869,7 +3889,9 @@ IOReturn IOHIDSystem::_recordCursorAction(uint64_t origTs, uint64_t callTs)
     workloopDelta = (workloopNs - origTs) / NSEC_PER_USEC;
     totalDelta = (nowNs - origTs) / NSEC_PER_USEC;
 
-    require(_diags.cursorTotalHistReporter->tallyValue((int64_t)totalDelta) != -1, exit);
+    if (_diags.cursorTotalHistReporter) {
+        require(_diags.cursorTotalHistReporter->tallyValue((int64_t)totalDelta) != -1, exit);
+    }
 
     for (size_t i = 0; i < Diags::kCursorActionCount; i++) {
         if (_diags.lastCursorActionsMask & (1 << i)) {
@@ -3880,7 +3902,9 @@ IOReturn IOHIDSystem::_recordCursorAction(uint64_t origTs, uint64_t callTs)
 
             actionDeltas[i] = (actionNs - origTs) / NSEC_PER_USEC;
 
-            require(_diags.cursorGraphicsHistReporter->tallyValue((int64_t)actionDeltas[i]) != -1, exit);
+            if (_diags.cursorGraphicsHistReporter) {
+                require(_diags.cursorGraphicsHistReporter->tallyValue((int64_t)actionDeltas[i]) != -1, exit);
+            }
 
             n = snprintf(actionBuf+strlen(actionBuf), sizeof(actionBuf)-strlen(actionBuf), "%s(us) %llu ", Diags::cursorStrings[i], actionDeltas[i]);
             require_action(n > 0 && n < sizeof(actionBuf)-strlen(actionBuf), exit, ret = kIOReturnOverrun);
@@ -4131,7 +4155,7 @@ void IOHIDSystem::_setScrollCountParameters(OSDictionary *newSettings)
     if (!newSettings) {
         newSettings = (OSDictionary*)copyProperty(kIOHIDScrollCountBootDefaultKey);
         if (!OSDynamicCast(OSDictionary, newSettings)) {
-            newSettings->release();
+            OSSafeReleaseNULL(newSettings);
             newSettings = NULL;
         }
     }
@@ -4263,4 +4287,3 @@ void IOHIDSystem::detach( IOService * provider )
 {
     super::detach(provider);
 }
-

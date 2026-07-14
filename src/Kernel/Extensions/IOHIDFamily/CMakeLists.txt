@@ -9,6 +9,13 @@ target_sources(IOHIDFamily.kext PRIVATE
     IOHIDSystem/IOHIKeyboard.cpp
     IOHIDSystem/IOHIKeyboardMapper.cpp
     IOHIDSystem/IOBSDConsole.cpp
+    IOHIDSystem/IOFixed64.cpp
+    IOHIDSystem/IOFixedPoint64.cpp
+    IOHIDSystem/IOHIDPrivate.cpp
+    IOHIDSystem/IOHIDSystem.cpp
+    IOHIDSystem/IOHIDSystemCursorHelper.cpp
+    IOHIDSystem/IOHIDUserClient.cpp
+    IOHIDSystem/IOHIDWorkLoop.cpp
 )
 
 target_include_directories(IOHIDFamily.kext PRIVATE

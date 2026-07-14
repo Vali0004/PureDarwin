@@ -1892,14 +1892,6 @@ bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxP
         return false;
     }
     fKbdNubs[idx] = kbd;
-    if (!kbd->start(this)) {
-        XHCI_Log("slot %u: keyboard nub start() failed", slotId);
-        kbd->detach(this);
-        kbd->release();
-        fKbdNubs[idx] = NULL;
-        k.valid = false;
-        return false;
-    }
     kbd->registerService();
     XHCI_Log("slot %u: usbkbd%d published", slotId, idx);
     return true;

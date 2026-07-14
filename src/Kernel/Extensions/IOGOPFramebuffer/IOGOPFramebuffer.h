@@ -1,10 +1,9 @@
-#include <IOKit/IOInterrupts.h>
-#include <IOKit/IOService.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/graphics/IOFramebuffer.h>
 
-class IOFramebuffer : public IOService
+class IOGOPFramebuffer : public IOFramebuffer
 {
-    OSDeclareDefaultStructors(IOFramebuffer);
+    OSDeclareDefaultStructors(IOGOPFramebuffer);
 
 private:
     void   *fbBase;
@@ -17,13 +16,12 @@ public:
     IOService * probe(IOService * provider, SInt32 * score) override;
     virtual bool start(IOService * provider) override;
     virtual void stop(IOService * provider) override;
-    virtual void * getBaseAddress() ;
-    virtual uint32_t getWidth() ;
-    virtual uint32_t getHeight() ;
-    virtual uint32_t getPitch() ;
-    virtual uint32_t getDepth() ;
+    virtual void * getBaseAddress();
+    virtual uint32_t getWidth();
+    virtual uint32_t getHeight();
+    virtual uint32_t getPitch();
+    virtual uint32_t getDepth();
 
-#if 0
     virtual IOReturn enableController() override;
 
     virtual const char * getPixelFormats() override;
@@ -50,5 +48,4 @@ public:
     virtual IOReturn getDisplayModes(IODisplayModeID * allDisplayModes) override;
 
     virtual IOItemCount getDisplayModeCount( void ) override;
-#endif
 };

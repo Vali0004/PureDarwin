@@ -1,4 +1,4 @@
-{ stdenv, lib, kcTools, baseSystem, classic ? false }:
+{ stdenv, lib, kcTools, kernel, kexts, classic ? false }:
 
 stdenv.mkDerivation {
   pname = "puredarwin-kc";
@@ -8,15 +8,16 @@ stdenv.mkDerivation {
 
   buildPhase = ''
     runHook preBuild
-    KEXTS=${baseSystem}/System/Library/Extensions
+    KERNEL_EXTS=${kernel}/System/Library/Extensions
+    KEXTS=${kexts}/System/Library/Extensions
 
     codeless=()
-    for p in "$KEXTS"/System.kext/PlugIns/*.kext; do
+    for p in "$KERNEL_EXTS"/System.kext/PlugIns/*.kext; do
       codeless+=( -codeless "$p" )
     done
 
     ${kcTools}/bin/kc-builder \
-      -kernel ${baseSystem}/System/Library/Kernels/kernel.debug \
+      -kernel ${kernel}/System/Library/Kernels/kernel.debug \
       -kext "$KEXTS/corecrypto.kext" \
       -kext "$KEXTS/pthread.kext" \
       -kext "$KEXTS/IOACPIFamily.kext" \
@@ -36,6 +37,7 @@ stdenv.mkDerivation {
       -kext "$KEXTS/IOHIDFamily.kext" \
       -kext "$KEXTS/RavynAHCIPort.kext" \
       -kext "$KEXTS/RavynXHCIPort.kext" \
+      -kext "$KEXTS/IOGraphicsFamily.kext" \
       -kext "$KEXTS/IOGOPFramebuffer.kext" \
       -kext "$KEXTS/ApplePS2Controller.kext" \
       "''${codeless[@]}" \

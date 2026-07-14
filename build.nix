@@ -35,10 +35,13 @@
 , enableLibraries ? true
 , enableUserspace ? true
 , enableTools ? true
+, enableTcc ? false
+, enableIOGraphicsFamily ? false
 , installUserland ? true
 , installKernel ? false
 , installXnuHeaders ? false
 , installKexts ? false
+, installKextNames ? [ ]
 , installLibSystem ? false
 , installBaseSystem ? false
 , prebuiltLibSystem ? null
@@ -153,6 +156,8 @@ EOF
       -DPUREDARWIN_ENABLE_LIBRARIES=${if enableLibraries then "ON" else "OFF"} \
       -DPUREDARWIN_ENABLE_USERSPACE=${if enableUserspace then "ON" else "OFF"} \
       -DPUREDARWIN_ENABLE_TOOLS=${if enableTools then "ON" else "OFF"} \
+      -DPUREDARWIN_ENABLE_TCC=${if enableTcc then "ON" else "OFF"} \
+      -DPUREDARWIN_ENABLE_IOGRAPHICS_FAMILY=${if enableIOGraphicsFamily then "ON" else "OFF"} \
       -DPUREDARWIN_TCC_SOURCE=${tinycc.src} \
       ${lib.optionalString (prebuiltLibSystem != null) "-DPUREDARWIN_PREBUILT_LIBSYSTEM_ROOT=${prebuiltLibSystem}"}
     runHook postConfigure
@@ -188,19 +193,38 @@ EOF
     runHook preInstall
     mkdir -p $out
   '' + lib.optionalString installUserland ''
-    mkdir -p $out/bin
-    cp build-nix/src/Userspace/helloapp/helloapp $out/bin/
-    cp build-nix/src/Userspace/launchd/launchd $out/bin/
-    cp build-nix/src/Userspace/busybox/build/busybox $out/bin/
-    cp build-nix/src/Userspace/tcc/build/tcc $out/bin/
+    mkdir -p $out/bin $out/sbin
+    for bin in \
+      build-nix/src/Userspace/helloapp/helloapp \
+      build-nix/src/Userspace/busybox/build/busybox \
+      build-nix/src/Userspace/tcc/build/tcc \
+      build-nix/src/Userspace/fbtri/fbtri
+    do
+      if [ -x "$bin" ]; then
+        cp "$bin" $out/bin/
+      fi
+    done
+    if [ -x build-nix/src/Userspace/launchd/launchd ]; then
+      cp build-nix/src/Userspace/launchd/launchd $out/sbin/
+    fi
   '' + lib.optionalString installKernel ''
     cp -R build-nix/src/Kernel/xnu/xnu/. $out/
   '' + lib.optionalString installXnuHeaders ''
     cp -R build-nix/src/Kernel/xnu/xnu_header_install/. $out/
   '' + lib.optionalString installKexts ''
     mkdir -p $out/System/Library/Extensions
+  '' + lib.optionalString (installKexts && installKextNames == [ ]) ''
     find build-nix/src/Kernel/Extensions -name '*.kext' -type d -prune \
       -exec cp -R '{}' $out/System/Library/Extensions/ ';'
+  '' + lib.optionalString (installKexts && installKextNames != [ ]) ''
+    for kext in ${lib.escapeShellArgs installKextNames}; do
+      kext_path="$(find build-nix/src/Kernel/Extensions -name "$kext" -type d -print -quit)"
+      if [ -z "$kext_path" ]; then
+        echo "missing kext bundle: $kext" >&2
+        exit 1
+      fi
+      cp -R "$kext_path" "$out/System/Library/Extensions/"
+    done
   '' + lib.optionalString installLibSystem ''
     mkdir -p $out/usr/lib/system
     cp build-nix/src/Libraries/libSystem/stub/libSystem.B.dylib $out/usr/lib/
@@ -216,7 +240,7 @@ EOF
   dontCheckForBrokenSymlinks = installKernel || installXnuHeaders || installBaseSystem;
 
   forceShare = lib.optionals (!installBaseSystem) [ "man" "doc" "info" ];
-  dontMoveSbin = installBaseSystem;
+  dontMoveSbin = installBaseSystem || installUserland;
   dontStrip = installBaseSystem;
   dontPatchELF = installBaseSystem;
 

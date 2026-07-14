@@ -327,12 +327,9 @@ memcpy(void *dst, const void *src, size_t n)
 	return _libkernel_string_functions->memmove(dst, src, n);
 }
 
-PD_LIBKERNEL_FUNCPTR_ATTR
-void *
-memccpy(void *__restrict dst, const void *__restrict src, int c, size_t n)
-{
-	return _libkernel_string_functions->memccpy(dst, src, c, n);
-}
+/* memccpy: same problem as strlcpy/strnlen/index/strlcat -- libplatform
+ * already has a genuinely public memccpy, so just drop this hidden dup
+ * rather than add a third definition. */
 
 PD_LIBKERNEL_FUNCPTR_ATTR
 void *
@@ -348,12 +345,9 @@ strchr(const char *s, int c)
 	return _libkernel_string_functions->strchr(s, c);
 }
 
-__attribute__((visibility("hidden")))
-char *
-index(const char *s, int c)
-{
-	return _libkernel_string_functions->strchr(s, c);
-}
+/* index: see the strlcpy/strnlen comment further down -- same problem
+ * (explicit visibility("hidden") here with no public alternative). Real
+ * public index() now lives in stub/pd_libSystem_compat.c. */
 
 PD_LIBKERNEL_FUNCPTR_ATTR
 int
@@ -362,26 +356,25 @@ strcmp(const char *s1, const char *s2)
 	return _libkernel_string_functions->strcmp(s1, s2);
 }
 
-PD_LIBKERNEL_FUNCPTR_ATTR
+PD_LIBKERNEL_FUNCPTR_EXPORT_ATTR
 char *
 strcpy(char * restrict dst, const char * restrict src)
 {
 	return _libkernel_string_functions->strcpy(dst, src);
 }
 
-PD_LIBKERNEL_FUNCPTR_ATTR
-size_t
-strlcat(char * restrict dst, const char * restrict src, size_t maxlen)
-{
-	return _libkernel_string_functions->strlcat(dst, src, maxlen);
-}
+/* strlcat: same problem as strlcpy/strnlen/index -- real public strlcat
+ * now lives in libc/string/pd_strnlen.c. */
 
-PD_LIBKERNEL_FUNCPTR_ATTR
-size_t
-strlcpy(char * restrict dst, const char * restrict src, size_t maxlen)
-{
-	return _libkernel_string_functions->strlcpy(dst, src, maxlen);
-}
+/*
+ * strlcpy: no PD_LIBKERNEL_FUNCPTR_ATTR public wrapper here. That attribute
+ * makes the symbol private_extern, and -exported_symbols_list can't undo
+ * that at final link -- unlike strlen/strncmp below (which happen to also
+ * get a genuinely public definition from libplatform, so whichever the
+ * linker keeps is fine), strlcpy had no other public source, so it stayed
+ * hidden no matter what the exports list said. The real public strlcpy now
+ * lives in libc/string/pd_strnlen.c.
+ */
 
 PD_LIBKERNEL_FUNCPTR_ATTR
 size_t
@@ -397,19 +390,15 @@ strncmp(const char *s1, const char *s2, size_t n)
 	return _libkernel_string_functions->strncmp(s1, s2, n);
 }
 
-PD_LIBKERNEL_FUNCPTR_ATTR
+PD_LIBKERNEL_FUNCPTR_EXPORT_ATTR
 char *
 strncpy(char * restrict dst, const char * restrict src, size_t maxlen)
 {
 	return _libkernel_string_functions->strncpy(dst, src, maxlen);
 }
 
-PD_LIBKERNEL_FUNCPTR_ATTR
-size_t
-strnlen(const char *s, size_t maxlen)
-{
-	return _libkernel_string_functions->strnlen(s, maxlen);
-}
+/* strnlen: see the strlcpy comment above -- same problem, same fix (real
+ * public strnlen now lives in libc/string/pd_strnlen.c). */
 
 PD_LIBKERNEL_FUNCPTR_ATTR
 char *

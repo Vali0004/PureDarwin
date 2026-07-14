@@ -1,6 +1,7 @@
 { stdenv
 , lib
 , baseSystem
+, extraPackages ? [ ]
 , kc
 , xnuLoader
 , gptfdisk
@@ -11,6 +12,9 @@
 , espMB ? 64
 , rootMB ? 640
 }:
+
+assert lib.isDerivation baseSystem;
+assert lib.all lib.isDerivation extraPackages;
 
 stdenv.mkDerivation {
   pname = "puredarwin-image";
@@ -46,10 +50,50 @@ stdenv.mkDerivation {
     mcopy -o -i esp.img ${kc}/kernel                          ::/EFI/BOOT/kernel
     dd if=esp.img of=$img bs=512 seek=$esp_start count=$esp_size conv=notrunc status=none
 
-    staging=$PWD/staging
-    for dir in usr usr/bin usr/lib usr/lib/system usr/sbin usr/share \
-      bin sbin dev etc tmp var var/root var/run var/log var/tmp var/empty; do
-      mkdir -p $staging/$dir
+    staging="$PWD/root-staging"
+    mkdir -p "$staging"
+
+    copyPackage() {
+      local package="$1"
+
+      echo "Installing $package into image staging tree"
+
+      if [ ! -d "$package" ]; then
+        echo "error: package path does not exist or is not a directory: $package" >&2
+        exit 1
+      fi
+
+      cp -a -- "$package"/. "$staging"/
+      chmod -R u+rwX "$staging"
+    }
+
+    copyPackage "${baseSystem}";
+
+    ${lib.concatMapStringsSep "\n" (package: ''
+      copyPackage "${package}";
+    '') extraPackages}
+    for dir in \
+      usr \
+      usr/bin \
+      usr/lib \
+      usr/lib/system \
+      usr/sbin \
+      usr/share \
+      usr/share/X11 \
+      bin \
+      sbin \
+      dev \
+      etc \
+      tmp \
+      var \
+      var/root \
+      var/run \
+      var/log \
+      var/tmp \
+      var/empty \
+      tmp/.X11-unix
+    do
+      mkdir -p "$staging/$dir"
     done
 
     cat > $staging/etc/passwd <<'EOF'
@@ -70,26 +114,48 @@ export PS1='\u@\h:\w \$ '
 EOF
     chmod 644 $staging/etc/passwd $staging/etc/group $staging/etc/profile
 
-    install -m 755 ${baseSystem}/usr/lib/dyld                 $staging/usr/lib/dyld
-    install -m 755 ${baseSystem}/usr/lib/libSystem.B.dylib    $staging/usr/lib/libSystem.B.dylib
-    install -m 755 ${baseSystem}/usr/lib/system/libdyld.dylib $staging/usr/lib/system/libdyld.dylib
-    install -m 755 ${baseSystem}/sbin/launchd                 $staging/sbin/launchd
-    install -m 755 ${baseSystem}/bin/helloapp                 $staging/sbin/helloapp
-    install -m 755 ${baseSystem}/bin/busybox                  $staging/bin/busybox
+    if [ -x $staging/bin/helloapp ] && [ ! -e $staging/sbin/helloapp ]; then
+      ln -sf /bin/helloapp $staging/sbin/helloapp
+    fi
 
     for applet in ash cat chmod cp echo false ln ls mkdir mv pwd rm rmdir sh sleep test true uname \
       basename dirname head tail wc cut tr sort uniq grep sed find xargs touch date env id \
       printf seq yes which hostname du dd kill clear truncate readlink; do
       ln -sf busybox $staging/bin/$applet
     done
+
     for applet in reboot shutdown; do
       ln -sf /bin/busybox $staging/sbin/$applet
     done
 
-    chmod 1777 $staging/tmp $staging/var/tmp
+    chmod 1777 \
+      "$staging/tmp" \
+      "$staging/var/tmp" \
+      "$staging/tmp/.X11-unix"
+
     chmod 700  $staging/var/root
 
+    echo "Image X11 executables:"
+    for executable in Xvfb xeyes startx; do
+      found=
+      for candidate in \
+        "$staging/bin/$executable" \
+        "$staging/usr/bin/$executable"
+      do
+        if [ -x "$candidate" ]; then
+          echo "  $candidate"
+          found=1
+          break
+        fi
+      done
+
+      if [ -z "$found" ]; then
+        echo "warning: $executable was not installed into the image" >&2
+      fi
+    done
+
     truncate -s $((root_size * 512)) root.img
+
     # ext4.kext is R/W and handles 64-bit block numbers + metadata
     # checksums now; only the journal (and orphan_file) stay off.
     mke2fs -q -F -t ext4 \
@@ -98,7 +164,9 @@ EOF
       -L darwin-ext4 \
       -d $staging \
       root.img >/dev/null
+
     dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
+
     runHook postBuild
   '';
 

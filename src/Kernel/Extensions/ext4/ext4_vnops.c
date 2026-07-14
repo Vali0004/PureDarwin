@@ -587,6 +587,31 @@ ext4_drop_inode(struct ext4node *ep)
 }
 
 static int
+ext4_drop_inode_ino(struct ext4mount *emp, ino_t ino)
+{
+	struct ext4_inode raw;
+	enum vtype vtype;
+	struct timeval tv;
+	int error;
+
+	error = ext4_read_inode(emp, ino, &raw);
+	if (error)
+		return error;
+	vtype = ext4_mode_to_vtype(le16(raw.i_mode));
+	error = ext4_inode_free_extents(emp, &raw);
+	if (error)
+		return error;
+	microtime(&tv);
+	raw.i_links_count = 0;
+	raw.i_dtime = le32((uint32_t)tv.tv_sec);
+	raw.i_ctime = le32((uint32_t)tv.tv_sec);
+	error = ext4_write_inode(emp, ino, &raw);
+	if (error)
+		return error;
+	return ext4_free_inode(emp, ino, vtype);
+}
+
+static int
 ext4_ensure_block(struct ext4node *ep, uint32_t lblk, uint64_t *pblk_out)
 {
 	struct ext4mount *emp = ep->e_mount;
@@ -877,6 +902,7 @@ ext4_vnop_create(struct vnop_create_args *ap)
 	dep->e_raw.i_ctime = le32((uint32_t)tv.tv_sec);
 	dep->e_raw.i_mtime = le32((uint32_t)tv.tv_sec);
 	(void)ext4_write_inode(emp, dep->e_ino, &dep->e_raw);
+	cache_purge(dvp);
 
 	VATTR_SET_SUPPORTED(vap, va_type);
 	VATTR_SET_SUPPORTED(vap, va_mode);
@@ -1007,6 +1033,7 @@ ext4_vnop_mkdir(struct vnop_mkdir_args *ap)
 	dep->e_raw.i_ctime = le32((uint32_t)tv.tv_sec);
 	dep->e_raw.i_mtime = le32((uint32_t)tv.tv_sec);
 	(void)ext4_write_inode(emp, dep->e_ino, &dep->e_raw);
+	cache_purge(dvp);
 
 	VATTR_SET_SUPPORTED(vap, va_type);
 	VATTR_SET_SUPPORTED(vap, va_mode);
@@ -1030,11 +1057,16 @@ ext4_vnop_remove(struct vnop_remove_args *ap)
 	    &removed, NULL);
 	if (error)
 		return error;
-	if (removed != ep->e_ino)
-		return EIO;
 	ext4_touch_inode(&dep->e_raw);
 	(void)ext4_write_inode(dep->e_mount, dep->e_ino, &dep->e_raw);
-	return ext4_drop_inode(ep);
+	cache_purge(ap->a_dvp);
+	cache_purge(ap->a_vp);
+	if (removed == ep->e_ino)
+		return ext4_drop_inode(ep);
+	E4LOG("remove: stale vnode for '%.*s' (vp ino %llu, dir ino %llu)",
+	    (int)ap->a_cnp->cn_namelen, ap->a_cnp->cn_nameptr,
+	    (unsigned long long)ep->e_ino, (unsigned long long)removed);
+	return ext4_drop_inode_ino(dep->e_mount, removed);
 }
 
 static int
@@ -1056,14 +1088,19 @@ ext4_vnop_rmdir(struct vnop_rmdir_args *ap)
 	    &removed, NULL);
 	if (error)
 		return error;
-	if (removed != ep->e_ino)
-		return EIO;
 	if (le16(dep->e_raw.i_links_count) > 0)
 		dep->e_raw.i_links_count =
 		    le16((uint16_t)(le16(dep->e_raw.i_links_count) - 1));
 	ext4_touch_inode(&dep->e_raw);
 	(void)ext4_write_inode(dep->e_mount, dep->e_ino, &dep->e_raw);
-	return ext4_drop_inode(ep);
+	cache_purge(ap->a_dvp);
+	cache_purge(ap->a_vp);
+	if (removed == ep->e_ino)
+		return ext4_drop_inode(ep);
+	E4LOG("rmdir: stale vnode for '%.*s' (vp ino %llu, dir ino %llu)",
+	    (int)ap->a_cnp->cn_namelen, ap->a_cnp->cn_nameptr,
+	    (unsigned long long)ep->e_ino, (unsigned long long)removed);
+	return ext4_drop_inode_ino(dep->e_mount, removed);
 }
 
 static int
@@ -1138,6 +1175,11 @@ ext4_vnop_rename(struct vnop_rename_args *ap)
 	(void)ext4_write_inode(fdep->e_mount, fdep->e_ino, &fdep->e_raw);
 	if (tdep != fdep)
 		(void)ext4_write_inode(tdep->e_mount, tdep->e_ino, &tdep->e_raw);
+	cache_purge(ap->a_fdvp);
+	cache_purge(ap->a_tdvp);
+	cache_purge(ap->a_fvp);
+	if (ap->a_tvp)
+		cache_purge(ap->a_tvp);
 	return 0;
 }
 
@@ -1232,6 +1274,7 @@ ext4_vnop_symlink(struct vnop_symlink_args *ap)
 		goto fail_extents;
 	ext4_touch_inode(&dep->e_raw);
 	(void)ext4_write_inode(emp, dep->e_ino, &dep->e_raw);
+	cache_purge(dvp);
 	return ext4_vget(emp, ino, dvp, vpp, cnp);
 
 fail_extents:
@@ -1284,6 +1327,8 @@ ext4_vnop_link(struct vnop_link_args *ap)
 	}
 	ext4_touch_inode(&tdp->e_raw);
 	(void)ext4_write_inode(tdp->e_mount, tdp->e_ino, &tdp->e_raw);
+	cache_purge(ap->a_tdvp);
+	cache_purge(ap->a_vp);
 	return 0;
 }
 

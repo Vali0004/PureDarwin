@@ -84,6 +84,8 @@ target_include_directories(libc_kernel_headers INTERFACE ${libc_headers_dir}/Sys
 add_darwin_static_library(libc_static)
 target_sources(libc_static PRIVATE
     string/strcat.c
+    string/strncat.c
+    string/pd_strnlen.c          # _strnlen / _strlcpy (both real; libplatform/libsystem_kernel's copies are hidden)
     string/FreeBSD/strdup.c
     string/FreeBSD/strtok.c      # _strtok (init /etc/ttys tokenizing)
     string/pd_strtok_r.c         # _strtok_r forwarder (__weak_reference alias not emitted)
@@ -101,6 +103,7 @@ target_sources(libc_static PRIVATE
     gen/devname.c                # _devname / _devname_r
     gen/uname.c                  # _uname (BusyBox uname; sysctl-backed)
     gen/FreeBSD/exec.c           # _execvp / _execv / _execlp (BusyBox spawn)
+    gen/FreeBSD/basename.c       # _basename
     stdlib/FreeBSD/putenv.c      # _putenv (BusyBox env)
     gen/FreeBSD/sysctl.c         # _sysctl (public wrapper over __sysctl)
     gen/FreeBSD/sysctlbyname.c   # _sysctlbyname
@@ -111,13 +114,22 @@ target_sources(libc_static PRIVATE
     stdlib/FreeBSD/strtoimax.c   # _strtoimax / _strtoimax_l (scanf)
     stdlib/FreeBSD/strtoumax.c   # _strtoumax / _strtoumax_l (scanf)
     stdio/FreeBSD/mktemp.c       # _mkstemp / _mkdtemp
+    stdio/FreeBSD/setbuf.c       # _setbuf (calls setvbuf)
+    stdio/FreeBSD/setbuffer.c    # _setbuffer / _setlinebuf (calls setvbuf)
+    stdio/FreeBSD/setvbuf.c      # _setvbuf
+    string/FreeBSD/rindex.c      # _rindex
     stdtime/FreeBSD/localtime.c  # _localtime / _mktime / _tzset (tzfile reader)
     stdtime/FreeBSD/strftime.c   # _strftime
+    stdtime/FreeBSD/asctime.c    # _asctime
     stdtime/timezone_unix03.c    # _st_get_timezone / _st_set_timezone (strftime %z)
     gen/pd_libm_builtins.c       # nan/nanf/nanl + fegetenv/fesetenv (no libm yet)
     gen/pd_notify_stub.c         # notify_post shim (real libnotify needs XPC)
     gen/pd_getgrent.c            # getgrnam/getgrgid/getgrouplist (/etc/group reader; no libinfo)
     gen/pd_netdb_stub.c          # gethostbyname/h_errno/hstrerror (no libinfo/libresolv yet)
+    gen/pd_getservbyname.c       # getservbyname (/etc/services reader; no libinfo)
+    gen/pd_dispatch_once.c       # dispatch_once/dispatch_once_f (no libdispatch yet)
+    libm/pd_libm_trig.c          # sin/cos/atan/atan2/asin/acos (from-scratch libm)
+    libm/pd_libm_pow.c           # log/exp/pow/cbrt/hypot (from-scratch libm)
     gen/clock_gettime.c          # _clock_gettime / _clock_settime (BusyBox date -s)
     gen/FreeBSD/sethostname.c    # _sethostname (BusyBox hostname; sysctl-backed)
     net/FreeBSD/inet_ntoa.c      # _inet_ntoa
@@ -170,6 +182,7 @@ target_sources(libc_static PRIVATE
     stdlib/FreeBSD/bsearch.c     # _bsearch
     gen/thread_stack_pcs.c       # _thread_stack_pcs (libmalloc's pguard/debug backtrace capture)
     gen/FreeBSD/usleep.c         # _usleep
+    gen/FreeBSD/gethostname.c    # _gethostname
     gen/FreeBSD/getprogname.c    # _getprogname (malloc_printf.c's diagnostic prefix)
     gen/FreeBSD/time.c           # _time
     gen/FreeBSD/times.c          # _times
@@ -254,7 +267,9 @@ set_source_files_properties(sys/OpenBSD/stack_protector.c
 # shadowed here by xnu's PrivateHeaders/sys/cdefs.h, which lacks the key macros).
 set_source_files_properties(
     stdlib/FreeBSD/rand.c gen/FreeBSD/ttyname.c gen/FreeBSD/exec.c
-    stdtime/FreeBSD/localtime.c stdtime/FreeBSD/strftime.c
+    stdtime/FreeBSD/localtime.c stdtime/FreeBSD/strftime.c stdtime/FreeBSD/asctime.c
+    stdio/FreeBSD/setbuf.c stdio/FreeBSD/setbuffer.c stdio/FreeBSD/setvbuf.c
+    gen/FreeBSD/basename.c gen/FreeBSD/gethostname.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
 # fnmatch.c needs the collate internals (__collate_*) gated behind __LIBC__ in
 # collate.h; no underscore-alias shim required.
@@ -385,8 +400,11 @@ target_sources(libc_internal_static PRIVATE
     stdio/FreeBSD/vasprintf.c     # _vasprintf/_vasprintf_l (asprintf.c + err.c's underlying engine)
     stdio/FreeBSD/sprintf.c       # _sprintf (err.c's _e_visprintf)
     stdio/FreeBSD/sscanf.c        # _sscanf
+    stdio/FreeBSD/fscanf.c        # _fscanf (libfontenc's encparse.c)
+    stdlib/FreeBSD/atof.c         # _atof (freetype/libXfont2 config parsing)
     stdio/FreeBSD/fputs.c         # _fputs (err.c's _e_visprintf)
     stdio/FreeBSD/ferror.c        # _ferror
+    stdio/FreeBSD/feof.c          # _feof (xkbcomp)
     stdio/FreeBSD/clrerr.c        # _clearerr
     stdio/FreeBSD/fgetc.c         # _fgetc
     stdio/FreeBSD/putc.c          # _putc
@@ -418,6 +436,9 @@ target_sources(libc_internal_static PRIVATE
     locale/FreeBSD/mbstowcs.c      # _mbstowcs (vis.c's makeextralist)
     locale/FreeBSD/mbtowc.c        # _mbtowc (vis.c's istrsenvisx)
     locale/FreeBSD/wctomb.c        # _wctomb
+    locale/FreeBSD/mblen.c         # _mblen (Xlib setlocale/mb path)
+    net/FreeBSD/inet_addr.c        # _inet_addr / _inet_aton (Xlib DISPLAY parsing)
+    net/FreeBSD/recv.c             # _recv (Xlib socket transport)
     string/FreeBSD/wcscpy.c        # _wcscpy (collate.c's __collate_wcsdup)
     string/FreeBSD/wcsncpy.c       # _wcsncpy (collate.c's substitute/collating-symbol/equiv-value)
     gdtoa/FreeBSD/gdtoa-dmisc.c
@@ -448,7 +469,14 @@ target_sources(libc_internal_static PRIVATE
 # __LIBC__: tells Apple's FreeBSD-derived sources (collate.h/_ctype.h/...) they
 # are being compiled AS libc itself, not a libc client -- exposes the internal
 # __collate_*/ctype-inline-externalizing declarations these .c files define.
-target_compile_definitions(libc_internal_static PRIVATE __DARWIN_UNIX03=1 _FORTIFY_SOURCE=0 NO_FLOATING_POINT PR_13085474_CHECK=0 __LIBC__=1)
+# NO_FLOATING_POINT was an early bring-up leftover: it compiles the entire
+# %e/%f/%g scanf conversion path out of vfscanf.c (CT_FLOAT is
+# #ifndef NO_FLOATING_POINT), even though this same target already builds
+# the full gdtoa/strtod/strtof stack right above. That made sscanf("%g", ...)
+# silently fail (0 items matched) for any real caller -- e.g. xkbcomp's
+# geometry-file number lexer, which reported every float as "Malformed
+# number" and aborted the whole keymap compile.
+target_compile_definitions(libc_internal_static PRIVATE __DARWIN_UNIX03=1 _FORTIFY_SOURCE=0 PR_13085474_CHECK=0 __LIBC__=1)
 target_include_directories(libc_internal_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/pd-compat-include   # reconstructed apfs/apfs_fsctl.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/include  # libkern/OSAtomic.h (locale refcounts)

@@ -73,7 +73,7 @@ class __deprecated_msg("Use DriverKit") IOHIDDevice : public IOService
 class IOHIDDevice : public IOService
 #endif
 {
-    OSDeclareDefaultStructorsWithDispatch ( IOHIDDevice )
+    OSDeclareDefaultStructors( IOHIDDevice )
 
     friend class IOHIDLibUserClient;
     friend class IOHIDDeviceShim;
