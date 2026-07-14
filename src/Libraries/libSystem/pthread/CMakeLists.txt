@@ -54,6 +54,7 @@ target_include_directories(pthread_static PRIVATE
     # platform/string.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/private
     ${CMAKE_CURRENT_SOURCE_DIR}/../libmalloc/private   # stack_logging.h
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/bsd        # pthread/bsdthread_private.h, pthread/workqueue_syscalls.h
 )
 target_link_libraries(pthread_static PRIVATE
     AvailabilityHeaders
@@ -90,4 +91,6 @@ set_source_files_properties(src/pthread_asm.s PROPERTIES
 set_source_files_properties(src/pthread_tsd.c PROPERTIES
     COMPILE_FLAGS "-UVARIANT_DYLD -DPTHREAD_KEY_LEGACY_SUPPORT=0")
 # The generated mach MIG headers (public_include) must exist before we compile.
-add_dependencies(pthread_static libsystem_kernel_static)
+if(TARGET libsystem_kernel_static)
+    add_dependencies(pthread_static libsystem_kernel_static)
+endif()

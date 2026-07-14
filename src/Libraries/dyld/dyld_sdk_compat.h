@@ -16,10 +16,22 @@
 
 #include <Availability.h>
 #include <TargetConditionals.h>
+#include <string.h>
+#include <libkern/OSAtomic.h>
 /* Defines SPI_AVAILABLE / SPI_DEPRECATED (empty fallbacks). dyld_process_info.h
  * uses SPI_AVAILABLE but only pulls it transitively via the real dispatch.h,
  * which our minimal dispatch stub replaces -- so pull it explicitly here. */
 #include <os/availability.h>
+
+__BEGIN_DECLS
+int32_t OSAtomicIncrement32(volatile int32_t *value);
+int32_t OSAtomicDecrement32(volatile int32_t *value);
+bool OSAtomicCompareAndSwapPtrBarrier(void *oldValue, void *newValue,
+    void * volatile *value);
+void OSMemoryBarrier(void);
+void OSSpinLockLock(volatile OSSpinLock *lock);
+void OSSpinLockUnlock(volatile OSSpinLock *lock);
+__END_DECLS
 
 #ifndef __API_AVAILABLE_PLATFORM_bridgeos
  #define __API_AVAILABLE_PLATFORM_bridgeos(x) bridgeos,introduced=x

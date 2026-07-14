@@ -222,11 +222,16 @@ target_compile_definitions(libc_static PRIVATE
 # neither the SDK nor PD define.
 target_compile_options(libc_static PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/pd_bridgeos_compat.h>)
+target_compile_definitions(libc_static PRIVATE __DARWIN_ONLY_UNIX_CONFORMANCE=1)
 # xnu_private_headers for the pthread QoS chain (pthread/priority_private.h in
 # usr/local/include). dyld links this alongside -isysroot too.
 target_link_libraries(libc_static PRIVATE xnu_private_headers)
+add_dependencies(libc_static libc_features libsystem_kernel_static)
 target_include_directories(libc_static PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/include/${PUREDARWIN_ARCH}   # generated libc-features.h
+    ${CMAKE_CURRENT_BINARY_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}               # <os/assumes.h> (os/assumes.h), <secure/...>
+    ${CMAKE_CURRENT_SOURCE_DIR}/include       # libc's own public headers for libc sources
     ${CMAKE_CURRENT_SOURCE_DIR}/darwin        # libc_private.h
     ${CMAKE_CURRENT_SOURCE_DIR}/darwin/pd_compat  # abort.c: <pthread_workqueue.h> forwarder
     ${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat     # namespace.h / un-namespace.h
@@ -245,6 +250,13 @@ target_include_directories(libc_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../libdispatch/src/BlocksRuntime
     # chk_fail.c: mach-o/dyld_priv.h (not in the SDK) from the vendored dyld tree.
     ${CMAKE_SOURCE_DIR}/src/Libraries/dyld/upstream/include
+    # Prefer libsystem_kernel's userspace mach headers over xnu's kernel mach.h.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/mach
+    ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/public_include
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/osfmk
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/libkern
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/libkern/libkern
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/bsd
     # strtol.c/strtoul.c/strtoull.c: os/tsd.h (mach), System/machine/cpu_capabilities.h
     # redirect (libmalloc's compat-include), stack_logging.h (libmalloc/private,
     # pulled transitively).
@@ -476,7 +488,13 @@ target_sources(libc_internal_static PRIVATE
 # silently fail (0 items matched) for any real caller -- e.g. xkbcomp's
 # geometry-file number lexer, which reported every float as "Malformed
 # number" and aborted the whole keymap compile.
-target_compile_definitions(libc_internal_static PRIVATE __DARWIN_UNIX03=1 _FORTIFY_SOURCE=0 PR_13085474_CHECK=0 __LIBC__=1)
+target_compile_definitions(libc_internal_static PRIVATE
+    __DARWIN_ONLY_UNIX_CONFORMANCE=1
+    __DARWIN_UNIX03=1
+    PRIVATE=1
+    _FORTIFY_SOURCE=0
+    PR_13085474_CHECK=0
+    __LIBC__=1)
 target_include_directories(libc_internal_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/pd-compat-include   # reconstructed apfs/apfs_fsctl.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/include  # libkern/OSAtomic.h (locale refcounts)
@@ -501,8 +519,12 @@ target_include_directories(libc_internal_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/include/pthread   # <pthread.h> itself
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/private           # pthread/tsd_private.h (xlocale)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/compat-include    # os/base_private.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/private       # _simple.h (os/assumes.h)
     ${CMAKE_CURRENT_SOURCE_DIR}/../libmalloc/include         # malloc/_malloc.h (stdlib.h)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libmalloc/compat-include  # System/machine/cpu_capabilities.h
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/osfmk            # i386/cpu_capabilities.h
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/bsd              # sys/wait.h and BSD header tree
 )
 target_link_libraries(libc_internal_static PRIVATE
     clang_bootstrap_headers      # stddef/stdarg/stdint under -nostdinc

@@ -37,6 +37,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/syscalls.a
         ${CMAKE_CURRENT_BINARY_DIR}/sys/stubs.list ${CMAKE_CURRENT_BINARY_DIR}/syscalls.a
         -I${PUREDARWIN_BINARY_DIR}/src/Kernel/xnu/xnu_header_install/usr/include
         -I${PUREDARWIN_BINARY_DIR}/src/Kernel/xnu/xnu_header_install/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+        -I${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/osfmk
         -I${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/EXTERNAL_HEADERS
     DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/scripts/create-syscalls.pl
@@ -205,13 +206,16 @@ target_link_libraries(libsystem_kernel_static PRIVATE clang_bootstrap_headers)
 target_link_libraries(libsystem_kernel_static PUBLIC architecture_headers)
 
 target_include_directories(libsystem_kernel_static PUBLIC include ${CMAKE_CURRENT_BINARY_DIR}/public_include)
-target_include_directories(libsystem_kernel_static PRIVATE mach mach/mach mach/servers custom wrappers)
+target_include_directories(libsystem_kernel_static PRIVATE
+    mach mach/mach mach/servers custom wrappers
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/osfmk
+)
 target_include_directories(libsystem_kernel_static PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/internal_include)
 
 target_compile_options(libsystem_kernel_static PRIVATE -fdollars-in-identifiers -no-cpp-precomp -fno-common -fno-stack-protector -fno-stack-check -momit-leaf-frame-pointer -Wno-nullability-completeness -Wno-implicit-function-declaration)
 
 # We define LIBSYSCALL_INTERFACE to pass to the MIG compiler below. This will indicate we don't want 'internal' versions of the given MIG files.
-target_compile_definitions(libsystem_kernel_static PRIVATE _FORTIFY_SOURCE=0 __DARWIN_VERS_1050=1 NO_SYSCALL_LEGACY SYSCALL_PRE1050 LIBSYSCALL_INTERFACE)
+target_compile_definitions(libsystem_kernel_static PRIVATE _FORTIFY_SOURCE=0 __DARWIN_VERS_1050=1 PRIVATE=1 NO_SYSCALL_LEGACY SYSCALL_PRE1050 LIBSYSCALL_INTERFACE)
 if(PUREDARWIN_USE_LD64_LLD)
     target_compile_definitions(libsystem_kernel_static PRIVATE PD_LD64LLD_WEAK_LIBC_FUNCPTR)
 endif()

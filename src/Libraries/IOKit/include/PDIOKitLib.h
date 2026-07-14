@@ -47,13 +47,12 @@ kern_return_t IOMasterPort(mach_port_t bootstrapPort, mach_port_t *masterPort);
  * Build an IOKit matching-dictionary string for a single
  * "IOProviderClass" == className match. Real IOServiceMatching returns a
  * CFMutableDictionaryRef; this project has no CoreFoundation, so this
- * returns a malloc'd XML property-list string instead (the same on-wire
- * format the real client eventually serializes down to) - pass it straight
- * to IOServiceGetMatchingService, which takes ownership and frees it.
+ * returns a pointer to an internal XML property-list string instead (the same
+ * on-wire format the real client eventually serializes down to). Copy it
+ * before another IOServiceMatching call if you need to keep it.
  */
 char *IOServiceMatching(const char *className);
 
-/* Consumes (frees) `matching`. */
 kern_return_t IOServiceGetMatchingService(mach_port_t masterPort,
     char *matching, io_service_t *service);
 

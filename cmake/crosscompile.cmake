@@ -63,7 +63,9 @@ function(add_darwin_static_library name)
     cmake_parse_arguments(SL "USE_HOST_SDK" "MACOSX_VERSION_MIN" "" ${ARGN})
 
     add_library(${name} STATIC)
-    add_dependencies(${name} host_libtool)
+    if(TARGET host_libtool)
+        add_dependencies(${name} host_libtool)
+    endif()
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
 
     if(SL_MACOSX_VERSION_MIN)

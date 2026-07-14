@@ -136,19 +136,15 @@ LEAF(pseudo, 0)					;\
 LEAF(_##name, 0)								;\
 	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
 	UNIX_SYSCALL_SYSCALL							;\
-	jnb		2f							;\
 	movq	%rax, %rdi							;\
-	BRANCH_EXTERN(_cerror)							;\
-2:
+	jb	_cerror
 
 #define UNIX_SYSCALL_NONAME(name, nargs, cerror)		 \
 	.globl	cerror								;\
 	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
 	UNIX_SYSCALL_SYSCALL							;\
-	jnb		2f							;\
 	movq	%rax, %rdi							;\
-	BRANCH_EXTERN(_##cerror)						;\
-2:
+	jb	_##cerror
 
 #define PSEUDO(pseudo, name, nargs, cerror)			\
 LEAF(pseudo, 0)					;\
@@ -156,11 +152,11 @@ LEAF(pseudo, 0)					;\
 
 #define __SYSCALL2(pseudo, name, nargs, cerror) \
 	PSEUDO(pseudo, name, nargs, cerror)			;\
-	ret
+	ret ;
 
 #define __SYSCALL(pseudo, name, nargs)			\
 	PSEUDO(pseudo, name, nargs, cerror)			;\
-	ret
+	ret ;
 
 #elif defined(__arm__)
 
@@ -493,4 +489,3 @@ name:
 #else
 #error Unsupported architecture
 #endif
-

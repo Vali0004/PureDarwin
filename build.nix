@@ -123,6 +123,9 @@ EOF
       sed -i '1s#.*#\#!'"$(command -v bash)"'#' src/Kernel/xnu/cmake/make_symbol_aliasing.sh.in
     fi
     patchShebangs src ${lib.optionalString enableTools "tools"}
+    if [ -e tools/mig ]; then
+      patchShebangs tools/mig
+    fi
     # patchShebangs does not rewrite this csh script, but /bin/csh is also
     # absent in the Nix sandbox.
     if [ -e src/Kernel/xnu/SETUP/config/doconf ]; then
@@ -197,8 +200,13 @@ EOF
     for bin in \
       build-nix/src/Userspace/helloapp/helloapp \
       build-nix/src/Userspace/busybox/build/busybox \
+      build-nix/src/Userspace/sw_vers/sw_vers \
+      build-nix/src/Userspace/ps/ps \
+      build-nix/src/Userspace/system_cmds/mkfile \
+      build-nix/src/Userspace/system_cmds/sync \
       build-nix/src/Userspace/tcc/build/tcc \
-      build-nix/src/Userspace/fbtri/fbtri
+      build-nix/src/Userspace/fbtri/fbtri \
+      build-nix/src/Userspace/iokittest/iokittest
     do
       if [ -x "$bin" ]; then
         cp "$bin" $out/bin/
@@ -230,6 +238,12 @@ EOF
     cp build-nix/src/Libraries/libSystem/stub/libSystem.B.dylib $out/usr/lib/
     cp -P build-nix/src/Libraries/libSystem/stub/libSystem.dylib $out/usr/lib/
     cp build-nix/src/Libraries/libSystem/libdyld/libdyld.dylib $out/usr/lib/system/
+    if [ -e build-nix/src/Libraries/libSystem/libsystem_kernel/libsystem_kernel.a ]; then
+      cp build-nix/src/Libraries/libSystem/libsystem_kernel/libsystem_kernel.a $out/usr/lib/system/
+    fi
+    if [ -e build-nix/src/Libraries/libSystem/libsystem_kernel/syscalls.a ]; then
+      cp build-nix/src/Libraries/libSystem/libsystem_kernel/syscalls.a $out/usr/lib/system/
+    fi
     cp build-nix/src/Libraries/dyld/dyld $out/usr/lib/
   '' + lib.optionalString installBaseSystem ''
     cmake --install build-nix --component BaseSystem --prefix $out

@@ -34,6 +34,16 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 
+#ifndef KDBG_TYPEFILTER_BITMAP_SIZE
+#define KDBG_TYPEFILTER_BITMAP_SIZE ((256 * 256) / 8)
+#endif
+#ifndef KDEBUG_COMMPAGE_ENABLE_TYPEFILTER
+#define KDEBUG_COMMPAGE_ENABLE_TYPEFILTER 0x2
+#endif
+#ifndef KDEBUG_ENABLE_CONT_TIME
+#define KDEBUG_ENABLE_CONT_TIME 0x20
+#endif
+
 extern int __kdebug_typefilter(void** addr, size_t* size);
 extern int __kdebug_trace64(uint32_t code, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4);

@@ -1,25 +1,25 @@
 /*
- * PureDarwin libSystem.B.dylib initializer -- the real dyld<->libSystem
+ * PureDarwin libSystem.B.dylib initializer - the real dyld<->libSystem
  * handshake, not a hack.
  *
  * This constructor MUST live in libSystem.B.dylib itself, not in libdyld.dylib
- * (where it was originally, alongside dyldLibSystemGlue.c/pd_dladdr.c -- an
+ * (where it was originally, alongside dyldLibSystemGlue.c/pd_dladdr.c - an
  * understandable first guess since it's dyld-shaped code). Real dyld hardcodes
  * a check (ImageLoaderMachO.cpp doModInitFunctions): until
  * gProcessInfo->libSystemInitialized is true, the ONLY image allowed to run
  * ANY initializer is the one whose install path exactly equals
- * LIBSYSTEM_DYLIB_PATH ("/usr/lib/libSystem.B.dylib") -- every other dylib's
+ * LIBSYSTEM_DYLIB_PATH ("/usr/lib/libSystem.B.dylib") - every other dylib's
  * initializer throws "initializer in image (...) that does not link with
  * libSystem.dylib". Since THIS constructor is what flips gLibSystemHelpers
  * from NULL to non-NULL (which is what sets libSystemInitialized = true in
  * the first place), it has to be the FIRST initializer dyld runs, and per
  * that check that means it has to be compiled into libSystem.B.dylib's own
- * object files, with libSystem.B.dylib's own install path -- exactly mirroring
+ * object files, with libSystem.B.dylib's own install path - exactly mirroring
  * real Darwin, where this handshake is libSystem_initializer(), part of
  * libSystem.B.dylib, not of any re-exported child.
  *
  * At load time dyld fills the __DATA,__dyld section (in dyldLibSystemGlue.c,
- * still built into libdyld.dylib -- that part IS dyld-side, not moved) with
+ * still built into libdyld.dylib - that part IS dyld-side, not moved) with
  * its _dyld_func_lookup implementation. This constructor looks up dyld's
  * "__dyld_register_thread_helpers" entry point and hands it a LibSystemHelpers
  * table. Once registered, dyld's gLibSystemHelpers is non-NULL, which is what
@@ -29,7 +29,7 @@
  * We deliberately provide only the helper table + start glue, not the full
  * dyldAPIsInLibSystem.cpp API surface (dlopen/NSModule/...), which launchd does
  * not use. The struct layout mirrors dyld/src/dyldLibSystemInterface.h exactly
- * (version 13) -- that is the ABI dyld reads, so it must not drift.
+ * (version 13) - that is the ABI dyld reads, so it must not drift.
  */
 
 #include <stddef.h>
@@ -126,7 +126,7 @@ static struct LibSystemHelpers sHelpers = {
 	.malloc_size                 = &malloc_size,
 	.pthread_getspecific         = &pthread_getspecific,
 	.cxa_finalize                = &__cxa_finalize,
-	.startGlueToCallExit         = NULL,  /* filled at runtime below -- see pd_libSystem_initializer() */
+	.startGlueToCallExit         = NULL,  /* filled at runtime below - see pd_libSystem_initializer() */
 	.hasPerThreadBufferFor_dlerror = &hasPerThreadBufferFor_dlerror,
 	.isLaunchdOwned              = &isLaunchdOwned,
 	.vm_alloc                    = &vm_allocate,

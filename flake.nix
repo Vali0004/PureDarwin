@@ -60,8 +60,32 @@
             "src/Kernel/CMakeLists.txt"
             "src/Kernel/xnu"
             "src/Kernel/libfirehose_kernel"
-            "src/Libraries"
+            "src/Libraries/CMakeLists.txt"
+            "src/Libraries/AvailabilityVersions"
+            "src/Libraries/libSystem/CMakeLists.txt"
+            "src/Libraries/libSystem/libplatform"
+            "src/Libraries/libSystem/pthread"
             "tools"
+          ];
+          libSystemSource = sourceWith "puredarwin-libsystem-source" [
+            "src/Kernel/xnu/osfmk"
+            "src/Kernel/xnu/libkern/libkern"
+            "src/Kernel/xnu/libkern/os"
+            "src/Kernel/xnu/bsd/i386"
+            "src/Kernel/xnu/bsd/bsm"
+            "src/Kernel/xnu/bsd/machine"
+            "src/Kernel/xnu/bsd/net"
+            "src/Kernel/xnu/bsd/netinet"
+            "src/Kernel/xnu/bsd/netinet6"
+            "src/Kernel/xnu/bsd/pthread"
+            "src/Kernel/xnu/bsd/sys"
+            "src/Kernel/xnu/bsd/sys_private"
+            "src/Kernel/xnu/bsd/uuid"
+            "src/Kernel/xnu/bsd/kern/makesyscalls.sh"
+            "src/Kernel/xnu/bsd/kern/syscalls.master"
+            "src/Libraries"
+            "src/Libraries/libSystem/libmalloc/compat-include"
+            "tools/mig"
           ];
           kextsSource = sourceWith "puredarwin-kexts-source" [
             "projects"
@@ -74,7 +98,13 @@
             "tools"
           ];
           userlandSource = sourceWith "puredarwin-userland-source" [
+            "src/Kernel/xnu/osfmk"
+            "src/Libraries/IOKit"
+            "src/Libraries/PDGOP"
+            "src/Libraries/libSystem/libmalloc/compat-include"
+            "src/Libraries/libSystem/libsystem_kernel/mach"
             "src/Userspace"
+            "tools/mig"
           ];
 
           mkPureDarwinBuild = args: pkgs.callPackage ./build.nix ({
@@ -84,7 +114,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "helloapp" "launchd" "busybox" "fbtri" "iokittest" ];
+            buildTargets = [ "helloapp" "launchd" "busybox" "sw_vers" "ps" "mkfile" "sync" "fbtri" "iokittest" ];
             enableProjects = false;
             enableKernel = false;
             enableLibraries = false;
@@ -301,9 +331,10 @@
             };
           libSystemBuild = mkPureDarwinBuild {
             pname = "puredarwin-libsystem";
-            src = kernelSource;
-            buildTargets = [ "libSystem_B_stub" "dyld" ];
+            src = libSystemSource;
+            buildTargets = [ "libSystem_B_stub" "dyld" "libsystem_kernel_static" ];
             enableUserspace = false;
+            enableKernel = false;
             installUserland = false;
             installKernel = false;
             installLibSystem = true;

@@ -11,7 +11,6 @@
 #include <PDIOKitLib.h>
 #include <mach/mach.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "device_user.h"
@@ -28,6 +27,7 @@ IOMasterPort(mach_port_t bootstrapPort, mach_port_t *masterPort)
 char *
 IOServiceMatching(const char *className)
 {
+	static char matching[512];
 	static const char fmt[] =
 	    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
@@ -35,18 +35,13 @@ IOServiceMatching(const char *className)
 	    "<plist version=\"1.0\"><dict>"
 	    "<key>IOProviderClass</key><string>%s</string>"
 	    "</dict></plist>";
-	char *matching;
 	int len;
 
-	/* io_string_t on the wire is a fixed c_string[*:512]; classNames are
-	 * always short, so a generous fixed buffer is fine here. */
-	matching = malloc(512);
-	if (matching == NULL) {
+	if (className == NULL) {
 		return NULL;
 	}
-	len = snprintf(matching, 512, fmt, className);
-	if (len < 0 || len >= 512) {
-		free(matching);
+	len = snprintf(matching, sizeof(matching), fmt, className);
+	if (len < 0 || (size_t)len >= sizeof(matching)) {
 		return NULL;
 	}
 	return matching;
@@ -56,28 +51,20 @@ kern_return_t
 IOServiceGetMatchingService(mach_port_t masterPort, char *matching,
     io_service_t *service)
 {
-	kern_return_t kr;
-
 	if (matching == NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	kr = io_service_get_matching_service(masterPort, matching, service);
-	free(matching);
-	return kr;
+	return io_service_get_matching_service(masterPort, matching, service);
 }
 
 kern_return_t
 IOServiceGetMatchingServices(mach_port_t masterPort, char *matching,
     io_iterator_t *existing)
 {
-	kern_return_t kr;
-
 	if (matching == NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	kr = io_service_get_matching_services(masterPort, matching, existing);
-	free(matching);
-	return kr;
+	return io_service_get_matching_services(masterPort, matching, existing);
 }
 
 kern_return_t

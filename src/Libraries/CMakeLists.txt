@@ -1,10 +1,16 @@
-add_subdirectory(AvailabilityVersions)
-add_subdirectory(architecture)
-add_subdirectory(CrashReporterClient)
-add_subdirectory(CommonCrypto)
-add_subdirectory(clang_bootstrap)
-add_subdirectory(libSystem)
-add_subdirectory(libcxxabi)
-add_subdirectory(dyld)
-add_subdirectory(IOKit)
-add_subdirectory(PDGOP)
+foreach(_puredarwin_library_dir
+    AvailabilityVersions
+    architecture
+    CrashReporterClient
+    CommonCrypto
+    clang_bootstrap
+    libSystem
+    libcxxabi
+    dyld
+    IOKit
+    PDGOP
+)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_puredarwin_library_dir}/CMakeLists.txt")
+        add_subdirectory("${_puredarwin_library_dir}")
+    endif()
+endforeach()

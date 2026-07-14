@@ -63,11 +63,23 @@ function(mig filename)
 
     get_filename_component(basename ${filename} NAME_WE)
     get_filename_component(filename_abs ${filename} ABSOLUTE)
+
+    if(TARGET migcom)
+        set(MIGCOM_PATH "$<TARGET_FILE:migcom>")
+        set(MIGCOM_DEPENDS migcom)
+    elseif(DEFINED ENV{NIX_MIGCOM_PATH})
+        set(MIGCOM_PATH "$ENV{NIX_MIGCOM_PATH}")
+        set(MIGCOM_DEPENDS)
+    else()
+        message(SEND_ERROR "mig() requires the migcom target or NIX_MIGCOM_PATH")
+        return()
+    endif()
+
     add_custom_command(OUTPUT ${MIG_DEPS}
-        COMMAND ${CMAKE_COMMAND} -E env MIGCOM=$<TARGET_FILE:migcom> ${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh -arch ${MIG_ARCH}
+        COMMAND ${CMAKE_COMMAND} -E env MIGCOM=${MIGCOM_PATH} ${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh -arch ${MIG_ARCH}
             -user ${MIG_USER_SOURCE} -header ${MIG_USER_HEADER} -server ${MIG_SERVER_SOURCE}
             -sheader ${MIG_SERVER_HEADER} ${MIG_FLAGS} ${filename_abs}
-        DEPENDS migcom
+        DEPENDS ${MIGCOM_DEPENDS}
         COMMENT "MiG ${filename}" VERBATIM COMMAND_EXPAND_LISTS
     )
 endfunction()

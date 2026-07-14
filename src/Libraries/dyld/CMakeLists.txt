@@ -84,6 +84,11 @@ target_include_directories(dyld PRIVATE
     ${CMAKE_SOURCE_DIR}/src/Libraries/libSystem/corecrypto/include
     ${CMAKE_SOURCE_DIR}/src/Libraries/CrashReporterClient/include
     ${CMAKE_CURRENT_SOURCE_DIR}/compat-include
+    # Prefer libsystem_kernel's generated userspace MIG headers over libc's
+    # copied XNU osfmk/mach headers. compat-include/mach/mach.h redirects only
+    # the umbrella; do not add libsystem_kernel/mach as an include root because
+    # it also contains a private string.h used only by MIG.
+    ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/public_include
 )
 
 # _DARWIN_C_SOURCE exposes BSD extensions (strnlen etc.) that XNU's kcdata.h,
@@ -133,8 +138,6 @@ target_link_libraries(dyld PRIVATE
     pthread_common_private_headers
     libplatform_headers
     libplatform_private_headers
-    xnu_headers
-    xnu_private_headers
 )
 
 add_dependencies(dyld libsystem_kernel_static corecrypto_static CrashReporterClient libplatform_static libc_static libc_internal_static pthread_static)

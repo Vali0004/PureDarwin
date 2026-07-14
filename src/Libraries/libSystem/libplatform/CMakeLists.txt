@@ -59,7 +59,11 @@ target_sources(libplatform_static PRIVATE
 # VARIANT_STATIC: emit the plain C names (memcpy/memmove/strlen/strcmp/...) as
 # real symbols, not just the __platform_* internals -- this is the static-archive
 # build variant, exactly what a -nostdlib client like dyld links against.
-target_compile_definitions(libplatform_static PRIVATE VARIANT_STATIC)
+target_compile_definitions(libplatform_static PRIVATE
+    VARIANT_STATIC
+    PRIVATE=1
+    __DARWIN_ONLY_UNIX_CONFORMANCE=1
+)
 target_include_directories(libplatform_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/private
@@ -78,7 +82,12 @@ target_include_directories(libplatform_static PRIVATE
     # reconstructed os/alloc_once_private.h (shared with pthread_static)
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/compat-include
 )
-add_dependencies(libplatform_static libsystem_kernel_static)
+if(TARGET libsystem_kernel_static)
+    add_dependencies(libplatform_static libsystem_kernel_static)
+endif()
+if(TARGET libc_headers_gen_script)
+    add_dependencies(libplatform_static libc_headers_gen_script)
+endif()
 # bridgeos availability shim, force-included (C only -- no .s).
 target_compile_options(libplatform_static PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_CURRENT_SOURCE_DIR}/pd_bridgeos_compat.h>

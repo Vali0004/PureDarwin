@@ -35,7 +35,8 @@ add_library(libmalloc_static STATIC EXCLUDE_FROM_ALL
 set_property(TARGET libmalloc_static PROPERTY OSX_ARCHITECTURES "${PUREDARWIN_ARCH}")
 
 target_compile_definitions(libmalloc_static PRIVATE
-    MALLOC_TARGET_EXCLAVES=0)
+    MALLOC_TARGET_EXCLAVES=0
+    PRIVATE=1)
 
 target_include_directories(libmalloc_static PRIVATE
     # Vendored Apple-internal headers absent from the SDK (os/feature_private.h,
@@ -68,7 +69,12 @@ target_include_directories(libmalloc_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/include
     # os/atomic_private.h (+ _impl/_arch siblings) -- only source we have for
     # this one; harmless now that libplatform's libkern/OSAtomic.h already won.
-    ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/libkern)
+    ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/libkern
+    # Full XNU header roots needed by private SDK headers pulled into libmalloc:
+    # sys/codesign.h -> System/kern/cs_blobs.h -> kern/cs_blobs.h, and
+    # malloc.c's memorystatus event flags from sys/event.h.
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/osfmk
+    ${PUREDARWIN_SOURCE_DIR}/src/Kernel/xnu/bsd)
 
 target_link_libraries(libmalloc_static PRIVATE
     AvailabilityHeaders
