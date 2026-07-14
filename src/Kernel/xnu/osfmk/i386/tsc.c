@@ -30,9 +30,9 @@
  */
 
 /*
- *	File:		i386/tsc.c
- *	Purpose:	Initializes the TSC and the various conversion
- *			factors needed by other parts of the system.
+ *  File:       i386/tsc.c
+ *  Purpose:    Initializes the TSC and the various conversion
+ *              factors needed by other parts of the system.
  */
 
 
@@ -46,6 +46,7 @@
 #include <kern/misc_protos.h>
 #include <kern/spl.h>
 #include <kern/assert.h>
+#include <kern/timer_call.h>
 #include <mach/vm_prot.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>         /* for kernel_map */
@@ -90,6 +91,103 @@ uint64_t        tsc_at_boot = 0;
 
 #define CPU_FAMILY_PENTIUM_M    (0x6)
 
+static void
+tsc_stamp(void *tscptr)
+{
+    wrmsr64(MSR_P5_TSC, *(uint64_t *)tscptr);
+}
+
+/* AMDs TSC is different per core, causing weird things */
+/* AMD at somepoint made a piece of software called 'Dual-Core Optimiser' */
+/* Anyways, this is mostly just fixing hardware in software. */
+/* Sync it in kernel so we don't need any external kernel extenions */
+uint64_t tsc_sync_interval_msecs = 5000; /* 5 seconds */
+uint64_t tsc_sync_interval_abs;
+uint64_t tsc_sync_next_deadline;
+static timer_call_data_t sync_tsc_timer;
+
+static void
+tsc_sync(thread_call_param_t param0 __unused, thread_call_param_t param1 __unused)
+{
+    uint64_t tsc;
+
+    tsc = rdmsr64(MSR_P5_TSC);
+    /* Run on all cores */
+    mp_rendezvous_no_intrs(tsc_stamp, (void*)&tsc);
+
+    clock_deadline_for_periodic_event(tsc_sync_interval_abs, mach_absolute_time(), &tsc_sync_next_deadline);
+    timer_call_enter_with_leeway(&sync_tsc_timer, NULL, tsc_sync_next_deadline, 0, TIMER_CALL_SYS_NORMAL, FALSE);
+}
+
+static boolean_t
+amd_is_divisor_reserved_zen(uint64_t field)
+{
+    switch (field) {
+        case 0x1B:
+        case 0x1D:
+        case 0x1F:
+        case 0x21:
+        case 0x23:
+        case 0x25:
+        case 0x27:
+        case 0x29:
+        case 0x2B:
+        case 0x2D ... 0x3F:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+/* Returns the P-state divisor multiplied by 8. */
+static uint64_t
+amd_get_pstate_divisor_x8(uint64_t field)
+{
+    i386_cpu_info_t *infop = cpuid_info();
+
+    switch (field) {
+        case 0x00:
+            if (infop->cpuid_family >= 0x17) {
+                panic("Invalid TSC divisor field! 0x%llx", field);
+            } else {
+                return 8;
+            }
+        case 0x01:
+            if (infop->cpuid_family >= 0x17) {
+                panic("Invalid TSC divisor field! 0x%llx", field);
+            } else {
+                return 16;
+            }
+        case 0x02:
+            if (infop->cpuid_family >= 0x17) {
+                panic("Invalid TSC divisor field! 0x%llx", field);
+            } else {
+                return 32;
+            }
+        case 0x03:
+            if (infop->cpuid_family >= 0x17) {
+                panic("Invalid TSC divisor field! 0x%llx", field);
+            } else {
+                return 64;
+            }
+        case 0x04:
+            if (infop->cpuid_family >= 0x17) {
+                panic("Invalid TSC divisor field! 0x%llx", field);
+            } else {
+                return 128;
+            }
+        default:
+            if (infop->cpuid_family <= 0x16) {
+                panic("Invalid TSC divisor field! 0x%llx", field);
+            } else {
+                if (amd_is_divisor_reserved_zen(field)) {
+                    panic("P0 divisor is reserved!");
+                }
+                return field;
+            }
+    }
+}
+
 /*
  * This routine extracts a frequency property in Hz from the device tree.
  * Also reads any initial TSC value at boot from the device tree.
@@ -97,38 +195,38 @@ uint64_t        tsc_at_boot = 0;
 static uint64_t
 EFI_get_frequency(const char *prop)
 {
-	uint64_t        frequency = 0;
-	DTEntry         entry;
-	void const      *value;
-	unsigned int    size;
+    uint64_t        frequency = 0;
+    DTEntry         entry;
+    void const      *value;
+    unsigned int    size;
 
-	if (SecureDTLookupEntry(0, "/efi/platform", &entry) != kSuccess) {
-		kprintf("EFI_get_frequency: didn't find /efi/platform\n");
-		return 0;
-	}
+    if (SecureDTLookupEntry(0, "/efi/platform", &entry) != kSuccess) {
+        kprintf("EFI_get_frequency: didn't find /efi/platform\n");
+        return 0;
+    }
 
-	/*
-	 * While we're here, see if EFI published an initial TSC value.
-	 */
-	if (SecureDTGetProperty(entry, "InitialTSC", &value, &size) == kSuccess) {
-		if (size == sizeof(uint64_t)) {
-			tsc_at_boot = *(uint64_t const *) value;
-			kprintf("EFI_get_frequency: read InitialTSC: %llu\n",
-			    tsc_at_boot);
-		}
-	}
+    /*
+     * While we're here, see if EFI published an initial TSC value.
+     */
+    if (SecureDTGetProperty(entry, "InitialTSC", &value, &size) == kSuccess) {
+        if (size == sizeof(uint64_t)) {
+            tsc_at_boot = *(uint64_t const *) value;
+            kprintf("EFI_get_frequency: read InitialTSC: %llu\n",
+                    tsc_at_boot);
+        }
+    }
 
-	if (SecureDTGetProperty(entry, prop, &value, &size) != kSuccess) {
-		kprintf("EFI_get_frequency: property %s not found\n", prop);
-		return 0;
-	}
-	if (size == sizeof(uint64_t)) {
-		frequency = *(uint64_t const *) value;
-		kprintf("EFI_get_frequency: read %s value: %llu\n",
-		    prop, frequency);
-	}
+    if (SecureDTGetProperty(entry, prop, &value, &size) != kSuccess) {
+        kprintf("EFI_get_frequency: property %s not found\n", prop);
+        return 0;
+    }
+    if (size == sizeof(uint64_t)) {
+        frequency = *(uint64_t const *) value;
+        kprintf("EFI_get_frequency: read %s value: %llu\n",
+                prop, frequency);
+    }
 
-	return frequency;
+    return frequency;
 }
 
 /*
@@ -165,7 +263,7 @@ tsc_init(void)
 	}
 
 	switch (cpuid_cpufamily()) {
-	case CPUFAMILY_INTEL_GOLDMONT_PLUS: {
+	case CPUFAMILY_INTEL_GOLDMONTPLUS: {
 		busFreq = EFI_get_frequency("FSBFrequency");
 		if (busFreq == 0) {
 			busFreq = BASE_NHM_CLOCK_SOURCE;
@@ -228,6 +326,71 @@ tsc_init(void)
 		    (uint32_t)(refFreq % Mega),
 		    N, M);
 
+		break;
+	}
+	case CPUFAMILY_AMD_BULLDOZER:
+	case CPUFAMILY_AMD_PILEDRIVER:
+	case CPUFAMILY_AMD_STEAMROLLER:
+	case CPUFAMILY_AMD_EXCAVATOR:
+	case CPUFAMILY_AMD_JAGUAR:
+	case CPUFAMILY_AMD_PUMA:
+	case CPUFAMILY_AMD_ZEN:
+	case CPUFAMILY_AMD_ZENX:
+	case CPUFAMILY_AMD_ZEN2:
+	case CPUFAMILY_AMD_ZEN3:
+	case CPUFAMILY_AMD_ZEN4:
+	case CPUFAMILY_AMD_ZEN5: {
+		uint64_t msr;
+		uint64_t did;
+		uint64_t fid;
+		i386_cpu_info_t *infop = cpuid_info();
+
+		busFreq = EFI_get_frequency("FSBFrequency");
+		if (busFreq == 0) {
+			busFreq = BASE_NHM_CLOCK_SOURCE;
+		}
+
+		tscFreq = EFI_get_frequency("TSCFrequency");
+		if (tscFreq == 0) {
+			msr = rdmsr64(MSR_AMD_PSTATE_P0);
+			if (infop->cpuid_family == 0x15 || infop->cpuid_family == 0x16) {
+				did = bitfield(msr, 8, 6);
+				fid = bitfield(msr, 5, 0);
+				tscFreq = (100 * Mega * (fid + 0x10) * 8) /
+				    amd_get_pstate_divisor_x8(did);
+			} else if (infop->cpuid_family == 0x17 || infop->cpuid_family == 0x19) {
+				did = bitfield(msr, 13, 8);
+				fid = bitfield(msr, 7, 0);
+				tscFreq = (200 * Mega * fid * 8) /
+				    amd_get_pstate_divisor_x8(did);
+			} else if (infop->cpuid_family >= 0x1A) {
+				fid = bitfield(msr, 11, 0);
+				if (fid == 0) {
+					panic("Invalid AMD P0 frequency ID");
+				}
+				tscFreq = (fid > 0xF) ? (fid * 5 * Mega) : (fid * Mega);
+			} else {
+				panic("Unsupported AMD CPU family 0x%x\n", infop->cpuid_family);
+			}
+		}
+
+		if (infop->cpuid_family >= 0x17) {
+			msr = rdmsr64(MSR_AMD_HARDWARE_CFG);
+			msr |= MSR_AMD_HARDWARE_CFG_TSC_LOCK_AT_P0;
+			wrmsr64(MSR_AMD_HARDWARE_CFG, msr);
+		}
+
+		tscGranularity = tscFreq / busFreq;
+		if (tscGranularity == 0) {
+			tscGranularity = 1;
+		}
+
+		clock_interval_to_absolutetime_interval(tsc_sync_interval_msecs,
+		    NSEC_PER_MSEC, &tsc_sync_interval_abs);
+		timer_call_setup(&sync_tsc_timer, tsc_sync, NULL);
+		tsc_sync_next_deadline = mach_absolute_time() + tsc_sync_interval_abs;
+		timer_call_enter_with_leeway(&sync_tsc_timer, NULL,
+		    tsc_sync_next_deadline, 0, TIMER_CALL_SYS_NORMAL, FALSE);
 		break;
 	}
 	default: {
@@ -351,43 +514,43 @@ tsc_init(void)
 void
 tsc_get_info(tscInfo_t *info)
 {
-	info->busFCvtt2n     = busFCvtt2n;
-	info->busFCvtn2t     = busFCvtn2t;
-	info->tscFreq        = tscFreq;
-	info->tscFCvtt2n     = tscFCvtt2n;
-	info->tscFCvtn2t     = tscFCvtn2t;
-	info->tscGranularity = tscGranularity;
-	info->bus2tsc        = bus2tsc;
-	info->busFreq        = busFreq;
-	info->flex_ratio     = flex_ratio;
-	info->flex_ratio_min = flex_ratio_min;
-	info->flex_ratio_max = flex_ratio_max;
+    info->busFCvtt2n     = busFCvtt2n;
+    info->busFCvtn2t     = busFCvtn2t;
+    info->tscFreq        = tscFreq;
+    info->tscFCvtt2n     = tscFCvtt2n;
+    info->tscFCvtn2t     = tscFCvtn2t;
+    info->tscGranularity = tscGranularity;
+    info->bus2tsc        = bus2tsc;
+    info->busFreq        = busFreq;
+    info->flex_ratio     = flex_ratio;
+    info->flex_ratio_min = flex_ratio_min;
+    info->flex_ratio_max = flex_ratio_max;
 }
 
 #if DEVELOPMENT || DEBUG
 void
 cpu_data_tsc_sync_deltas_string(char *buf, uint32_t buflen,
-    uint32_t start_cpu, uint32_t end_cpu)
+                                uint32_t start_cpu, uint32_t end_cpu)
 {
-	int cnt;
-	uint32_t offset = 0;
+    int cnt;
+    uint32_t offset = 0;
 
-	if (start_cpu >= real_ncpus || end_cpu >= real_ncpus) {
-		if (buflen >= 1) {
-			buf[0] = 0;
-		}
-		return;
-	}
+    if (start_cpu >= real_ncpus || end_cpu >= real_ncpus) {
+        if (buflen >= 1) {
+            buf[0] = 0;
+        }
+        return;
+    }
 
-	for (uint32_t curcpu = start_cpu; curcpu <= end_cpu; curcpu++) {
-		cnt = snprintf(buf + offset, buflen - offset, "0x%llx ", cpu_datap(curcpu)->tsc_sync_delta);
-		if (cnt < 0 || (offset + (unsigned) cnt >= buflen)) {
-			break;
-		}
-		offset += cnt;
-	}
-	if (offset >= 1) {
-		buf[offset - 1] = 0;    /* Clip the final, trailing space */
-	}
+    for (uint32_t curcpu = start_cpu; curcpu <= end_cpu; curcpu++) {
+        cnt = snprintf(buf + offset, buflen - offset, "0x%llx ", cpu_datap(curcpu)->tsc_sync_delta);
+        if (cnt < 0 || (offset + (unsigned) cnt >= buflen)) {
+            break;
+        }
+        offset += cnt;
+    }
+    if (offset >= 1) {
+        buf[offset - 1] = 0;    /* Clip the final, trailing space */
+    }
 }
 #endif /* DEVELOPMENT || DEBUG */
