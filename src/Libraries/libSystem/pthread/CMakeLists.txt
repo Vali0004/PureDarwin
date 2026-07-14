@@ -33,7 +33,10 @@ target_sources(pthread_static PRIVATE
 # priority, _pthread_priority_make_from_thread_qos) — gated #if PRIVATE &&
 # __PTHREAD_EXPOSE_INTERNALS__; Apple builds libpthread's own .c files with both.
 target_compile_definitions(pthread_static PRIVATE
-    VARIANT_DYLD=1 __POSIX_LIB__ PRIVATE=1 __PTHREAD_EXPOSE_INTERNALS__=1)
+    VARIANT_DYLD=1 __POSIX_LIB__ PRIVATE=1 __PTHREAD_EXPOSE_INTERNALS__=1
+    # See pthread_tsd.c: dyld's static copy of the key allocator must draw
+    # from a disjoint slot range or it collides with in-process libpthread.
+    PD_PTHREAD_TSD_DYLD_RANGE=1)
 target_include_directories(pthread_static PRIVATE
     # Reconstructed Apple-internal os/alloc_once_private.h (absent from the open
     # libplatform drop). Must precede libplatform's private/ so the wrapper is found.

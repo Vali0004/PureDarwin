@@ -1038,6 +1038,34 @@ user_trap(
 
 	case T_INVALID_OPCODE:
 		if (fpUDflt(rip) == 1) {
+			/* Same diagnostic as the fatal #PF path: ud2 is how abort()/
+			 * malloc_zone_error()/__builtin_trap() surface in userland, and
+			 * with no debugger in the guest this serial line is the only
+			 * way to find out where. */
+			printf("PD-DIAG: FATAL user #UD -> SIGILL: rip=0x%llx\n",
+			    (unsigned long long)rip);
+			if (is_saved_state64(saved_state)) {
+				/* Walk the rbp frame-pointer chain: [rbp] = caller rbp,
+				 * [rbp+8] = return address. Darwin userland keeps frame
+				 * pointers, so this yields a real backtrace. */
+				uint64_t urbp = saved_state64(saved_state)->rbp;
+				printf("PD-DIAG: rbp-chain backtrace:");
+				for (int i = 0; i < 32 && urbp != 0; i++) {
+					uint64_t frame[2] = { 0, 0 };
+					if (copyin((user_addr_t)urbp, (char *)frame, 16) != 0) {
+						break;
+					}
+					if (frame[1] < 0x1000ULL || frame[1] > 0x800000000000ULL) {
+						break;
+					}
+					printf(" 0x%llx", (unsigned long long)frame[1]);
+					if (frame[0] <= urbp) {
+						break;
+					}
+					urbp = frame[0];
+				}
+				printf("\n");
+			}
 			exc = EXC_BAD_INSTRUCTION;
 			code = EXC_I386_INVOP;
 		}

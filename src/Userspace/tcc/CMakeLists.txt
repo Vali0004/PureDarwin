@@ -46,8 +46,8 @@ add_custom_command(
             --targetos=Darwin
             --cpu=x86_64
             --sysroot=/
-            --sysincludepaths=/usr/include
-            --libpaths=/usr/lib:/usr/lib/system
+            --sysincludepaths=/usr/lib/tcc/include:/usr/include
+            --libpaths=/usr/lib/tcc:/usr/lib:/usr/lib/system
             --crtprefix=/usr/lib
             --config-codesign=no
             --config-ldl=no
@@ -70,7 +70,47 @@ add_custom_command(
         VERBATIM
     )
 
-add_custom_target(tcc ALL DEPENDS "${PUREDARWIN_TCC_BIN}")
+# tcc needs runtime support files under /usr/lib/tcc: its private headers
+# (tccdefs.h and friends, since --config-predefs=no) and libtcc1.a. libtcc1.a
+# must be compiled BY tcc itself (its linker consumes tcc's ELF objects, even
+# when emitting Mach-O), and the cross tcc above can't run on the build host.
+# tinycc's Makefile supports exactly this: a native-host build's
+# `x86_64-osx-libtcc1.a` target first builds a host-runnable x86_64-osx-tcc
+# cross compiler, then uses it to compile lib/*.c.
+set(PUREDARWIN_TCC_NATIVE_DIR "${CMAKE_CURRENT_BINARY_DIR}/build-native")
+set(PUREDARWIN_TCC_LIBTCC1 "${PUREDARWIN_TCC_NATIVE_DIR}/x86_64-osx-libtcc1.a")
+
+add_custom_command(
+    OUTPUT "${PUREDARWIN_TCC_LIBTCC1}"
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${PUREDARWIN_TCC_NATIVE_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${PUREDARWIN_TCC_NATIVE_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${PUREDARWIN_TCC_NATIVE_DIR}"
+        "${CMAKE_COMMAND}" -E env CC=clang --unset=CFLAGS --unset=LDFLAGS
+        "${PUREDARWIN_TCC_CONFIGURE}"
+            --source-path=${PUREDARWIN_TCC_SOURCE_COPY}
+    # No TOP= here: the Makefile only defines its build rules when TOP is
+    # unset at parse time (TOP set means "included from a sub-make").
+    COMMAND "${PUREDARWIN_MAKE_PROGRAM}"
+        -C "${PUREDARWIN_TCC_NATIVE_DIR}"
+        -f "${PUREDARWIN_TCC_SOURCE_COPY}/Makefile"
+        CC=clang
+        x86_64-osx-libtcc1.a
+    # runmain.o (tcc -run support) is an EXTRA_O the Makefile only builds for
+    # native compilers; produce it with the freshly built cross tcc.
+    COMMAND "${PUREDARWIN_TCC_NATIVE_DIR}/x86_64-osx-tcc"
+        -c "${PUREDARWIN_TCC_SOURCE_COPY}/lib/runmain.c"
+        -o "${PUREDARWIN_TCC_NATIVE_DIR}/runmain.o"
+        -B "${PUREDARWIN_TCC_SOURCE_COPY}"
+    DEPENDS "${PUREDARWIN_TCC_BIN}"
+    VERBATIM
+)
+
+add_custom_target(tcc ALL DEPENDS "${PUREDARWIN_TCC_BIN}" "${PUREDARWIN_TCC_LIBTCC1}")
 add_dependencies(tcc libSystem_B_stub dyld)
 
 install(PROGRAMS "${PUREDARWIN_TCC_BIN}" DESTINATION bin COMPONENT BaseSystem)
+install(FILES "${PUREDARWIN_TCC_LIBTCC1}" DESTINATION usr/lib/tcc
+    RENAME libtcc1.a COMPONENT BaseSystem)
+install(DIRECTORY "${PUREDARWIN_TCC_SOURCE_COPY}/include/"
+    DESTINATION usr/lib/tcc/include COMPONENT BaseSystem
+    FILES_MATCHING PATTERN "*.h")

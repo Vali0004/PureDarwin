@@ -2,38 +2,46 @@
 #include <cstdlib>
 #include <cstdint>
 
+/* POSIX requires that memory from posix_memalign() can be released with
+ * plain free(). The previous shim returned an interior aligned pointer with
+ * the malloc base stashed one slot before it - fine for the paired
+ * pd_bootstrap_aligned_free(), but libcxxabi's exception allocator
+ * (__aligned_free_with_fallback) and any other standard caller release with
+ * free(), which then aborts with "pointer being freed was not allocated".
+ * That was the SIGILL on every caught dyld error path (e.g. any failed
+ * dlopen: dyld2's dlopen_internal catch block ends the catch, the exception
+ * object's refcount hits zero, and the interior pointer hit free()).
+ *
+ * malloc() in both contexts this shim links into (dyld's pool allocator and
+ * libmalloc via the LibSystemHelpers forwarding) returns 16-byte-aligned
+ * memory, so alignments up to 16 - which covers alignof(max_align_t), i.e.
+ * everything libcxxabi's exception machinery asks for - can be satisfied
+ * with plain malloc(). Larger alignments cannot be provided free()-compatibly
+ * on top of plain malloc(), so fail them cleanly (callers fall back:
+ * libcxxabi's fallback pool for exceptions, bad_alloc for aligned new). */
 extern "C" void
 pd_bootstrap_aligned_free(void *ptr)
 {
-    if (ptr == nullptr) {
-        return;
-    }
-
-    void **slot = reinterpret_cast<void **>(ptr) - 1;
-    std::free(*slot);
+    std::free(ptr);
 }
 
 extern "C" int
 posix_memalign(void **memptr, size_t alignment, size_t size)
 {
     if (memptr == nullptr || alignment < sizeof(void *) || (alignment & (alignment - 1)) != 0) {
-        return 22;
+        return 22; /* EINVAL */
     }
 
-    size_t extra = alignment - 1 + sizeof(void *);
-    if (size > static_cast<size_t>(-1) - extra) {
-        return 12;
+    if (alignment > 16) {
+        return 12; /* ENOMEM - cannot honor free() contract above malloc alignment */
     }
 
-    void *base = std::malloc(size + extra);
+    void *base = std::malloc(size);
     if (base == nullptr) {
         return 12;
     }
 
-    uintptr_t start = reinterpret_cast<uintptr_t>(base) + sizeof(void *);
-    uintptr_t aligned = (start + alignment - 1) & ~(static_cast<uintptr_t>(alignment) - 1);
-    reinterpret_cast<void **>(aligned)[-1] = base;
-    *memptr = reinterpret_cast<void *>(aligned);
+    *memptr = base;
     return 0;
 }
 

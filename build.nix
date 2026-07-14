@@ -222,6 +222,16 @@ EOF
     if [ -x build-nix/src/Userspace/launchd/launchd ]; then
       cp build-nix/src/Userspace/launchd/launchd $out/sbin/
     fi
+    # tcc runtime support: private headers (tccdefs.h et al, needed at runtime
+    # with --config-predefs=no) and libtcc1.a (built by the native cross tcc).
+    if [ -f build-nix/src/Userspace/tcc/build-native/x86_64-osx-libtcc1.a ]; then
+      mkdir -p $out/usr/lib/tcc/include
+      cp build-nix/src/Userspace/tcc/build-native/x86_64-osx-libtcc1.a $out/usr/lib/tcc/libtcc1.a
+      cp build-nix/src/Userspace/tcc/src/include/*.h $out/usr/lib/tcc/include/
+      if [ -f build-nix/src/Userspace/tcc/build-native/runmain.o ]; then
+        cp build-nix/src/Userspace/tcc/build-native/runmain.o $out/usr/lib/tcc/
+      fi
+    fi
     _pdgop_drv="$(find build-nix -name 'puredarwingop_drv.dylib' -print -quit 2>/dev/null || true)"
     echo "puredarwingop driver module: ''${_pdgop_drv:-<not built>}"
     if [ -n "$_pdgop_drv" ]; then
@@ -258,6 +268,30 @@ EOF
       cp build-nix/src/Libraries/libSystem/libsystem_kernel/syscalls.a $out/usr/lib/system/
     fi
     cp build-nix/src/Libraries/dyld/dyld $out/usr/lib/
+    # Ship the C headers so in-guest compilers (tcc) can build against the
+    # system: xnu's installed headers (sys/*, mach/*, ...) overlaid with
+    # libc's generated public header tree (stdio.h, stdlib.h, ...). Staged
+    # under pd-guest-headers/, NOT usr/include: ports compile with
+    # -I''${libSystem}/usr/include, and populating that path would change
+    # header resolution for every cross-built port. image.nix moves this
+    # into the guest's /usr/include at assembly time.
+    if [ -d build-nix/src/Libraries/libSystem/libc/headers/usr/include ]; then
+      mkdir -p $out/pd-guest-headers
+      if [ -d build-nix/src/Kernel/xnu/xnu_header_install/usr/include ]; then
+        cp -RL build-nix/src/Kernel/xnu/xnu_header_install/usr/include/. $out/pd-guest-headers/
+      fi
+      chmod -R u+w $out/pd-guest-headers
+      cp -RL build-nix/src/Libraries/libSystem/libc/headers/usr/include/. $out/pd-guest-headers/
+      chmod -R u+w $out/pd-guest-headers
+      # Availability/TargetConditionals: SDK-side headers everything under
+      # /usr/include ends up including; PD vendors them in AvailabilityVersions.
+      cp -RL src/Libraries/AvailabilityVersions/include/. $out/pd-guest-headers/
+      # pthread public headers (pthread.h, sys/_pthread/*): sys/_types.h
+      # includes sys/_pthread/_pthread_types.h.
+      cp -RL src/Libraries/libSystem/pthread/include/. $out/pd-guest-headers/
+      rm -f $out/pd-guest-headers/sys_pthread_types.modulemap
+      chmod -R u+w $out/pd-guest-headers
+    fi
   '' + lib.optionalString installBaseSystem ''
     cmake --install build-nix --component BaseSystem --prefix $out
   '' + ''

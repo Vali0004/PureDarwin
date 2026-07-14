@@ -1463,32 +1463,47 @@ struct dlerrorPerThreadData
 	char		message[1];
 };
 
+// PureDarwin: pthread_key_create() only writes *key on success; upstream drops
+// the return value, so on failure dlerrorPerThreadKey stayed 0. Key 0 is not an
+// unallocated key on Darwin - TSD slot 0 holds the pthread_self pointer - so
+// pthread_getspecific(0) returned pthread_self, sizeAllocated was read out of
+// the pthread struct, and free(pthread_self) aborted with "pointer being freed
+// was not allocated" on every dyld error path (e.g. tcc's speculative
+// dlopen("libxcselect.dylib")). Same bug and same fix as dyld3/APIs.cpp
+// dlerror_perThreadKey_once(): pin the key to 0 on failure and fall back to a
+// process-global buffer (not thread-safe, but strictly better than aborting).
+static dlerrorPerThreadData* dlerrorFallbackData = NULL;
+
 // function called by dyld to get buffer to store dlerror message
 static char* getPerThreadBufferFor_dlerror(size_t sizeRequired)
 {
 	// ok to create key lazily because this function is called within dyld lock, so there is no race condition
 	if (!dlerrorPerThreadKeyInitialized ) {
 		// create key and tell pthread package to call free() on any data associated with key if thread dies
-		pthread_key_create(&dlerrorPerThreadKey, &free);
+		if ( pthread_key_create(&dlerrorPerThreadKey, &free) != 0 )
+			dlerrorPerThreadKey = 0;
 		dlerrorPerThreadKeyInitialized = true;
 	}
 
 	const size_t size = (sizeRequired < 256) ? 256 : sizeRequired;
-	dlerrorPerThreadData* data = (dlerrorPerThreadData*)pthread_getspecific(dlerrorPerThreadKey);
+	dlerrorPerThreadData* data;
+	if ( dlerrorPerThreadKey == 0 )
+		data = dlerrorFallbackData;
+	else
+		data = (dlerrorPerThreadData*)pthread_getspecific(dlerrorPerThreadKey);
+	if ( (data != NULL) && (data->sizeAllocated < sizeRequired) ) {
+		free(data);
+		data = NULL;
+	}
 	if ( data == NULL ) {
 		//int mallocSize = offsetof(dlerrorPerThreadData, message[size]);
 		const size_t mallocSize = sizeof(dlerrorPerThreadData)+size;
 		data = (dlerrorPerThreadData*)malloc(mallocSize);
 		data->sizeAllocated = size;
-		pthread_setspecific(dlerrorPerThreadKey, data);
-	}
-	else if ( data->sizeAllocated < sizeRequired ) {
-		free(data);
-		//int mallocSize = offsetof(dlerrorPerThreadData, message[size]);
-		const size_t mallocSize = sizeof(dlerrorPerThreadData)+size;
-		data = (dlerrorPerThreadData*)malloc(mallocSize);
-		data->sizeAllocated = size;
-		pthread_setspecific(dlerrorPerThreadKey, data);
+		if ( dlerrorPerThreadKey == 0 )
+			dlerrorFallbackData = data;
+		else
+			pthread_setspecific(dlerrorPerThreadKey, data);
 	}
 	return data->message;
 }
@@ -1497,9 +1512,12 @@ static char* getPerThreadBufferFor_dlerror(size_t sizeRequired)
 // Only allocate buffer if an actual error message needs to be set
 static bool hasPerThreadBufferFor_dlerror()
 {
-	if (!dlerrorPerThreadKeyInitialized ) 
+	if (!dlerrorPerThreadKeyInitialized )
 		return false;
-		
+
+	if ( dlerrorPerThreadKey == 0 )
+		return (dlerrorFallbackData != NULL);
+
 	return (pthread_getspecific(dlerrorPerThreadKey) != NULL);
 }
 

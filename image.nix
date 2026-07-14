@@ -96,6 +96,24 @@ stdenv.mkDerivation {
       mkdir -p "$staging/$dir"
     done
 
+    # Classic Darwin compatibility names: libc/libm/libpthread/libdl/libinfo
+    # are all libSystem symlinks on real Darwin. tcc links "-lc" by default
+    # (tcc_add_runtime); other in-guest builds ask for -lm/-lpthread. Done at
+    # image assembly (not in the libsystem output) so cross-build autoconf
+    # probes don't suddenly start detecting -lc and enabling new code paths.
+    for compat in libc libm libpthread libdl libinfo; do
+      ln -sf libSystem.B.dylib "$staging/usr/lib/$compat.dylib"
+    done
+
+    # System C headers for in-guest compilers (tcc): staged by the libsystem
+    # build under pd-guest-headers/ (see build.nix) so cross-built ports never
+    # see them; the guest gets them at /usr/include.
+    if [ -d "$staging/pd-guest-headers" ]; then
+      mkdir -p "$staging/usr/include"
+      cp -a "$staging/pd-guest-headers"/. "$staging/usr/include/"
+      rm -rf "$staging/pd-guest-headers"
+    fi
+
     cat > $staging/etc/passwd <<'EOF'
 root:*:0:0:System Administrator:/var/root:/bin/sh
 daemon:*:1:1:System Services:/var/root:/usr/bin/false
