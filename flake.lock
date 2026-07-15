@@ -113,11 +113,11 @@
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1783846961,
-        "narHash": "sha256-IZoPcgfyZaRQz9fMb3TfUMbUjy3+wF7rCsgIJOCq0ok=",
+        "lastModified": 1784085005,
+        "narHash": "sha256-oeRylCIUSG7+cxEucv/GDVtQTJV5kf3cEgpPkfGhmv8=",
         "owner": "Vali0004",
         "repo": "xnu-loader",
-        "rev": "a90a5fbda1f0ad1fb0478b2b0099ac8d2c4cdc2f",
+        "rev": "4c8a8d4349fd98a8124bee11dd7164dde1855e9e",
         "type": "github"
       },
       "original": {

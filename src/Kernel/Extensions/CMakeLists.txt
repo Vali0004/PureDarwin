@@ -11,6 +11,7 @@ endif()
 
 add_subdirectory(IOPCIFamily)
 add_subdirectory(IOStorageFamily)
+add_subdirectory(IOUSBFamily)
 add_subdirectory(RavynAHCIPort)
 add_subdirectory(RavynXHCIPort)
 option(PUREDARWIN_ENABLE_IOGRAPHICS_FAMILY "Build the full IOGraphicsFamily kext" ON)
@@ -19,10 +20,8 @@ if(PUREDARWIN_ENABLE_IOGRAPHICS_FAMILY)
 endif()
 add_subdirectory(IOGOPFramebuffer)
 add_subdirectory(IOHIDFamily)
-# MiniRV32IMA #includes from the mini-rv32ima checkout expected NEXT TO this
-# repo - an external tree the Nix sandbox (and any bare clone) doesn't have.
-# It's optional (build-kc.sh only packs it with MINIRV32=1), so only build
-# it when its dependency is actually present.
+add_subdirectory(IONetworkingFamily)
+add_subdirectory(PDE1000)
 if(EXISTS "${CMAKE_SOURCE_DIR}/../mini-rv32ima/mini-rv32ima/mini-rv32ima.h")
     add_subdirectory(MiniRV32IMA)
     set(PUREDARWIN_HAVE_MINIRV32 TRUE)
@@ -42,7 +41,7 @@ add_custom_target(kexts)
 add_dependencies(kexts
     IOPCIFamily ApplePIODMA IOStorageFamily
     RavynAHCIPort.kext RavynXHCIPort.kext
-    IOGOPFramebuffer.kext IOHIDFamily.kext
+    IOGOPFramebuffer.kext IOHIDFamily.kext IONetworkingFamily.kext PDE1000.kext
     corecrypto.kext ext4.kext HFSEncodings.kext hfs.kext
     AppleFileSystemDriver.kext Ext4FileSystemDriver.kext pthread.kext
 )

@@ -31,6 +31,8 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOLocks.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include "XHCI.h"
 
@@ -38,12 +40,14 @@ extern void XHCI_Log(const char *fmt, ...);
 
 class RavynXHCIMassStorageDisk;
 class RavynXHCIKeyboard;
+class RavynXHCIUSBBus;
 
 class RavynXHCIPort : public IOService
 {
     OSDeclareDefaultStructors(RavynXHCIPort);
     friend class RavynXHCIMassStorageDisk;
     friend class RavynXHCIKeyboard;
+    friend class RavynXHCIUSBBus;
 
 public:
     IOService *probe(IOService *provider, SInt32 *score) override;
@@ -103,6 +107,23 @@ private:
     UInt32                fMaxPorts;
     UInt32                fContextSize; /* 32 or 64 bytes/context */
     IOLock              * fCmdLock;
+
+    /* MSI-driven event ring servicing. doCommand()/waitTransferEvent() still
+     * poll serviceEventRing() + IOSleep(1) themselves either way (identical
+     * to before), but when this is up the ISR also drains the ring and
+     * broadcasts fEventWaitChannel, so those waits usually resolve on the
+     * first iteration instead of a full 1ms tick. Falls back to pure polling
+     * (fInterruptsEnabled == false) if MSI registration fails. */
+    IOWorkLoop            * fWorkLoop;
+    IOInterruptEventSource * fInterruptSource;
+    bool                   fInterruptsEnabled;
+    IOLock               * fEventWaitLock;
+    UInt32                 fEventWaitChannel;
+
+    /* IOUSBController-shaped view of this port, backing IOUSBDevice/
+     * IOUSBInterface for any slot enumerateSlotDevice() doesn't already
+     * special-case as hub/mass-storage/keyboard - see RavynXHCIUSBBus. */
+    RavynXHCIUSBBus      * fUSBBus;
 
     /* USB2/USB3 root hub port pairing, from the xHCI Extended Capabilities'
      * Supported Protocol structures (index by 0-based port number). A
@@ -265,6 +286,9 @@ private:
      * under fEventLock, recording each into fXferDone[][]/fCmdDone* for the
      * waiter that's looking for it. Safe to call from multiple threads. */
     void serviceEventRing();
+
+    void interruptOccurred(IOInterruptEventSource *sender, int count);
+    static void interruptOccurredStatic(OSObject *owner, IOInterruptEventSource *sender, int count);
 
     /* Configure a single interrupt IN endpoint (for a HID boot keyboard),
      * reusing the slot's bulk-IN ring fields (a keyboard slot has no bulk). */

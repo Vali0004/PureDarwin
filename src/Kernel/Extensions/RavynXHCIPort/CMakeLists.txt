@@ -8,6 +8,7 @@ target_sources(RavynXHCIPort.kext PRIVATE
     RavynXHCIPort.cpp
     RavynXHCIMassStorageDisk.cpp
     RavynXHCIKeyboard.cpp
+    RavynXHCIUSBBus.cpp
 )
 
 target_include_directories(RavynXHCIPort.kext PRIVATE
@@ -16,7 +17,7 @@ target_include_directories(RavynXHCIPort.kext PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../IOStorageFamily/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../IOHIDFamily/IOHIDSystem
     ${CMAKE_CURRENT_SOURCE_DIR}/../IOHIDFamily/include)
-target_link_libraries(RavynXHCIPort.kext PRIVATE xnu_kernel_private_headers)
+target_link_libraries(RavynXHCIPort.kext PRIVATE xnu_kernel_private_headers IOUSBFamilyHeaders)
 target_compile_options(RavynXHCIPort.kext PRIVATE
     -Wno-sign-conversion -Wno-implicit-int-conversion -Wno-shorten-64-to-32
     -Wno-unused-variable -Wno-unused-function -Wno-cast-qual)

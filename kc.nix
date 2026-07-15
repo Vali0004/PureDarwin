@@ -40,10 +40,13 @@ stdenv.mkDerivation {
       -kext "$KEXTS/AppleFileSystemDriver.kext" \
       -kext "$KEXTS/Ext4FileSystemDriver.kext" \
       -kext "$KEXTS/IOHIDFamily.kext" \
+      -kext "$KEXTS/IOUSBFamily.kext" \
       -kext "$KEXTS/RavynAHCIPort.kext" \
       -kext "$KEXTS/RavynXHCIPort.kext" \
       -kext "$KEXTS/IOGraphicsFamily.kext" \
       -kext "$KEXTS/IOGOPFramebuffer.kext" \
+      -kext "$KEXTS/IONetworkingFamily.kext" \
+      -kext "$KEXTS/PDE1000.kext" \
       -kext "$KEXTS/ApplePS2Controller.kext" \
       "''${codeless[@]}" \
       ${lib.optionalString classic "-classic"} \

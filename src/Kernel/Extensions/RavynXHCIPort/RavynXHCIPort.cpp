@@ -29,6 +29,8 @@
 #include "RavynXHCIPort.h"
 #include "RavynXHCIMassStorageDisk.h"
 #include "RavynXHCIKeyboard.h"
+#include "RavynXHCIUSBBus.h"
+#include <IOKit/usb/IOUSBDevice.h>
 
 #define super IOService
 OSDefineMetaClassAndStructors(RavynXHCIPort, IOService);
@@ -282,6 +284,13 @@ bool RavynXHCIPort::start(IOService *provider)
     bzero(fXferDone, sizeof(fXferDone));
     fCmdDonePending = false;
 
+    fWorkLoop = NULL;
+    fInterruptSource = NULL;
+    fInterruptsEnabled = false;
+    fEventWaitLock = NULL;
+    fEventWaitChannel = 0;
+    fUSBBus = NULL;
+
     uint16_t vendor = fProvider->configRead16(kIOPCIConfigVendorID);
     uint16_t device = fProvider->configRead16(kIOPCIConfigDeviceID);
     uint32_t classCode = fProvider->configRead32(kIOPCIConfigRevisionID) >> 8;
@@ -344,6 +353,28 @@ bool RavynXHCIPort::start(IOService *provider)
     XHCI_Log("checkpoint after ring/DCBAA setup: USBCMD=%08x USBSTS=%08x",
             opRead32(XHCI_USBCMD), opRead32(XHCI_USBSTS));
 
+    /* Try MSI: IOPCIFamily's resolveMSIInterrupts() already ran at nub
+     * publish and, if allocation succeeded, wired an interrupt source at
+     * index 0. doCommand()/waitTransferEvent() poll serviceEventRing()
+     * regardless (see RavynXHCIPort.h), so this only shortens their wait -
+     * a failed registration here just leaves fInterruptsEnabled false and
+     * everything behaves exactly as before. */
+    fEventWaitLock = IOLockAlloc();
+    fWorkLoop = fEventWaitLock ? IOWorkLoop::workLoop() : NULL;
+    if (fWorkLoop) {
+        fInterruptSource = IOInterruptEventSource::interruptEventSource(
+            this, &RavynXHCIPort::interruptOccurredStatic, fProvider, 0);
+        if (fInterruptSource && fWorkLoop->addEventSource(fInterruptSource) == kIOReturnSuccess) {
+            fInterruptSource->enable();
+            opWrite32(XHCI_USBCMD, opRead32(XHCI_USBCMD) | XHCI_USBCMD_INTE);
+            fInterruptsEnabled = true;
+            XHCI_Log("using MSI interrupt (source 0)");
+        } else {
+            if (fInterruptSource) { fInterruptSource->release(); fInterruptSource = NULL; }
+            XHCI_Log("MSI registration failed, event ring stays polling-only");
+        }
+    }
+
     /* CONFIG.MaxSlotsEn */
     opWrite32(XHCI_CONFIG, fMaxSlots);
     XHCI_Log("checkpoint after CONFIG write: USBCMD=%08x USBSTS=%08x",
@@ -360,6 +391,14 @@ bool RavynXHCIPort::start(IOService *provider)
     bzero(fKbdNubs, sizeof(fKbdNubs));
     bzero(fSlots, sizeof(fSlots));
     bzero(fPortOccupied, sizeof(fPortOccupied));
+
+    fUSBBus = OSTypeAlloc(RavynXHCIUSBBus);
+    if (fUSBBus && !fUSBBus->initWithPort(this)) {
+        fUSBBus->release();
+        fUSBBus = NULL;
+    }
+    if (!fUSBBus)
+        XHCI_Log("failed to create RavynXHCIUSBBus - generic USB devices (composite etc) won't be published");
 
     scanPorts();
 
@@ -392,6 +431,13 @@ void RavynXHCIPort::free()
         if (fKbdNubs[i]) { fKbdNubs[i]->release(); fKbdNubs[i] = NULL; }
         if (fKbd[i].reportMem) { fKbd[i].reportMem->release(); fKbd[i].reportMem = NULL; }
     }
+    if (fWorkLoop && fInterruptSource)
+        fWorkLoop->removeEventSource(fInterruptSource);
+    if (fInterruptSource) { fInterruptSource->release(); fInterruptSource = NULL; }
+    if (fWorkLoop) { fWorkLoop->release(); fWorkLoop = NULL; }
+    if (fEventWaitLock) { IOLockFree(fEventWaitLock); fEventWaitLock = NULL; }
+    if (fUSBBus) { fUSBBus->release(); fUSBBus = NULL; }
+
     if (fCmdLock) { IOLockFree(fCmdLock); fCmdLock = NULL; }
     if (fEventLock) { IOLockFree(fEventLock); fEventLock = NULL; }
     if (fBARMap) { fBARMap->release(); fBARMap = NULL; }
@@ -669,6 +715,26 @@ void RavynXHCIPort::pushTRB(volatile XHCITRB *ring, UInt32 &enqueue, UInt8 &cycl
     }
 }
 
+void RavynXHCIPort::interruptOccurredStatic(OSObject *owner, IOInterruptEventSource *sender, int count)
+{
+    RavynXHCIPort *self = OSDynamicCast(RavynXHCIPort, owner);
+    if (!self)
+        return;
+    self->interruptOccurred(sender, count);
+}
+
+void RavynXHCIPort::interruptOccurred(IOInterruptEventSource *sender, int count)
+{
+    /* IMAN.IP (Interrupt Pending) is write-1-to-clear; ack it so the
+     * controller can post the next interrupt. */
+    UInt32 iman = rtRead32(XHCI_RT_IR0 + XHCI_IR_IMAN);
+    rtWrite32(XHCI_RT_IR0 + XHCI_IR_IMAN, iman);
+
+    serviceEventRing();
+
+    IOLockWakeup(fEventWaitLock, &fEventWaitChannel, true);
+}
+
 void RavynXHCIPort::serviceEventRing()
 {
     /* Sole consumer of the event ring. Drains every currently-available
@@ -738,7 +804,15 @@ bool RavynXHCIPort::doCommand(UInt64 param, UInt32 status, UInt32 controlNoCycle
             ok = true;
             break;
         }
-        IOSleep(1);
+        if (fInterruptsEnabled) {
+            AbsoluteTime deadline;
+            clock_interval_to_deadline(1, kMillisecondScale, &deadline);
+            IOLockLock(fEventWaitLock);
+            IOLockSleepDeadline(fEventWaitLock, &fEventWaitChannel, deadline, THREAD_UNINT);
+            IOLockUnlock(fEventWaitLock);
+        } else {
+            IOSleep(1);
+        }
     }
     IOLockUnlock(fCmdLock);
     if (!ok) {
@@ -783,7 +857,15 @@ bool RavynXHCIPort::waitTransferEvent(UInt32 slotId, UInt32 epDCI, UInt8 *outCC,
          * ring. Harmless if the transfer is already progressing. */
         if (waited && (waited % 50) == 0)
             ringDoorbell(slotId, epDCI);
-        IOSleep(1);
+        if (fInterruptsEnabled) {
+            AbsoluteTime deadline;
+            clock_interval_to_deadline(1, kMillisecondScale, &deadline);
+            IOLockLock(fEventWaitLock);
+            IOLockSleepDeadline(fEventWaitLock, &fEventWaitChannel, deadline, THREAD_UNINT);
+            IOLockUnlock(fEventWaitLock);
+        } else {
+            IOSleep(1);
+        }
     }
     return false;
 }
@@ -849,14 +931,14 @@ void RavynXHCIPort::scanPorts()
     }
 }
 
-/* Background hotplug poll: xHCI Port Status Change events normally arrive
- * on the interrupter/event ring via an MSI interrupt, but this driver never
- * registered one (everything - command completion, transfers, initial
- * enumeration - is serviced by polling serviceEventRing() from a caller's
- * thread). Without *something* re-checking CCS after boot, a device plugged
- * in after start() completes is invisible forever. This thread is the
- * minimal fix: periodically re-read every root port's CCS bit and run the
- * normal enumeration path on any port that's newly connected and not
+/* Background hotplug poll: xHCI Port Status Change events arrive on the
+ * interrupter/event ring, and (when MSI registration in start() succeeded)
+ * the ISR now drains that ring same as any other event - but nothing reads
+ * PORTSC.CCS on its own initiative from an event alone. Without *something*
+ * re-checking CCS after boot, a device plugged in after start() completes is
+ * invisible forever. This thread is still the mechanism for that: it
+ * periodically re-reads every root port's CCS bit and runs the normal
+ * enumeration path on any port that's newly connected and not
  * already occupied. It does not handle removal (tearing down a nub whose
  * device was unplugged) - only new connects/replugs. */
 void RavynXHCIPort::hotplugThread(void *arg, wait_result_t)
@@ -1823,7 +1905,33 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
 
     if (!foundMSC || !bulkInEp || !bulkOutEp) {
         XHCI_Log("slot %u: no bulk-only mass storage or HID keyboard interface found", slotId);
-        return false;
+
+        /* Not one of our hand-special-cased device types - hand it to the
+         * generic IOUSBController/IOUSBDevice/IOUSBInterface stack instead
+         * of dropping it, so IOKit personality matching (IOUSBCompositeDriver
+         * etc) gets a chance at it. */
+        if (!fUSBBus) return false;
+
+        IOUSBDevice *dev = fUSBBus->CreateAndConfigureDevice(slotId, (UInt8)speed, devDesc.bMaxPacketSize0);
+        if (!dev) {
+            XHCI_Log("slot %u: generic IOUSBDevice creation failed", slotId);
+            return false;
+        }
+        if (!dev->attach(this)) {
+            dev->release();
+            return false;
+        }
+        if (!dev->start(this)) {
+            dev->detach(this);
+            dev->release();
+            return false;
+        }
+        dev->registerService();
+
+        if (dev->SetConfiguration(dev, cfgValue) != kIOReturnSuccess)
+            XHCI_Log("slot %u: SetConfiguration(%u) failed for generic device", slotId, cfgValue);
+
+        return true;
     }
     XHCI_Log("slot %u: MSC interface found, bulkIn=ep%u(%u) bulkOut=ep%u(%u)",
             slotId, bulkInEp, bulkInMaxPkt, bulkOutEp, bulkOutMaxPkt);

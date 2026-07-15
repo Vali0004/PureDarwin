@@ -331,6 +331,26 @@ IOReturn AppleI386PlatformExpert::callPlatformFunction(const OSSymbol *functionN
 		if (ok == false) releaseSystemInterrupt(nub, vectors[0], exclusive);
 
 		return ok ? kIOReturnSuccess : kIOReturnNoMemory;
+	} else if (functionName->isEqualTo("GetMessagedInterruptAddress")) {
+		// Build the x86 MSI message for a message-signalled interrupt targeting
+		// the boot CPU's local APIC. Called (via provider-chain propagation) by
+		// IOPCIMessagedInterruptController::allocateDeviceInterrupts.
+		//   param3 = interrupt vector (already includes the controller vector base)
+		//   param4 = uint32_t message[3] out: { addr-lo, addr-hi, data }
+		uint32_t   vector  = (uint32_t)((UInt64)param3);
+		uint32_t * message = (uint32_t *)param4;
+		if (message == 0) return kIOReturnBadArgument;
+
+		// Destination = boot CPU local APIC ID (0), matching the io-apic nub's
+		// "Destination APIC ID" personality. Physical destination mode, no
+		// redirection hint. Data: fixed delivery mode, edge triggered, vector.
+		const uint32_t destAPICID = 0;
+		message[0] = 0xFEE00000U | (destAPICID << 12);  // MSI address low
+		message[1] = 0;                                 // MSI address high
+		message[2] = vector & 0xFFU;                    // MSI data
+		kprintf("AppleI386PlatformExpert: MSI msg vector=0x%x addr=0x%08x data=0x%x\n",
+			vector, message[0], message[2]);
+		return kIOReturnSuccess;
 	} else if (functionName->isEqualTo("SetBusClockRateMHz")) {
 		UInt32 rateMHz = (UInt32)((UInt64)param1);
 		gPEClockFrequencyInfo.bus_clock_rate_hz = rateMHz * 1000000;

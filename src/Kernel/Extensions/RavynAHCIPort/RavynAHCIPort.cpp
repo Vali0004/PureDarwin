@@ -285,6 +285,10 @@ bool RavynAHCIPort::start(IOService *provider)
         AHCI_Log("Failed to get command lock");
         return false;
     }
+    fWorkLoop = NULL;
+    fInterruptSource = NULL;
+    fInterruptsEnabled = false;
+    fWaitChannel = 0;
 
     uint16_t vendor    = fProvider->configRead16(kIOPCIConfigVendorID);
     uint16_t device    = fProvider->configRead16(kIOPCIConfigDeviceID);
@@ -318,6 +322,27 @@ bool RavynAHCIPort::start(IOService *provider)
     if (!(ghc & AHCI_GHC_AE)) {
         hbaWrite32(AHCI_GHC, ghc | AHCI_GHC_AE);
         ghc = hbaRead32(AHCI_GHC);
+    }
+
+    /* Try to set up MSI-driven command completion: IOPCIFamily's
+     * resolveMSIInterrupts() already ran at nub publish and, if MSI
+     * allocation succeeded, wired an interrupt source at index 0 to the
+     * family's messaged-interrupt controller. If this fails for any reason
+     * (no MSI available), issueCommand()'s wait loop falls back to pure
+     * IOSleep(1) polling exactly as before - fInterruptsEnabled gates that. */
+    fWorkLoop = IOWorkLoop::workLoop();
+    if (fWorkLoop) {
+        fInterruptSource = IOInterruptEventSource::interruptEventSource(
+            this, &RavynAHCIPort::interruptOccurredStatic, fProvider, 0);
+        if (fInterruptSource && fWorkLoop->addEventSource(fInterruptSource) == kIOReturnSuccess) {
+            fInterruptSource->enable();
+            hbaWrite32(AHCI_GHC, hbaRead32(AHCI_GHC) | AHCI_GHC_IE);
+            fInterruptsEnabled = true;
+            AHCI_Debug("using MSI interrupt (source 0)");
+        } else {
+            if (fInterruptSource) { fInterruptSource->release(); fInterruptSource = NULL; }
+            AHCI_Debug("MSI registration failed, falling back to polling");
+        }
     }
 
     uint32_t cap = hbaRead32(AHCI_CAP);
@@ -354,6 +379,9 @@ bool RavynAHCIPort::start(IOService *provider)
         bzero(&portState, sizeof(portState));
         portState.valid = true;
         portState.port = (uint32_t)p;
+
+        if (fInterruptsEnabled)
+            portWrite32(p, PORT_IE, 0xFFFFFFFFU);
 
         uint16_t identifyData[256];
         if (!identifyDevice(portState, identifyData)) {
@@ -437,6 +465,17 @@ RavynAHCIPort::stop(IOService *provider)
         diskNub->detach(this);
         diskNub->release();
         fDiskNubs[p] = NULL;
+    }
+
+    if (fWorkLoop && fInterruptSource)
+        fWorkLoop->removeEventSource(fInterruptSource);
+    if (fInterruptSource) {
+        fInterruptSource->release();
+        fInterruptSource = NULL;
+    }
+    if (fWorkLoop) {
+        fWorkLoop->release();
+        fWorkLoop = NULL;
     }
 
     if (fCommandLock) {
@@ -650,6 +689,35 @@ RavynAHCIPort::rebasePort(PortState &portState)
     return startPortEngine(portState.port);
 }
 
+void
+RavynAHCIPort::interruptOccurredStatic(OSObject *owner, IOInterruptEventSource *sender, int count)
+{
+    RavynAHCIPort *self = OSDynamicCast(RavynAHCIPort, owner);
+    if (!self)
+        return;
+    self->interruptOccurred(sender, count);
+}
+
+void
+RavynAHCIPort::interruptOccurred(IOInterruptEventSource *sender, int count)
+{
+    uint32_t is = hbaRead32(AHCI_IS);
+    if (!is)
+        return;
+
+    /* Ack each port that fired (write-1-to-clear), then the global bits. */
+    for (int p = 0; p < 32; p++) {
+        if (!(is & (1U << p))) continue;
+        portWrite32(p, PORT_IS, portRead32(p, PORT_IS));
+    }
+    hbaWrite32(AHCI_IS, is);
+
+    /* issueCommand() re-checks CI/IS itself on wake, so a plain broadcast
+     * (no lock held here) is sufficient - this only ever shortens the
+     * existing 1ms polling cadence, never changes correctness. */
+    IOLockWakeup(fCommandLock, &fWaitChannel, true);
+}
+
 bool
 RavynAHCIPort::issueCommand(PortState &portState,
                             uint8_t      ataCommand,
@@ -755,7 +823,16 @@ RavynAHCIPort::issueCommand(PortState &portState,
             return true;
         }
 
-        IOSleep(1);
+        if (fInterruptsEnabled) {
+            AbsoluteTime deadline;
+            clock_interval_to_deadline(1, kMillisecondScale, &deadline);
+            // Lock is already held (see IOLockLock() above); this releases
+            // it while waiting and reacquires before returning, same as the
+            // IOSleep(1) it replaces - just wakeable early by the ISR.
+            IOLockSleepDeadline(fCommandLock, &fWaitChannel, deadline, THREAD_UNINT);
+        } else {
+            IOSleep(1);
+        }
     }
 
     AHCI_Log("Command 0x%02x timeout port=%u CI=%08x IS=%08x TFD=%08x",
