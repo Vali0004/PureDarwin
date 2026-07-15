@@ -1,5 +1,5 @@
 /*
- * Copyright © 1998-2013 Apple Inc.  All rights reserved.
+ * Copyright ï¿½ 1998-2013 Apple Inc.  All rights reserved.
  * 
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,6 +37,7 @@
 #include <IOKit/usb/USBHub.h>
 #include <IOKit/usb/IOUSBDevice.h>
 #include <IOKit/usb/IOUSBPipe.h>
+#include <IOKit/usb/IOUSBInterface.h>
 #include <IOKit/usb/IOUSBNub.h>
 #include <IOKit/usb/IOUSBLog.h>
 
@@ -1425,7 +1426,7 @@ IOUSBPipe::InitToEndpoint(const IOUSBEndpointDescriptor *ed, UInt8 speed, USBDev
 #pragma unused (ed, speed, address, controller)
 	// Deprecated method
     USBLog(1, "IOUSBPipe::InitToEndpoint, obsolete method 1 called");
-    return NULL;
+    return false;
 }
 
 

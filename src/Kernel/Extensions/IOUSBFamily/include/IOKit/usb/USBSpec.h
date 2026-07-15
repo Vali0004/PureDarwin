@@ -1,5 +1,5 @@
 /*
- * Copyright © 1998-2012 Apple Inc. All rights reserved.
+ * Copyright ï¿½ 1998-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -513,6 +513,7 @@ enum {
 #define kUSBVendorName              kUSBVendorID        // bad name - keep for backward compatibility
 #define kUSBProductID               "idProduct"         // good name
 #define kUSBProductName             kUSBProductID       // bad name - keep for backward compatibility
+#define kUSBProductIDMask           "idProductMask"
 #define kUSBDeviceReleaseNumber     "bcdDevice"
 #define kUSBManufacturerStringIndex "iManufacturer"
 #define kUSBProductStringIndex      "iProduct"

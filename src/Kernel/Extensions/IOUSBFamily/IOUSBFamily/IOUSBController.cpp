@@ -13,6 +13,10 @@
 
 #define super IOUSBBus
 
+/* See USB.h - only ever referenced by address, never actually called. */
+void IOUSBSyncCompletion(void *target, void *parameter, IOReturn status, UInt32 bufferSizeRemaining) { }
+void IOUSBSyncIsoCompletion(void *target, void *parameter, IOReturn status, UInt32 bufferSizeRemaining) { }
+
 OSDefineMetaClassAndAbstractStructors(IOUSBController, IOUSBBus)
 
 bool IOUSBController::init(OSDictionary *propTable)
@@ -72,6 +76,22 @@ IOReturn IOUSBController::DeviceRequest(IOUSBDevRequest *request, USBDeviceAddre
     return ret;
 }
 
+IOReturn IOUSBController::DeviceRequest(IOUSBDevRequest *request, IOUSBCompletion *completion,
+                                         USBDeviceAddress address, UInt32 endpointNumber,
+                                         UInt32 noDataTimeout, UInt32 completionTimeout)
+{
+    /* Our UIM is fully synchronous - endpointNumber/timeout refinements
+     * this overload exists for in real Apple source aren't supported. */
+    return DeviceRequest(request, address, completion);
+}
+
+IOReturn IOUSBController::DeviceRequest(IOUSBDevRequestDesc *request, IOUSBCompletion *completion,
+                                         USBDeviceAddress address, UInt32 endpointNumber,
+                                         UInt32 noDataTimeout, UInt32 completionTimeout)
+{
+    return DeviceRequest(request, address, completion);
+}
+
 IOReturn IOUSBController::DeviceRequest(IOUSBDevRequestDesc *request, USBDeviceAddress address,
                                          IOUSBCompletion *completion)
 {
@@ -123,6 +143,16 @@ IOReturn IOUSBController::Read(IOMemoryDescriptor *buffer, USBDeviceAddress addr
     return ret;
 }
 
+IOReturn IOUSBController::Read(IOMemoryDescriptor *buffer, USBDeviceAddress address,
+                                Endpoint *endpoint, IOUSBCompletion *completion,
+                                UInt32 noDataTimeout, UInt32 completionTimeout, IOByteCount reqCount)
+{
+    /* Our UIM is fully synchronous - the timeout/reqCount refinements this
+     * overload exists for in real Apple source (per-call timeout tuning,
+     * partial-length reads) aren't things any UIM we have supports. */
+    return Read(buffer, address, endpoint, completion);
+}
+
 IOReturn IOUSBController::Write(IOMemoryDescriptor *buffer, USBDeviceAddress address,
                                  Endpoint *endpoint, IOUSBCompletion *completion)
 {
@@ -133,12 +163,33 @@ IOReturn IOUSBController::Write(IOMemoryDescriptor *buffer, USBDeviceAddress add
     return ret;
 }
 
+IOReturn IOUSBController::Write(IOMemoryDescriptor *buffer, USBDeviceAddress address,
+                                 Endpoint *endpoint, IOUSBCompletion *completion,
+                                 UInt32 noDataTimeout, UInt32 completionTimeout, IOByteCount reqCount)
+{
+    return Write(buffer, address, endpoint, completion);
+}
+
 IOReturn IOUSBController::IsocIO(IOMemoryDescriptor *buffer, UInt64 frameStart, UInt32 numFrames,
                                   void *frameList, USBDeviceAddress address, Endpoint *endpoint,
                                   IOUSBCompletion *completion)
 {
     /* No isoc transport in any UIM we have (keyboard/mouse/mass-storage all
      * use control/bulk/interrupt) - not implemented. */
+    return kIOReturnUnsupported;
+}
+
+IOReturn IOUSBController::IsocIO(IOMemoryDescriptor *buffer, UInt64 frameStart, UInt32 numFrames,
+                                  void *frameList, USBDeviceAddress address, Endpoint *endpoint,
+                                  IOUSBCompletion *completion, UInt32 updateFrequency)
+{
+    return kIOReturnUnsupported;
+}
+
+IOReturn IOUSBController::IsocIO(IOMemoryDescriptor *buffer, UInt64 frameStart, UInt32 numFrames,
+                                  void *frameList, USBDeviceAddress address, Endpoint *endpoint,
+                                  IOUSBLowLatencyIsocCompletion *completion, UInt32 updateFrequency)
+{
     return kIOReturnUnsupported;
 }
 

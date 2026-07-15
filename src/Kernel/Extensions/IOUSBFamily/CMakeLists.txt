@@ -22,3 +22,6 @@ target_include_directories(IOUSBFamilyHeaders INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/IOKit/usb
 )
+
+add_subdirectory(IOUSBCompositeDriver)
+add_subdirectory(AppleUSBMergeNub)

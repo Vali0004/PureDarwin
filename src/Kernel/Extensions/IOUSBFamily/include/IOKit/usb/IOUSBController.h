@@ -54,17 +54,35 @@ public:
 
     virtual IOReturn DeviceRequest(IOUSBDevRequest *request, USBDeviceAddress address,
                                     IOUSBCompletion *completion = 0);
+    virtual IOReturn DeviceRequest(IOUSBDevRequest *request, IOUSBCompletion *completion,
+                                    USBDeviceAddress address, UInt32 endpointNumber,
+                                    UInt32 noDataTimeout, UInt32 completionTimeout);
     virtual IOReturn DeviceRequest(IOUSBDevRequestDesc *request, USBDeviceAddress address,
                                     IOUSBCompletion *completion = 0);
+    virtual IOReturn DeviceRequest(IOUSBDevRequestDesc *request, IOUSBCompletion *completion,
+                                    USBDeviceAddress address, UInt32 endpointNumber,
+                                    UInt32 noDataTimeout, UInt32 completionTimeout);
 
     virtual IOReturn Read(IOMemoryDescriptor *buffer, USBDeviceAddress address,
                            Endpoint *endpoint, IOUSBCompletion *completion = 0);
+    virtual IOReturn Read(IOMemoryDescriptor *buffer, USBDeviceAddress address,
+                           Endpoint *endpoint, IOUSBCompletion *completion,
+                           UInt32 noDataTimeout, UInt32 completionTimeout, IOByteCount reqCount = 0);
     virtual IOReturn Write(IOMemoryDescriptor *buffer, USBDeviceAddress address,
                             Endpoint *endpoint, IOUSBCompletion *completion = 0);
+    virtual IOReturn Write(IOMemoryDescriptor *buffer, USBDeviceAddress address,
+                            Endpoint *endpoint, IOUSBCompletion *completion,
+                            UInt32 noDataTimeout, UInt32 completionTimeout, IOByteCount reqCount = 0);
 
     virtual IOReturn IsocIO(IOMemoryDescriptor *buffer, UInt64 frameStart, UInt32 numFrames,
                              void *frameList, USBDeviceAddress address, Endpoint *endpoint,
                              IOUSBCompletion *completion = 0);
+    virtual IOReturn IsocIO(IOMemoryDescriptor *buffer, UInt64 frameStart, UInt32 numFrames,
+                             void *frameList, USBDeviceAddress address, Endpoint *endpoint,
+                             IOUSBCompletion *completion, UInt32 updateFrequency);
+    virtual IOReturn IsocIO(IOMemoryDescriptor *buffer, UInt64 frameStart, UInt32 numFrames,
+                             void *frameList, USBDeviceAddress address, Endpoint *endpoint,
+                             IOUSBLowLatencyIsocCompletion *completion, UInt32 updateFrequency);
 
     virtual UInt32 GetBandwidthAvailableForDevice(USBDeviceAddress address);
 

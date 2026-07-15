@@ -40,6 +40,7 @@ add_subdirectory(pthread)
 add_custom_target(kexts)
 add_dependencies(kexts
     IOPCIFamily ApplePIODMA IOStorageFamily
+    IOUSBFamily IOUSBCompositeDriver.kext AppleUSBMergeNub.kext
     RavynAHCIPort.kext RavynXHCIPort.kext
     IOGOPFramebuffer.kext IOHIDFamily.kext IONetworkingFamily.kext PDE1000.kext
     corecrypto.kext ext4.kext HFSEncodings.kext hfs.kext

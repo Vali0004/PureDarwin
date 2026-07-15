@@ -330,13 +330,7 @@ UInt8 IOUSBDevice::GetSerialNumberStringIndex(void) { return _descriptor.iSerial
 IOUSBPipe *IOUSBDevice::GetPipeZero(void)
 {
     if (!_pipeZero && _controller) {
-        IOUSBController::Endpoint ep;
-        ep.number = 0;
-        ep.direction = kUSBAnyDirn;
-        ep.transferType = kUSBControl;
-        ep.maxPacketSize = _endpointZero.wMaxPacketSize;
-        ep.interval = 0;
-        _pipeZero = IOUSBPipe::ToEndpoint(&_endpointZero, _speed, (USBDeviceAddress)_address, _controller, this, NULL);
+        _pipeZero = IOUSBPipe::ToEndpoint(&_endpointZero, _speed, (USBDeviceAddress)_address, _controller);
     }
     return _pipeZero;
 }
@@ -349,7 +343,7 @@ IOUSBPipe *IOUSBDevice::MakePipe(const IOUSBEndpointDescriptor *ep)
 IOUSBPipe *IOUSBDevice::MakePipe(const IOUSBEndpointDescriptor *ep, IOUSBInterface *interface)
 {
     if (!ep || !_controller) return NULL;
-    return IOUSBPipe::ToEndpoint(ep, _speed, _address, _controller, this, interface);
+    return IOUSBPipe::ToEndpoint(ep, this, _controller, interface);
 }
 
 IOReturn IOUSBDevice::DeviceRequest(IOUSBDevRequest *request, IOUSBCompletion *completion)
