@@ -8,6 +8,7 @@ target_sources(RavynXHCIPort.kext PRIVATE
     RavynXHCIPort.cpp
     RavynXHCIMassStorageDisk.cpp
     RavynXHCIKeyboard.cpp
+    RavynXHCIMouse.cpp
     RavynXHCIUSBBus.cpp
 )
 

@@ -335,6 +335,7 @@ typedef struct {
 #define USB_IF_CLASS_HID            0x03
 #define USB_HID_SUBCLASS_BOOT       0x01
 #define USB_HID_PROTOCOL_KEYBOARD   0x01
+#define USB_HID_PROTOCOL_MOUSE      0x02
 #define USB_EP_TYPE_INTERRUPT       0x03
 /* HID class-specific requests (bmRequestType 0x21 = host->device, class,
  * interface recipient). SET_PROTOCOL wValue 0 selects the boot protocol;

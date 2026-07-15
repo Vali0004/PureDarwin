@@ -40,6 +40,7 @@ extern void XHCI_Log(const char *fmt, ...);
 
 class RavynXHCIMassStorageDisk;
 class RavynXHCIKeyboard;
+class RavynXHCIMouse;
 class RavynXHCIUSBBus;
 
 class RavynXHCIPort : public IOService
@@ -47,6 +48,7 @@ class RavynXHCIPort : public IOService
     OSDeclareDefaultStructors(RavynXHCIPort);
     friend class RavynXHCIMassStorageDisk;
     friend class RavynXHCIKeyboard;
+    friend class RavynXHCIMouse;
     friend class RavynXHCIUSBBus;
 
 public:
@@ -68,6 +70,9 @@ public:
      * armed so the next call keeps waiting the same transfer - a boot
      * keyboard under SET_IDLE(0) only completes it when a key state changes. */
     bool pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutMs);
+
+    /* Same protocol as pollKeyboard, against fMouse[] instead of fKbd[]. */
+    bool pollMouse(int mouseIdx, UInt8 outReport[8], UInt32 timeoutMs);
 
 private:
     /* One tracked USB device slot that turned out to be Mass Storage. */
@@ -217,6 +222,11 @@ private:
     KbdDevice fKbd[8];
     RavynXHCIKeyboard * fKbdNubs[8];
 
+    /* Same shape/protocol as KbdDevice - HID boot mouse interrupt-IN
+     * reports (buttons, dx, dy, wheel) fit in the same 8-byte buffer. */
+    KbdDevice fMouse[8];
+    RavynXHCIMouse * fMouseNubs[8];
+
     inline UInt32 capRead32(UInt32 off) const
         { return *(volatile UInt32 *)(fCapRegs + off); }
     inline UInt32 opRead32(UInt32 off) const
@@ -300,6 +310,9 @@ private:
     /* Record a keyboard slot (allocating its DMA report buffer) and publish
      * an IOHIKeyboard nub that polls it. */
     bool publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt);
+
+    /* Same idea for a HID boot mouse: publishes a RavynXHCIMouse nub. */
+    bool publishMouse(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt);
 
     bool enableSlot(UInt32 *outSlotId);
     void disableSlot(UInt32 slotId);

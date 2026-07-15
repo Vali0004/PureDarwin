@@ -29,6 +29,7 @@
 #include "RavynXHCIPort.h"
 #include "RavynXHCIMassStorageDisk.h"
 #include "RavynXHCIKeyboard.h"
+#include "RavynXHCIMouse.h"
 #include "RavynXHCIUSBBus.h"
 #include <IOKit/usb/IOUSBDevice.h>
 
@@ -389,6 +390,8 @@ bool RavynXHCIPort::start(IOService *provider)
     bzero(fDiskNubs, sizeof(fDiskNubs));
     bzero(fKbd, sizeof(fKbd));
     bzero(fKbdNubs, sizeof(fKbdNubs));
+    bzero(fMouse, sizeof(fMouse));
+    bzero(fMouseNubs, sizeof(fMouseNubs));
     bzero(fSlots, sizeof(fSlots));
     bzero(fPortOccupied, sizeof(fPortOccupied));
 
@@ -430,6 +433,10 @@ void RavynXHCIPort::free()
     for (int i = 0; i < 8; i++) {
         if (fKbdNubs[i]) { fKbdNubs[i]->release(); fKbdNubs[i] = NULL; }
         if (fKbd[i].reportMem) { fKbd[i].reportMem->release(); fKbd[i].reportMem = NULL; }
+    }
+    for (int i = 0; i < 8; i++) {
+        if (fMouseNubs[i]) { fMouseNubs[i]->release(); fMouseNubs[i] = NULL; }
+        if (fMouse[i].reportMem) { fMouse[i].reportMem->release(); fMouse[i].reportMem = NULL; }
     }
     if (fWorkLoop && fInterruptSource)
         fWorkLoop->removeEventSource(fInterruptSource);
@@ -1448,6 +1455,31 @@ bool RavynXHCIPort::pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutM
     return true;
 }
 
+bool RavynXHCIPort::pollMouse(int mouseIdx, UInt8 outReport[8], UInt32 timeoutMs)
+{
+    if (mouseIdx < 0 || mouseIdx >= 8 || !fMouse[mouseIdx].valid) return false;
+    KbdDevice &m = fMouse[mouseIdx];
+    SlotResources &sr = fSlots[m.slotId];
+    UInt32 dci = m.intrEp * 2 + 1;
+
+    if (!m.tdOutstanding) {
+        pushTRB(sr.bulkInRing, sr.bulkInEnqueue, sr.bulkInCycle, kRingTRBs,
+                m.reportPhys, 8, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
+        ringDoorbell(m.slotId, dci);
+        m.tdOutstanding = true;
+    }
+
+    UInt8 cc = 0;
+    if (!waitTransferEvent(m.slotId, dci, &cc, timeoutMs))
+        return false;
+
+    m.tdOutstanding = false;
+    if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)
+        return false;
+    for (int i = 0; i < 8; i++) outReport[i] = m.reportVirt[i];
+    return true;
+}
+
 /* A Normal TRB's Transfer Length is only a 17-bit field in TRB.status
  * (bits 22-31 there are TD Size / Interrupter Target, not length) so any
  * single TRB is capped at 0x1FFFF bytes, and anything above ~64KB risks
@@ -1847,9 +1879,15 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
     UInt8 kbdIface = 0, kbdIntrEp = 0, kbdInterval = 0;
     UInt16 kbdIntrMaxPkt = 0;
 
+    /* ...and a HID boot mouse interface, same shape. */
+    bool foundMouse = false;
+    UInt8 mouseIface = 0, mouseIntrEp = 0, mouseInterval = 0;
+    UInt16 mouseIntrMaxPkt = 0;
+
     UInt32 off = 0;
     bool inMSCInterface = false;
     bool inKbdInterface = false;
+    bool inMouseInterface = false;
     while (off + 2 <= totalLen) {
         UInt8 len = cfgBuf[off];
         UInt8 type = cfgBuf[off + 1];
@@ -1868,6 +1906,13 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
                 foundKbd = true;
                 kbdIface = ifd->bInterfaceNumber;
             }
+            inMouseInterface = (ifd->bInterfaceClass == USB_IF_CLASS_HID &&
+                                 ifd->bInterfaceSubClass == USB_HID_SUBCLASS_BOOT &&
+                                 ifd->bInterfaceProtocol == USB_HID_PROTOCOL_MOUSE);
+            if (inMouseInterface && !foundMouse) {
+                foundMouse = true;
+                mouseIface = ifd->bInterfaceNumber;
+            }
         } else if (type == 5 /* endpoint */ && len >= sizeof(USBEndpointDescriptor)) {
             USBEndpointDescriptor *epd = (USBEndpointDescriptor *)(cfgBuf + off);
             if (inMSCInterface && (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_BULK) {
@@ -1884,6 +1929,12 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
                 kbdIntrEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
                 kbdIntrMaxPkt = epd->wMaxPacketSize;
                 kbdInterval = epd->bInterval;
+            } else if (inMouseInterface && !mouseIntrEp &&
+                       (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_INTERRUPT &&
+                       (epd->bEndpointAddress & USB_EP_DIR_IN)) {
+                mouseIntrEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
+                mouseIntrMaxPkt = epd->wMaxPacketSize;
+                mouseInterval = epd->bInterval;
             }
         }
         off += len;
@@ -1901,6 +1952,17 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
         hidSetProtocol(slotId, kbdIface, USB_HID_PROTOCOL_BOOT);
         hidSetIdle(slotId, kbdIface, 0);
         return publishKeyboard(slotId, kbdIntrEp, kbdIntrMaxPkt);
+    }
+
+    /* Same for a HID boot mouse. */
+    if (foundMouse && mouseIntrEp) {
+        XHCI_Log("slot %u: HID boot mouse, iface=%u intrEp=%u(%u) interval=%u",
+                slotId, mouseIface, mouseIntrEp, mouseIntrMaxPkt, mouseInterval);
+        if (!configureInterruptInEndpoint(slotId, mouseIntrEp, mouseIntrMaxPkt, mouseInterval))
+            return false;
+        hidSetProtocol(slotId, mouseIface, USB_HID_PROTOCOL_BOOT);
+        hidSetIdle(slotId, mouseIface, 0);
+        return publishMouse(slotId, mouseIntrEp, mouseIntrMaxPkt);
     }
 
     if (!foundMSC || !bulkInEp || !bulkOutEp) {
@@ -2002,6 +2064,40 @@ bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxP
     fKbdNubs[idx] = kbd;
     kbd->registerService();
     XHCI_Log("slot %u: usbkbd%d published", slotId, idx);
+    return true;
+}
+
+bool RavynXHCIPort::publishMouse(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt)
+{
+    int idx = -1;
+    for (int i = 0; i < 8; i++) if (!fMouse[i].valid) { idx = i; break; }
+    if (idx < 0) return false;
+
+    KbdDevice &m = fMouse[idx];
+    bzero(&m, sizeof(m));
+    m.reportMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut, 8,
+        0xFFFFFFFFFFFFFFFFULL);
+    if (!m.reportMem) return false;
+    bzero(m.reportMem->getBytesNoCopy(), 8);
+    m.valid       = true;
+    m.slotId      = slotId;
+    m.intrEp      = intrEp;
+    m.intrMaxPkt  = intrMaxPkt;
+    m.tdOutstanding = false;
+    m.reportVirt  = (volatile UInt8 *)m.reportMem->getBytesNoCopy();
+    m.reportPhys  = m.reportMem->getPhysicalAddress();
+
+    RavynXHCIMouse *mouse = new RavynXHCIMouse;
+    if (!mouse) { m.valid = false; return false; }
+    if (!mouse->initWithPort(this, idx) || !mouse->attach(this)) {
+        mouse->release();
+        m.valid = false;
+        return false;
+    }
+    fMouseNubs[idx] = mouse;
+    mouse->registerService();
+    XHCI_Log("slot %u: usbmouse%d published", slotId, idx);
     return true;
 }
 
