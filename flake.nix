@@ -256,10 +256,6 @@
                 export PYTHONPATH="${pkgs.xcb-proto}/${pkgs.python3.sitePackages}:$PYTHONPATH"
               '';
             };
-          # Real libxkbfile (nixpkgs' own is a Linux .so; ld already silently
-          # "ignored" it as an incompatible file format on every xvfb build
-          # so far -- Xvfb itself apparently never needed a real symbol from
-          # it, but xkbcomp genuinely does).
           xvfbLibXkbfileBuild =
             if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
               inherit darwinCrossToolchain nativeLd;

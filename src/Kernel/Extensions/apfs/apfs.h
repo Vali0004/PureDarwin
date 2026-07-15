@@ -18,6 +18,7 @@
 #define APFS_APSB_MAGIC  0x42535041U /* APFS_MAGIC 'BSPA', bytes read as "APSB" */
 
 #define APFS_OBJECT_TYPE_MASK 0x0000ffffU
+#define APFS_OBJECT_TYPE_NX_SUPERBLOCK 0x00000001U
 #define APFS_OBJECT_TYPE_BTREE 0x00000002U
 #define APFS_OBJECT_TYPE_BTREE_NODE 0x00000003U
 #define APFS_OBJECT_TYPE_SPACEMAN 0x00000005U
@@ -25,8 +26,12 @@
 #define APFS_OBJECT_TYPE_SPACEMAN_CIB 0x00000007U
 #define APFS_OBJECT_TYPE_SPACEMAN_BITMAP 0x00000008U
 #define APFS_OBJECT_TYPE_OMAP 0x0000000bU
+#define APFS_OBJECT_TYPE_CHECKPOINT_MAP 0x0000000cU
 #define APFS_OBJECT_TYPE_FS 0x0000000dU
 #define APFS_OBJECT_TYPE_FSTREE 0x0000000eU
+
+#define APFS_CHECKPOINT_MAP_LAST 0x00000001U
+#define APFS_CHECKPOINT_BLOCK_COUNT_MASK 0x7fffffffU
 
 #define APFS_BTNODE_ROOT 0x0001
 #define APFS_BTNODE_LEAF 0x0002
@@ -93,6 +98,23 @@ struct apfs_nx_superblock {
 	uint32_t nx_max_file_systems;
 	apfs_oid_t nx_fs_oid[APFS_NX_MAX_FILE_SYSTEMS];
 };
+
+struct apfs_checkpoint_mapping {
+	uint32_t cpm_type;
+	uint32_t cpm_subtype;
+	uint32_t cpm_size;
+	uint32_t cpm_pad;
+	apfs_oid_t cpm_fs_oid;
+	apfs_oid_t cpm_oid;
+	apfs_oid_t cpm_paddr;
+} __attribute__((packed));
+
+struct apfs_checkpoint_map_phys {
+	struct apfs_obj_phys cpm_o;
+	uint32_t cpm_flags;
+	uint32_t cpm_count;
+	struct apfs_checkpoint_mapping cpm_map[];
+} __attribute__((packed));
 
 struct apfs_crypto_state {
 	uint16_t major_version;

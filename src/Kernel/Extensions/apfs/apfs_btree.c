@@ -516,42 +516,97 @@ apfs_publish_container_omap(struct apfs_mount *amp,
     apfs_paddr_t new_container_omap_paddr)
 {
 	struct apfs_nx_superblock *nx;
-	void *block;
+	struct apfs_checkpoint_map_phys *cpm;
+	void *nx_block;
+	void *map_block;
+	uint32_t desc_blocks;
+	uint32_t old_map_index;
+	uint32_t map_index;
+	uint32_t nx_index;
+	uint32_t next_index;
+	apfs_paddr_t desc_base;
+	apfs_paddr_t old_map_paddr;
+	apfs_paddr_t map_paddr;
+	apfs_paddr_t nx_paddr;
+	apfs_xid_t new_xid;
 	int error;
 
-	block = _MALLOC(amp->block_size, M_TEMP, M_WAITOK);
-	if (block == NULL)
+	desc_blocks = le32(amp->nx.nx_xp_desc_blocks) &
+	    APFS_CHECKPOINT_BLOCK_COUNT_MASK;
+	desc_base = le64s(amp->nx.nx_xp_desc_base);
+	if (desc_blocks < 2 || desc_base < 0)
+		return ENOTSUP;
+
+	old_map_index = le32(amp->nx.nx_xp_desc_index) % desc_blocks;
+	map_index = le32(amp->nx.nx_xp_desc_next) % desc_blocks;
+	nx_index = (map_index + 1) % desc_blocks;
+	next_index = (nx_index + 1) % desc_blocks;
+
+	old_map_paddr = desc_base + old_map_index;
+	map_paddr = desc_base + map_index;
+	nx_paddr = desc_base + nx_index;
+
+	nx_block = _MALLOC(amp->block_size, M_TEMP, M_WAITOK | M_ZERO);
+	if (nx_block == NULL)
 		return ENOMEM;
-
-	error = apfs_read_object_phys(amp, 0, block);
-	if (error)
-		goto out;
-	nx = (struct apfs_nx_superblock *)block;
-	nx->nx_omap_oid = hle64(new_container_omap_paddr);
-	apfs_update_object_checksum(block, amp->block_size);
-	error = apfs_write_phys(amp, 0, block, amp->block_size);
-	if (error)
-		goto out;
-
-	error = apfs_read_object_phys(amp, 2, block);
-	if (error == 0) {
-		nx = (struct apfs_nx_superblock *)block;
-		nx->nx_omap_oid = hle64(new_container_omap_paddr);
-		apfs_update_object_checksum(block, amp->block_size);
-		error = apfs_write_phys(amp, 2, block, amp->block_size);
-	} else {
-		error = 0;
+	map_block = _MALLOC(amp->block_size, M_TEMP, M_WAITOK | M_ZERO);
+	if (map_block == NULL) {
+		_FREE(nx_block, M_TEMP);
+		return ENOMEM;
 	}
+
+	error = apfs_read_object_phys(amp, old_map_paddr, map_block);
 	if (error)
 		goto out;
 
-	amp->nx.nx_omap_oid = hle64(new_container_omap_paddr);
+	cpm = (struct apfs_checkpoint_map_phys *)map_block;
+	if (apfs_object_type(cpm->cpm_o.o_type) !=
+	    APFS_OBJECT_TYPE_CHECKPOINT_MAP) {
+		error = EINVAL;
+		goto out;
+	}
+
+	error = apfs_read_object_phys(amp, 0, nx_block);
+	if (error)
+		goto out;
+	memcpy(nx_block, &amp->nx, sizeof(amp->nx));
+	nx = (struct apfs_nx_superblock *)nx_block;
+
+	new_xid = le64(amp->nx.nx_o.o_xid) + 1;
+	if (new_xid <= amp->xid)
+		new_xid = amp->xid + 1;
+
+	cpm->cpm_o.o_xid = hle64(new_xid);
+	cpm->cpm_flags = hle32(APFS_CHECKPOINT_MAP_LAST);
+	apfs_update_object_checksum(map_block, amp->block_size);
+	error = apfs_write_phys(amp, map_paddr, map_block, amp->block_size);
+	if (error)
+		goto out;
+
+	nx->nx_o.o_xid = hle64(new_xid);
+	nx->nx_next_xid = hle64(new_xid + 1);
+	nx->nx_omap_oid = hle64(new_container_omap_paddr);
+	nx->nx_xp_desc_index = hle32(map_index);
+	nx->nx_xp_desc_len = hle32(2);
+	nx->nx_xp_desc_next = hle32(next_index);
+	apfs_update_object_checksum(nx_block, amp->block_size);
+	error = apfs_write_phys(amp, nx_paddr, nx_block, amp->block_size);
+	if (error)
+		goto out;
+
+	memcpy(&amp->nx, nx, sizeof(amp->nx));
+	amp->xid = new_xid;
 	amp->container_omap_oid = new_container_omap_paddr;
 	amp->container_omap_paddr = new_container_omap_paddr;
-	APFSLOG("published container omap=0x%llx via NX",
-	    (unsigned long long)new_container_omap_paddr);
+	APFSLOG("published container omap=0x%llx via checkpoint map=0x%llx nx=0x%llx xid=%llu next=%u",
+	    (unsigned long long)new_container_omap_paddr,
+	    (unsigned long long)map_paddr,
+	    (unsigned long long)nx_paddr,
+	    (unsigned long long)new_xid,
+	    next_index);
 out:
-	_FREE(block, M_TEMP);
+	_FREE(map_block, M_TEMP);
+	_FREE(nx_block, M_TEMP);
 	return error;
 }
 

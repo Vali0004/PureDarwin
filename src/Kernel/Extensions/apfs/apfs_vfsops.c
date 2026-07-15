@@ -240,6 +240,139 @@ apfs_le64s(int64_t v)
 	return (int64_t)OSSwapLittleToHostInt64((uint64_t)v);
 }
 
+static uint64_t
+apfs_fletcher64(const void *data, size_t size)
+{
+	const uint8_t *bytes = (const uint8_t *)data;
+	uint64_t lo = 0;
+	uint64_t hi = 0;
+	uint64_t check1;
+	uint64_t check2;
+	size_t offset;
+
+	if (data == NULL || size <= APFS_MAX_CKSUM_SIZE)
+		return 0;
+
+	for (offset = APFS_MAX_CKSUM_SIZE; offset + sizeof(uint32_t) <= size;
+	    offset += sizeof(uint32_t)) {
+		uint32_t word;
+
+		memcpy(&word, bytes + offset, sizeof(word));
+		lo = (lo + apfs_le32(word)) % 0xffffffffULL;
+		hi = (hi + lo) % 0xffffffffULL;
+	}
+
+	check1 = 0xffffffffULL - ((lo + hi) % 0xffffffffULL);
+	check2 = 0xffffffffULL - ((lo + check1) % 0xffffffffULL);
+	return (check2 << 32) | check1;
+}
+
+static int
+apfs_verify_object_checksum(const void *object, size_t size)
+{
+	const struct apfs_obj_phys *obj = (const struct apfs_obj_phys *)object;
+	uint64_t actual;
+	uint64_t expected;
+
+	if (object == NULL || size <= sizeof(*obj))
+		return EINVAL;
+
+	memcpy(&expected, obj->o_cksum, sizeof(expected));
+	actual = apfs_fletcher64(object, size);
+	if (apfs_le64(expected) != actual)
+		return EINVAL;
+	return 0;
+}
+
+static uint32_t
+apfs_object_type(uint32_t type)
+{
+	return apfs_le32(type) & APFS_OBJECT_TYPE_MASK;
+}
+
+static int
+apfs_read_probe_block(vnode_t devvp, apfs_paddr_t paddr, uint32_t block_size,
+    kauth_cred_t cred, void *out)
+{
+	buf_t bp = NULL;
+	int error;
+
+	if (devvp == NULLVP || paddr < 0 || block_size == 0 || out == NULL)
+		return EINVAL;
+
+	error = (int)buf_meta_bread(devvp, (daddr64_t)paddr, block_size, cred,
+	    &bp);
+	if (error) {
+		if (bp)
+			buf_brelse(bp);
+		return error;
+	}
+	memcpy(out, (const void *)buf_dataptr(bp), block_size);
+	buf_brelse(bp);
+	return 0;
+}
+
+static int
+apfs_select_checkpoint_nx(vnode_t devvp, struct apfs_nx_superblock *nx,
+    uint32_t block_size, vfs_context_t ctx)
+{
+	void *block;
+	uint32_t desc_blocks;
+	apfs_paddr_t desc_base;
+	apfs_xid_t best_xid;
+	apfs_paddr_t best_paddr = 0;
+	uint32_t i;
+	int error = 0;
+
+	desc_blocks = apfs_le32(nx->nx_xp_desc_blocks) &
+	    APFS_CHECKPOINT_BLOCK_COUNT_MASK;
+	desc_base = apfs_le64s(nx->nx_xp_desc_base);
+	if (desc_blocks == 0 || desc_base < 0)
+		return 0;
+
+	block = _MALLOC(block_size, M_TEMP, M_WAITOK);
+	if (block == NULL)
+		return ENOMEM;
+
+	best_xid = apfs_le64(nx->nx_o.o_xid);
+	for (i = 0; i < desc_blocks; i++) {
+		struct apfs_nx_superblock *candidate;
+		apfs_paddr_t paddr = desc_base + i;
+
+		error = apfs_read_probe_block(devvp, paddr, block_size,
+		    vfs_context_ucred(ctx), block);
+		if (error) {
+			error = 0;
+			continue;
+		}
+		if (apfs_verify_object_checksum(block, block_size))
+			continue;
+
+		candidate = (struct apfs_nx_superblock *)block;
+		if (apfs_object_type(candidate->nx_o.o_type) !=
+		    APFS_OBJECT_TYPE_NX_SUPERBLOCK ||
+		    apfs_le32(candidate->nx_magic) != APFS_NX_MAGIC)
+			continue;
+		if (apfs_le32(candidate->nx_block_size) != block_size)
+			continue;
+		if (apfs_le64(candidate->nx_o.o_xid) < best_xid)
+			continue;
+
+		best_xid = apfs_le64(candidate->nx_o.o_xid);
+		best_paddr = paddr;
+		memcpy(nx, candidate, sizeof(*nx));
+	}
+
+	if (best_paddr != 0) {
+		APFSLOG("using checkpoint NX paddr=0x%llx xid=%llu",
+		    (unsigned long long)best_paddr,
+		    (unsigned long long)best_xid);
+	}
+
+	_FREE(block, M_TEMP);
+	return 0;
+}
+
 static void
 apfs_log_uuid(const uint8_t uuid[16])
 {
@@ -310,6 +443,14 @@ apfs_probe_container(struct apfs_mount *amp, vfs_context_t ctx)
 		return EINVAL;
 	}
 
+	/* Keep future block reads aligned with the APFS container block size. */
+	(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&block_size,
+	    FWRITE, ctx);
+
+	error = apfs_select_checkpoint_nx(devvp, &nx, block_size, ctx);
+	if (error)
+		return error;
+
 	max_fs = apfs_le32(nx.nx_max_file_systems);
 	APFSLOG("container dev=0x%x block_size=%u blocks=%llu",
 	    amp->dev, block_size, (unsigned long long)apfs_le64(nx.nx_block_count));
@@ -342,9 +483,6 @@ apfs_probe_container(struct apfs_mount *amp, vfs_context_t ctx)
 	    max_fs);
 	apfs_log_volume_oids(&nx, max_fs);
 
-	/* Keep future block reads aligned with the APFS container block size. */
-	(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&block_size,
-	    FWRITE, ctx);
 	amp->nx = nx;
 	amp->block_size = block_size;
 	amp->block_count = apfs_le64(nx.nx_block_count);
