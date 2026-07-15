@@ -5,6 +5,7 @@ target_sources(IOUSBFamily PRIVATE
     IOUSBFamily/IOUSBBus.cpp
     IOUSBFamily/IOUSBNub.cpp
     IOUSBFamily/IOUSBController.cpp
+    IOUSBFamily/IOUSBControllerV2.cpp
     IOUSBFamily/IOUSBDevice.cpp
     IOUSBFamily/IOUSBInterface.cpp
     IOUSBFamily/IOUSBPipe.cpp
@@ -31,6 +32,7 @@ add_kext_bundle(AppleUSBEHCI.kext KERNEL_PRIVATE INFO_PLIST AppleUSBEHCI/Info.pl
 target_sources(AppleUSBEHCI.kext PRIVATE
     AppleUSBEHCI/AppleUSBEHCI.cpp
 )
+set_property(TARGET AppleUSBEHCI.kext PROPERTY OUTPUT_NAME AppleUSBEHCI)
 set_property(TARGET AppleUSBEHCI.kext PROPERTY CXX_STANDARD 11)
 target_compile_options(AppleUSBEHCI.kext PRIVATE
     -Wno-deprecated-writable-strings -Wno-inconsistent-missing-override
@@ -46,6 +48,7 @@ add_kext_bundle(AppleUSBOHCI.kext KERNEL_PRIVATE INFO_PLIST AppleUSBOHCI/Info.pl
 target_sources(AppleUSBOHCI.kext PRIVATE
     AppleUSBOHCI/AppleUSBOHCI.cpp
 )
+set_property(TARGET AppleUSBOHCI.kext PROPERTY OUTPUT_NAME AppleUSBOHCI)
 set_property(TARGET AppleUSBOHCI.kext PROPERTY CXX_STANDARD 11)
 target_compile_options(AppleUSBOHCI.kext PRIVATE
     -Wno-deprecated-writable-strings -Wno-inconsistent-missing-override
@@ -69,6 +72,7 @@ target_sources(AppleUSBUHCI.kext PRIVATE
     AppleUSBUHCI/AppleUSBUHCI_RootHub.cpp
     AppleUSBUHCI/AppleUSBUHCI_UIM.cpp
 )
+set_property(TARGET AppleUSBUHCI.kext PROPERTY OUTPUT_NAME AppleUSBUHCI)
 set_property(TARGET AppleUSBUHCI.kext PROPERTY CXX_STANDARD 11)
 target_compile_options(AppleUSBUHCI.kext PRIVATE
     -Wno-deprecated-writable-strings -Wno-inconsistent-missing-override

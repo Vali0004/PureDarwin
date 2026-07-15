@@ -45,6 +45,9 @@ stdenv.mkDerivation {
       -kext "$KEXTS/IOUSBFamily.kext" \
       -kext "$KEXTS/IOUSBCompositeDriver.kext" \
       -kext "$KEXTS/AppleUSBMergeNub.kext" \
+      -kext "$KEXTS/AppleUSBEHCI.kext" \
+      -kext "$KEXTS/AppleUSBOHCI.kext" \
+      -kext "$KEXTS/AppleUSBUHCI.kext" \
       -kext "$KEXTS/RavynAHCIPort.kext" \
       -kext "$KEXTS/RavynXHCIPort.kext" \
       -kext "$KEXTS/IOGraphicsFamily.kext" \

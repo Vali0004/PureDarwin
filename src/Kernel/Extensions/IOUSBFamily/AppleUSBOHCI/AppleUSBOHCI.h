@@ -1,5 +1,5 @@
 /*
- * Copyright © 1998-2013 Apple Inc.  All rights reserved.
+ * Copyright ï¿½ 1998-2013 Apple Inc.  All rights reserved.
  * 
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -344,6 +344,16 @@ protected:
                                 AppleOHCIEndpointDescriptorPtr 	head,
                                 AppleOHCIEndpointDescriptorPtr 	tail);
         
+    // PureDarwin minimal-UIM additions
+    IOMemoryDescriptor *        _barDesc;
+    UInt32                      _rootHubNumPorts;
+    IOReturn                    DoControlTransfer(UInt8 address, const UInt8 *setup,
+                                                  void *data, UInt32 dataLen, bool isIn,
+                                                  UInt32 *outLen);
+    static void                 EnumThreadEntry(void *arg, wait_result_t);
+    void                        EnumThreadLoop(void);
+    void                        EnumeratePort(UInt32 port);
+
 public:
 	// IOKit methods
     virtual bool		init(OSDictionary * propTable);
