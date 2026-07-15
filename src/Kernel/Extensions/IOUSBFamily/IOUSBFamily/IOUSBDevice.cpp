@@ -307,6 +307,14 @@ IOReturn IOUSBDevice::SetConfiguration(IOService *forClient, UInt8 configValue, 
     return kIOReturnSuccess;
 }
 
+IOReturn IOUSBDevice::SetConfiguration(IOService *forClient, UInt8 configValue,
+                                        bool startInterfaceMatching, bool issueRemoteWakeup)
+{
+    /* No remote-wakeup signaling support in any UIM we have - same
+     * SET_CONFIGURATION either way. */
+    return SetConfiguration(forClient, configValue, startInterfaceMatching);
+}
+
 IOReturn IOUSBDevice::ResetDevice()
 {
     if (!_controller) return kIOReturnNotAttached;
