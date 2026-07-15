@@ -48,6 +48,8 @@ extern "C" {
 #include "USBTracepoints.h"
 
 #define super IOUSBControllerV3
+#define kAssignedAddrKey "assigned-addresses"
+#define kUHCI_BAR 0x20
 
 
 /*
@@ -58,6 +60,65 @@ extern "C" {
  */
 
 OSDefineMetaClassAndStructors(AppleUSBUHCI, IOUSBControllerV3)
+
+static bool
+AppleUSBUHCIGetBAR4(IOPCIDevice *device, IOPhysicalAddress *baseOut,
+    IOByteCount *sizeOut)
+{
+    if (!device || !baseOut || !sizeOut)
+        return false;
+
+    *baseOut = 0;
+    *sizeOut = 0;
+
+    UInt32 bar = device->configRead32(kUHCI_BAR);
+    if ((bar & 1U) && (bar & ~0x3U) && bar != 0xffffffffU)
+        *baseOut = (IOPhysicalAddress)(bar & ~0x3U);
+
+    OSData *assigned = OSDynamicCast(OSData, device->copyProperty(kAssignedAddrKey));
+    if (assigned) {
+        const UInt8 *bytes = (const UInt8 *)assigned->getBytesNoCopy();
+        UInt32 length = (UInt32)assigned->getLength();
+        for (UInt32 off = 0; off + sizeof(IOPCIPhysicalAddress) <= length;
+             off += sizeof(IOPCIPhysicalAddress)) {
+            const IOPCIPhysicalAddress *addr =
+                (const IOPCIPhysicalAddress *)(bytes + off);
+            if (addr->physHi.s.registerNum != kUHCI_BAR)
+                continue;
+
+            UInt64 base = ((UInt64)addr->physMid << 32) | addr->physLo;
+            UInt64 size = ((UInt64)addr->lengthHi << 32) | addr->lengthLo;
+            USBLog(5, "AppleUSBUHCI assigned-addresses BAR4 space=%u base=0x%qx size=0x%qx",
+                addr->physHi.s.space, base, size);
+            if (addr->physHi.s.space == 1 && base) {
+                *baseOut = (IOPhysicalAddress)(base & ~0x3ULL);
+                if (size)
+                    *sizeOut = (IOByteCount)size;
+            }
+            break;
+        }
+        assigned->release();
+    }
+
+    UInt16 savedCmd = device->configRead16(kIOPCIConfigCommand);
+    UInt32 savedBar = device->configRead32(kUHCI_BAR);
+    device->configWrite16(kIOPCIConfigCommand, savedCmd & ~(UInt16)kIOPCICommandIOSpace);
+    device->configWrite32(kUHCI_BAR, 0xffffffffU);
+    UInt32 sizeMask = device->configRead32(kUHCI_BAR);
+    device->configWrite32(kUHCI_BAR, savedBar);
+    device->configWrite16(kIOPCIConfigCommand, savedCmd);
+
+    UInt32 mask = sizeMask & ~0x3U;
+    UInt32 size = mask ? (~mask + 1U) : 0;
+    if (size && size <= 0x10000U)
+        *sizeOut = (IOByteCount)size;
+    if (*sizeOut == 0)
+        *sizeOut = 0x20;
+
+    USBLog(5, "AppleUSBUHCI BAR4 sizing raw=0x%08x sizeMask=0x%08x -> base=0x%qx size=0x%qx",
+        savedBar, sizeMask, (UInt64)*baseOut, (UInt64)*sizeOut);
+    return *baseOut != 0;
+}
 
 
 // ========================================================================
@@ -352,6 +413,9 @@ AppleUSBUHCI::UIMInitialize(IOService * provider)
             return kIOReturnBadArgument;
         }
         
+        _device->setIOEnable(true);
+        _device->setBusMasterEnable(true);
+
         // Disable the master interrupt
         EnableUSBInterrupt(false);
 
@@ -374,14 +438,19 @@ AppleUSBUHCI::UIMInitialize(IOService * provider)
         if (_ioMap) 
 		{
             USBLog(7, "AppleUSBUHCI[%p]::UIMInitialize - _ioMap vaddr %p, pPhysical %p", this, (void*)_ioMap->getVirtualAddress(), (void*)_ioMap->getPhysicalAddress());
+            _ioPhysAddress = _ioMap->getPhysicalAddress();
+            _ioVirtAddress = _ioMap->getVirtualAddress();
         } else 
 		{
-            USBError(1, "AppleUSBUHCI::UIMInitialize - ioMap is NULL");
-            return kIOReturnNoMemory;
+            IOByteCount ioSize = 0;
+            if (!AppleUSBUHCIGetBAR4(_device, &_ioPhysAddress, &ioSize)) 
+			{
+                USBError(1, "AppleUSBUHCI::UIMInitialize - ioMap is NULL and BAR4 fallback failed");
+                return kIOReturnNoMemory;
+            }
+            _ioVirtAddress = 0;
+            USBLog(3, "AppleUSBUHCI[%p]::UIMInitialize - using BAR4 I/O fallback base %p size %u", this, (void*)_ioPhysAddress, (uint32_t)ioSize);
         }
-
-		_ioPhysAddress = _ioMap->getPhysicalAddress();
-        _ioVirtAddress = _ioMap->getVirtualAddress();
         
 		USBLog(3, "AppleUSBUHCI[%p]::UIMInitialize config @ %x (%x)", this, (uint32_t)_ioVirtAddress, (uint32_t)_ioPhysAddress);
 		
@@ -415,7 +484,7 @@ AppleUSBUHCI::UIMInitialize(IOService * provider)
         USBLog(7, "AppleUSBUHCI[%p]::UIMInitialize -   SBRN: %02x", this, _device->configRead8(0x60));
         
         // leave bus mastering off until the setPowerState
-        _device->configWrite16(kIOPCIConfigCommand, kIOPCICommandMemorySpace | kIOPCICommandIOSpace);
+        _device->configWrite16(kIOPCIConfigCommand, kIOPCICommandMemorySpace | kIOPCICommandIOSpace | kIOPCICommandBusMaster);
         
         USBLog(7, "AppleUSBUHCI[%p]::UIMInitialize - calling HardwareInit:", this);
         

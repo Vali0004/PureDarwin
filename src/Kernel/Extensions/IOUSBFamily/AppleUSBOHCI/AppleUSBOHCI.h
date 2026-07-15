@@ -29,6 +29,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
+#include <IOKit/usb/IOUSBCommand.h>
 #include <IOKit/pci/IOPCIBridge.h>
 #include <IOKit/pci/IOPCIDevice.h>
 
@@ -61,7 +62,12 @@ __attribute__((format(printf, 1, 2)));
 #endif
 
 // This is an iVar in our superclass' expansion data
-#define	_ERRATA64BITS					_v3ExpansionData->_errata64Bits
+#define	_ERRATA64BITS					_ohciErrata64Bits
+
+enum {
+    kErrataOnlySinglePageTransfers = 0x00000001,
+    kErrataNECOHCIIsochWraparound  = 0x00000002
+};
 
 typedef struct AppleOHCIIntHeadStruct
                     AppleOHCIIntHead,
@@ -229,6 +235,8 @@ protected:
 	bool									_rootHubStatuschangedInterruptReceived;	// True when we receive a RHSC interrupt so that we can tell whether a controller waking from Doze is from a device or from software
 	// saved root hub port registers
 	UInt32									_savedHcRhPortStatus[15];
+	bool									_controllerAvailable;
+	UInt32									_ohciErrata64Bits;
 
     static void 				InterruptHandler(OSObject *owner,  IOInterruptEventSource * source, int count);
     static bool 				PrimaryInterruptFilter(OSObject *owner, IOFilterInterruptEventSource *source);
@@ -353,6 +361,13 @@ public:
      */
     IOReturn UIMInitialize(IOService * provider);
     IOReturn UIMFinalize();
+
+    virtual IOReturn UIMOpenPipe(USBDeviceAddress address, UInt8 speed, Endpoint *endpoint);
+    virtual IOReturn UIMClosePipe(USBDeviceAddress address, Endpoint *endpoint);
+    virtual IOReturn UIMAbortPipe(USBDeviceAddress address, Endpoint *endpoint);
+    virtual IOReturn UIMClearPipeStall(USBDeviceAddress address, Endpoint *endpoint);
+    virtual IOReturn UIMDeviceRequest(IOUSBDevRequest *request, USBDeviceAddress address);
+    virtual IOReturn UIMReadWrite(IOMemoryDescriptor *buffer, USBDeviceAddress address, Endpoint *endpoint, bool isWrite);
     
 	virtual	IOReturn				AllocatePowerStateArray(void);
 

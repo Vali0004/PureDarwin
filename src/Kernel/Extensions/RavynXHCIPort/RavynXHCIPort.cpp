@@ -767,6 +767,9 @@ void RavynXHCIPort::serviceEventRing()
             UInt32 dci  = (evControl >> 16) & 0x1F; /* Endpoint ID field */
             if (slot < 64 && dci < 32) {
                 fXferDone[slot][dci].cc      = TRB_CC(evStatus);
+                fXferDone[slot][dci].param   = evParam;
+                fXferDone[slot][dci].status  = evStatus;
+                fXferDone[slot][dci].control = evControl;
                 fXferDone[slot][dci].pending = true;
             }
         }
@@ -963,6 +966,8 @@ void RavynXHCIPort::hotplugLoop()
             bool connected = (portsc & XHCI_PORTSC_CCS) != 0;
 
             if (!connected) {
+                if (fPortOccupied[p])
+                    handleRootPortDisconnect(p, portsc);
                 fPortOccupied[p] = false;   /* allow a future replug on this port */
                 continue;
             }
@@ -974,6 +979,54 @@ void RavynXHCIPort::hotplugLoop()
             resetAndEnumeratePort(p);
         }
         IOSleep(500);
+    }
+}
+
+void RavynXHCIPort::handleRootPortDisconnect(UInt32 port0based, UInt32 portsc)
+{
+    XHCI_Log("hotplug: Port %u disconnected, portsc=%08x", port0based, portsc);
+
+    for (int i = 0; i < 8; i++) {
+        if (fKbd[i].valid && fKbd[i].rootPort == port0based) {
+            UInt32 slotId = fKbd[i].slotId;
+            fKbd[i].valid = false;
+            fKbd[i].tdOutstanding = false;
+            if (fKbdNubs[i]) {
+                fKbdNubs[i]->stop(this);
+                fKbdNubs[i]->detach(this);
+                fKbdNubs[i]->release();
+                fKbdNubs[i] = NULL;
+            }
+            if (fKbd[i].reportMem) {
+                fKbd[i].reportMem->release();
+                fKbd[i].reportMem = NULL;
+                fKbd[i].reportVirt = NULL;
+                fKbd[i].reportPhys = 0;
+            }
+            disableSlot(slotId);
+            freeSlotResources(slotId);
+            XHCI_Log("hotplug: Port %u removed usbkbd%d slot=%u", port0based, i, slotId);
+        }
+        if (fMouse[i].valid && fMouse[i].rootPort == port0based) {
+            UInt32 slotId = fMouse[i].slotId;
+            fMouse[i].valid = false;
+            fMouse[i].tdOutstanding = false;
+            if (fMouseNubs[i]) {
+                fMouseNubs[i]->stop(this);
+                fMouseNubs[i]->detach(this);
+                fMouseNubs[i]->release();
+                fMouseNubs[i] = NULL;
+            }
+            if (fMouse[i].reportMem) {
+                fMouse[i].reportMem->release();
+                fMouse[i].reportMem = NULL;
+                fMouse[i].reportVirt = NULL;
+                fMouse[i].reportPhys = 0;
+            }
+            disableSlot(slotId);
+            freeSlotResources(slotId);
+            XHCI_Log("hotplug: Port %u removed usbmouse%d slot=%u", port0based, i, slotId);
+        }
     }
 }
 
@@ -1201,12 +1254,14 @@ bool RavynXHCIPort::addressDevice(UInt32 slotId, UInt32 port0based, UInt32 route
             (unsigned long long)fDCBAA[slotId],
             (unsigned long long)opRead64(XHCI_DCBAAP));
 
-    /* Speed -> conservative default max packet size for EP0 (USB2 spec
-     * table), used only for the BSR probe transfer itself; the real value
-     * comes from the device's own device descriptor. */
+    /* Speed -> default max packet size for EP0 until the device descriptor
+     * gives us the real value. We currently address before descriptor probe
+     * because several real controllers reject the BSR pre-address path; use
+     * 64 for full-speed so common keyboards with a 64-byte EP0 don't fault
+     * the first GET_DESCRIPTOR after Address Device. */
     UInt16 defaultMaxPkt = 8;
     switch (speed) {
-        case 1: defaultMaxPkt = 8;   break; /* full speed */
+        case 1: defaultMaxPkt = 64;  break; /* full speed */
         case 2: defaultMaxPkt = 8;   break; /* low speed */
         case 3: defaultMaxPkt = 64;  break; /* high speed */
         case 4: defaultMaxPkt = 512; break; /* super speed */
@@ -1275,7 +1330,17 @@ bool RavynXHCIPort::controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
 {
     SlotResources &sr = fSlots[slotId];
 
+    IOLockLock(fEventLock);
+    fXferDone[slotId][1].pending = false;
+    fXferDone[slotId][1].cc = 0;
+    fXferDone[slotId][1].param = 0;
+    fXferDone[slotId][1].status = 0;
+    fXferDone[slotId][1].control = 0;
+    IOLockUnlock(fEventLock);
+
     /* Setup stage: 8 bytes of the setup packet go directly in TRB.param (IDT). */
+    UInt64 ep0Base = sr.ep0RingMem->getPhysicalAddress();
+    UInt64 setupTRBPhys = ep0Base + (UInt64)sr.ep0Enqueue * sizeof(XHCITRB);
     UInt64 setupParam;
     bcopy(&setup, &setupParam, sizeof(setupParam));
     UInt32 trt = (len == 0) ? TRB_SETUP_TRT_NO_DATA : (in ? TRB_SETUP_TRT_IN_DATA : TRB_SETUP_TRT_OUT_DATA);
@@ -1283,6 +1348,7 @@ bool RavynXHCIPort::controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
            setupParam, 8, TRB_SET_TYPE(TRB_TYPE_SETUP_STAGE) | TRB_IDT | (trt << TRB_SETUP_TRT_SHIFT));
 
     IOBufferMemoryDescriptor *xferMem = NULL;
+    UInt64 dataTRBPhys = 0;
     if (len > 0) {
         UInt64 mask = 0xFFFFFFFFFFFFFFFFULL;
         xferMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
@@ -1291,6 +1357,7 @@ bool RavynXHCIPort::controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
         if (!in) bcopy(buf, xferMem->getBytesNoCopy(), len);
         else bzero(xferMem->getBytesNoCopy(), len);
 
+        dataTRBPhys = ep0Base + (UInt64)sr.ep0Enqueue * sizeof(XHCITRB);
         pushTRB(sr.ep0Ring, sr.ep0Enqueue, sr.ep0Cycle, kRingTRBs,
                xferMem->getPhysicalAddress(), len,
                TRB_SET_TYPE(TRB_TYPE_DATA_STAGE) | (in ? TRB_DIR_IN : 0));
@@ -1298,6 +1365,7 @@ bool RavynXHCIPort::controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
 
     /* Status stage direction is opposite of data direction (or IN if no data). */
     UInt32 statusDir = (len > 0 && !in) ? TRB_DIR_IN : (len > 0 ? 0 : TRB_DIR_IN);
+    UInt64 statusTRBPhys = ep0Base + (UInt64)sr.ep0Enqueue * sizeof(XHCITRB);
     pushTRB(sr.ep0Ring, sr.ep0Enqueue, sr.ep0Cycle, kRingTRBs,
            0, 0, TRB_SET_TYPE(TRB_TYPE_STATUS_STAGE) | statusDir | TRB_IOC);
 
@@ -1310,8 +1378,17 @@ bool RavynXHCIPort::controlTransfer(UInt32 slotId, const USBSetupPacket &setup,
     if (xferMem) xferMem->release();
 
     if (!ok || (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)) {
-        XHCI_Log("control transfer failed slot=%u req=%u cc=%u ok=%d ep0Enq=%u cycle=%u ERDP=%016llx",
-                slotId, setup.bRequest, cc, ok, sr.ep0Enqueue, sr.ep0Cycle,
+        XferCompletion done = fXferDone[slotId][1];
+        XHCI_Log("control transfer failed slot=%u req=%u type=%02x value=%04x index=%04x "
+                "len=%u in=%d cc=%u ok=%d ep0Enq=%u cycle=%u "
+                "ev[param=%016llx status=%08x control=%08x] "
+                "trb[setup=%016llx data=%016llx status=%016llx] ERDP=%016llx",
+                slotId, setup.bRequest, setup.bmRequestType, setup.wValue,
+                setup.wIndex, len, in, cc, ok, sr.ep0Enqueue, sr.ep0Cycle,
+                (unsigned long long)done.param, done.status, done.control,
+                (unsigned long long)setupTRBPhys,
+                (unsigned long long)dataTRBPhys,
+                (unsigned long long)statusTRBPhys,
                 (unsigned long long)rtRead64(XHCI_RT_IR0 + XHCI_IR_ERDP));
         return false;
     }
@@ -1392,14 +1469,15 @@ bool RavynXHCIPort::configureInterruptInEndpoint(UInt32 slotId, UInt8 epNum,
     sr.bulkInRing[kRingTRBs - 1].param = sr.bulkInRingMem->getPhysicalAddress();
     sr.bulkInRing[kRingTRBs - 1].control = TRB_SET_TYPE(TRB_TYPE_LINK) | TRB_TC | TRB_CYCLE;
 
-    /* EP Context dword0 bits 23:16 = Interval (already a 125us-microframe
-     * exponent for LS/FS/HS interrupt endpoints as reported in bInterval-
-     * derived form); pass through what enumeration computed. */
+    /* EP Context dword0 bits 23:16 = Interval. For now pass through the
+     * endpoint descriptor value used by the existing path, but do provide
+     * Max ESIT Payload below; a periodic endpoint with zero ESIT payload can
+     * configure successfully yet never be scheduled by real controllers. */
     ic->ep[inDCI - 1].dword0 = ((UInt32)interval << 16);
     ic->ep[inDCI - 1].dword1 = EP_CTX_CERR(3) | (EP_TYPE_INTERRUPT_IN << EP_CTX_TYPE_SHIFT) |
                                ((UInt32)maxPkt << EP_CTX_MAXPKT_SHIFT);
     ic->ep[inDCI - 1].trDequeuePtr = sr.bulkInRingMem->getPhysicalAddress() | 1;
-    ic->ep[inDCI - 1].avgTrbLen_maxEsitLo = maxPkt;
+    ic->ep[inDCI - 1].avgTrbLen_maxEsitLo = ((UInt32)maxPkt << 16) | maxPkt;
 
     UInt8 cc = 0; UInt32 slotOut = 0;
     bool ok = doCommand(sr.inputCtxMem->getPhysicalAddress(), 0,
@@ -1442,6 +1520,11 @@ bool RavynXHCIPort::pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutM
                 k.reportPhys, 8, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
         ringDoorbell(k.slotId, dci);
         k.tdOutstanding = true;
+        if (!k.loggedPollArm) {
+            XHCI_Log("usbkbd%d: armed interrupt IN slot=%u dci=%u ep=%u report=%016llx",
+                    kbdIdx, k.slotId, dci, k.intrEp, (unsigned long long)k.reportPhys);
+            k.loggedPollArm = true;
+        }
     }
 
     UInt8 cc = 0;
@@ -1449,6 +1532,12 @@ bool RavynXHCIPort::pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutM
         return false; /* still armed; caller loops and waits again */
 
     k.tdOutstanding = false;
+    if (!k.loggedFirstCompletion) {
+        XHCI_Log("usbkbd%d: first interrupt completion cc=%u report=%02x %02x %02x %02x %02x %02x %02x %02x",
+                kbdIdx, cc, k.reportVirt[0], k.reportVirt[1], k.reportVirt[2], k.reportVirt[3],
+                k.reportVirt[4], k.reportVirt[5], k.reportVirt[6], k.reportVirt[7]);
+        k.loggedFirstCompletion = true;
+    }
     if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)
         return false;
     for (int i = 0; i < 8; i++) outReport[i] = k.reportVirt[i];
@@ -1467,6 +1556,11 @@ bool RavynXHCIPort::pollMouse(int mouseIdx, UInt8 outReport[8], UInt32 timeoutMs
                 m.reportPhys, 8, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
         ringDoorbell(m.slotId, dci);
         m.tdOutstanding = true;
+        if (!m.loggedPollArm) {
+            XHCI_Log("usbmouse%d: armed interrupt IN slot=%u dci=%u ep=%u report=%016llx",
+                    mouseIdx, m.slotId, dci, m.intrEp, (unsigned long long)m.reportPhys);
+            m.loggedPollArm = true;
+        }
     }
 
     UInt8 cc = 0;
@@ -1474,6 +1568,12 @@ bool RavynXHCIPort::pollMouse(int mouseIdx, UInt8 outReport[8], UInt32 timeoutMs
         return false;
 
     m.tdOutstanding = false;
+    if (!m.loggedFirstCompletion) {
+        XHCI_Log("usbmouse%d: first interrupt completion cc=%u report=%02x %02x %02x %02x %02x %02x %02x %02x",
+                mouseIdx, cc, m.reportVirt[0], m.reportVirt[1], m.reportVirt[2], m.reportVirt[3],
+                m.reportVirt[4], m.reportVirt[5], m.reportVirt[6], m.reportVirt[7]);
+        m.loggedFirstCompletion = true;
+    }
     if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)
         return false;
     for (int i = 0; i < 8; i++) outReport[i] = m.reportVirt[i];
@@ -1951,7 +2051,7 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
             return false;
         hidSetProtocol(slotId, kbdIface, USB_HID_PROTOCOL_BOOT);
         hidSetIdle(slotId, kbdIface, 0);
-        return publishKeyboard(slotId, kbdIntrEp, kbdIntrMaxPkt);
+        return publishKeyboard(slotId, rootPort0based, kbdIntrEp, kbdIntrMaxPkt);
     }
 
     /* Same for a HID boot mouse. */
@@ -1962,7 +2062,7 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
             return false;
         hidSetProtocol(slotId, mouseIface, USB_HID_PROTOCOL_BOOT);
         hidSetIdle(slotId, mouseIface, 0);
-        return publishMouse(slotId, mouseIntrEp, mouseIntrMaxPkt);
+        return publishMouse(slotId, rootPort0based, mouseIntrEp, mouseIntrMaxPkt);
     }
 
     if (!foundMSC || !bulkInEp || !bulkOutEp) {
@@ -2033,7 +2133,7 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
     return true;
 }
 
-bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt)
+bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt)
 {
     int idx = -1;
     for (int i = 0; i < 8; i++) if (!fKbd[i].valid) { idx = i; break; }
@@ -2048,6 +2148,7 @@ bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxP
     bzero(k.reportMem->getBytesNoCopy(), 8);
     k.valid       = true;
     k.slotId      = slotId;
+    k.rootPort    = (UInt8)rootPort0based;
     k.intrEp      = intrEp;
     k.intrMaxPkt  = intrMaxPkt;
     k.tdOutstanding = false;
@@ -2062,12 +2163,26 @@ bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxP
         return false;
     }
     fKbdNubs[idx] = kbd;
+    if (!kbd->start(this)) {
+        XHCI_Log("slot %u: usbkbd%d start() failed", slotId, idx);
+        kbd->detach(this);
+        kbd->release();
+        fKbdNubs[idx] = NULL;
+        k.valid = false;
+        if (k.reportMem) {
+            k.reportMem->release();
+            k.reportMem = NULL;
+            k.reportVirt = NULL;
+            k.reportPhys = 0;
+        }
+        return false;
+    }
     kbd->registerService();
     XHCI_Log("slot %u: usbkbd%d published", slotId, idx);
     return true;
 }
 
-bool RavynXHCIPort::publishMouse(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt)
+bool RavynXHCIPort::publishMouse(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt)
 {
     int idx = -1;
     for (int i = 0; i < 8; i++) if (!fMouse[i].valid) { idx = i; break; }
@@ -2082,6 +2197,7 @@ bool RavynXHCIPort::publishMouse(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt)
     bzero(m.reportMem->getBytesNoCopy(), 8);
     m.valid       = true;
     m.slotId      = slotId;
+    m.rootPort    = (UInt8)rootPort0based;
     m.intrEp      = intrEp;
     m.intrMaxPkt  = intrMaxPkt;
     m.tdOutstanding = false;
@@ -2096,6 +2212,20 @@ bool RavynXHCIPort::publishMouse(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt)
         return false;
     }
     fMouseNubs[idx] = mouse;
+    if (!mouse->start(this)) {
+        XHCI_Log("slot %u: usbmouse%d start() failed", slotId, idx);
+        mouse->detach(this);
+        mouse->release();
+        fMouseNubs[idx] = NULL;
+        m.valid = false;
+        if (m.reportMem) {
+            m.reportMem->release();
+            m.reportMem = NULL;
+            m.reportVirt = NULL;
+            m.reportPhys = 0;
+        }
+        return false;
+    }
     mouse->registerService();
     XHCI_Log("slot %u: usbmouse%d published", slotId, idx);
     return true;

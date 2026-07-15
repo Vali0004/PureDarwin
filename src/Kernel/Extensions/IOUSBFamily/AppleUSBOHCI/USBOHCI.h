@@ -27,6 +27,21 @@
 
 #include <IOKit/IOTypes.h>
 
+typedef IOPhysicalAddress32 USBPhysicalAddress32;
+
+#ifndef HostToUSBLong
+#define HostToUSBLong(x) ((UInt32)(x))
+#endif
+#ifndef USBToHostLong
+#define USBToHostLong(x) ((UInt32)(x))
+#endif
+#ifndef HostToUSBWord
+#define HostToUSBWord(x) ((UInt16)(x))
+#endif
+#ifndef USBToHostWord
+#define USBToHostWord(x) ((UInt16)(x))
+#endif
+
 typedef	char *Ptr;
 
 #define bit0			0x00000001

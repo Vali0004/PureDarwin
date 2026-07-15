@@ -114,7 +114,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "helloapp" "launchd" "busybox" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "iokittest" "ioreg" ]
+            buildTargets = [ "helloapp" "launchd" "busybox" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "iokittest" "ioreg" "mousemon" "msdosfstest" "mount" "umount" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" ];
             enableProjects = false;
             enableKernel = false;
@@ -499,6 +499,7 @@
                 ];
                 kc = kcBuild;
                 xnuLoader = xnu-loader.packages.${system}.default;
+                apfsprogs = pkgs.apfsprogs;
               };
               runVm = pkgs.writeShellApplication {
                 name = "puredarwin-vm";
@@ -522,6 +523,10 @@
                       exit 1
                     fi
                   fi
+                  image_readonly_opt=""
+                  if [ ! -w "$image" ]; then
+                    image_readonly_opt=",snapshot=on"
+                  fi
 
                   mkdir -p "$state_dir"
                   if [ ! -e "$ovmf_vars" ]; then
@@ -535,7 +540,7 @@
                     -cpu IvyBridge,vendor=GenuineIntel \
                     -drive if=pflash,format=raw,unit=0,readonly=on,file="$ovmf_code" \
                     -drive if=pflash,format=raw,unit=1,file="$ovmf_vars" \
-                    -drive id=root,format=raw,file="$image" \
+                    -drive id=root,format=raw,file="$image"$image_readonly_opt \
                     -serial mon:stdio \
                     -no-reboot \
                     -no-shutdown \
@@ -564,6 +569,10 @@
                       exit 1
                     fi
                   fi
+                  image_readonly_opt=""
+                  if [ ! -w "$image" ]; then
+                    image_readonly_opt=",snapshot=on"
+                  fi
 
                   mkdir -p "$state_dir"
                   if [ ! -e "$ovmf_vars" ]; then
@@ -579,7 +588,7 @@
                     -drive if=pflash,format=raw,unit=0,readonly=on,file="$ovmf_code" \
                     -drive if=pflash,format=raw,unit=1,file="$ovmf_vars" \
                     -device ich9-ahci,id=sata \
-                    -drive if=none,id=system,file="$image",format=raw,cache=writeback \
+                    -drive if=none,id=system,file="$image",format=raw,cache=writeback"$image_readonly_opt" \
                     -device ide-hd,bus=sata.0,drive=system \
                     -device e1000-82545em,netdev=net0 \
                     -netdev user,id=net0 \

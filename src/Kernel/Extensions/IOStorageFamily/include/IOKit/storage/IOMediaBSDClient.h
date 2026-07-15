@@ -35,6 +35,7 @@
 
 #include <sys/conf.h>
 #include <IOKit/storage/IOMedia.h>
+#include <kern/thread_call.h>
 
 class  AnchorTable;
 class  MinorTable;
@@ -58,10 +59,12 @@ protected:
 private:
 
     AnchorTable * _anchors;
-    UInt32        _reserved0064 __attribute__ ((unused));
-    UInt32        _reserved0096 __attribute__ ((unused));
+    thread_call_t _retryCall;
+    UInt32        _retryCount;
+    UInt32        _readyRetryCount;
     MinorTable *  _minors;
-    UInt32        _reserved0160 __attribute__ ((unused));
+    bool          _nodesCreated;
+    bool          _devNodesPublished;
 
 protected:
 
@@ -78,6 +81,11 @@ protected:
      */
 
     virtual bool createNodes(IOMedia * media);
+
+    virtual void scheduleCreateNodesRetry();
+
+    static void createNodesRetry(thread_call_param_t param0,
+                                 thread_call_param_t param1);
 
     /*
      * Free all of this object's outstanding resources.

@@ -28,6 +28,8 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/../mini-rv32ima/mini-rv32ima/mini-rv32ima.h")
 endif()
 add_subdirectory(corecrypto)
 add_subdirectory(ext4)
+add_subdirectory(msdosfs)
+add_subdirectory(apfs)
 add_subdirectory(HFSEncodings)
 add_subdirectory(hfs)
 add_subdirectory(AppleFileSystemDriver)
@@ -41,9 +43,10 @@ add_custom_target(kexts)
 add_dependencies(kexts
     IOPCIFamily ApplePIODMA IOStorageFamily
     IOUSBFamily IOUSBCompositeDriver.kext AppleUSBMergeNub.kext
+    AppleUSBEHCI.kext AppleUSBOHCI.kext
     RavynAHCIPort.kext RavynXHCIPort.kext
     IOGOPFramebuffer.kext IOHIDFamily.kext IONetworkingFamily.kext PDE1000.kext
-    corecrypto.kext ext4.kext HFSEncodings.kext hfs.kext
+    corecrypto.kext ext4.kext msdosfs.kext apfs.kext HFSEncodings.kext hfs.kext
     AppleFileSystemDriver.kext Ext4FileSystemDriver.kext pthread.kext
 )
 if(PUREDARWIN_HAVE_MINIRV32)

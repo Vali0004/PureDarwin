@@ -213,7 +213,11 @@ EOF
       build-nix/src/Userspace/malloctest/malloctest \
       build-nix/src/Userspace/sockettest/sockettest \
       build-nix/src/Userspace/iokittest/iokittest \
-      build-nix/src/Userspace/iokittest/ioreg
+      build-nix/src/Userspace/iokittest/ioreg \
+      build-nix/src/Userspace/mousemon/mousemon \
+      build-nix/src/Userspace/msdosfstest/msdosfstest \
+      build-nix/src/Userspace/diskdev_cmds/mount \
+      build-nix/src/Userspace/diskdev_cmds/umount
     do
       if [ -x "$bin" ]; then
         cp "$bin" $out/bin/

@@ -93,9 +93,12 @@ private:
     struct KbdDevice {
         bool                       valid;
         UInt32                     slotId;
+        UInt8                      rootPort;     /* 0-based root hub port */
         UInt8                      intrEp;       /* interrupt IN endpoint number */
         UInt16                     intrMaxPkt;
         bool                       tdOutstanding; /* an interrupt-IN TD is armed */
+        bool                       loggedPollArm;
+        bool                       loggedFirstCompletion;
         IOBufferMemoryDescriptor * reportMem;    /* 8-byte DMA report buffer */
         volatile UInt8           * reportVirt;
         UInt64                     reportPhys;
@@ -153,6 +156,7 @@ private:
     volatile bool          fHotplugRunning;
     static void hotplugThread(void *arg, wait_result_t);
     void hotplugLoop();
+    void handleRootPortDisconnect(UInt32 port0based, UInt32 portsc);
 
     /* DCBAA: array of 64-bit device-context pointers, index by slot ID (0 unused). */
     IOBufferMemoryDescriptor * fDCBAAMem;
@@ -189,6 +193,9 @@ private:
     struct XferCompletion {
         volatile bool pending;
         UInt8         cc;
+        UInt64        param;
+        UInt32        status;
+        UInt32        control;
     };
     XferCompletion fXferDone[64][32]; /* [slotId][DCI] */
     /* Last command completion (commands are serialized under fCmdLock). */
@@ -309,10 +316,10 @@ private:
 
     /* Record a keyboard slot (allocating its DMA report buffer) and publish
      * an IOHIKeyboard nub that polls it. */
-    bool publishKeyboard(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt);
+    bool publishKeyboard(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt);
 
     /* Same idea for a HID boot mouse: publishes a RavynXHCIMouse nub. */
-    bool publishMouse(UInt32 slotId, UInt8 intrEp, UInt16 intrMaxPkt);
+    bool publishMouse(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt);
 
     bool enableSlot(UInt32 *outSlotId);
     void disableSlot(UInt32 slotId);

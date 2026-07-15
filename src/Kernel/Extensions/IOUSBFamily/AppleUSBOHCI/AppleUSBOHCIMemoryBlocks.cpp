@@ -121,7 +121,7 @@ AppleUSBOHCIedMemoryBlock::NumEDs(void)
 IOPhysicalAddress				
 AppleUSBOHCIedMemoryBlock::GetSharedPhysicalPtr(UInt32 index)
 {
-    IOPhysicalAddress		ret = NULL;
+    IOPhysicalAddress		ret = 0;
     if (index < EDsPerBlock)
 		ret = _sharedPhysical + (index * sizeof(OHCIEndpointDescriptorShared));
     return ret;
@@ -279,7 +279,7 @@ AppleUSBOHCIgtdMemoryBlock::NumGTDs(void)
 IOPhysicalAddress				
 AppleUSBOHCIgtdMemoryBlock::GetSharedPhysicalPtr(UInt32 index)
 {
-    IOPhysicalAddress		ret = NULL;
+    IOPhysicalAddress		ret = 0;
     
     if (index < GTDsPerBlock)
 		ret = _sharedPhysical + ((index+1) * sizeof(OHCIGeneralTransferDescriptorShared));
@@ -485,7 +485,7 @@ AppleUSBOHCIitdMemoryBlock::NumITDs(void)
 IOPhysicalAddress				
 AppleUSBOHCIitdMemoryBlock::GetSharedPhysicalPtr(UInt32 index)
 {
-    IOPhysicalAddress		ret = NULL;
+    IOPhysicalAddress		ret = 0;
     
     if (index < ITDsPerBlock)
 		ret = _sharedPhysical + ((index+1) * sizeof(OHCIIsochTransferDescriptorShared));

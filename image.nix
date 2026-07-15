@@ -9,8 +9,10 @@
 , dosfstools
 , mtools
 , e2fsprogs
+, apfsprogs
 , espMB ? 64
 , rootMB ? 640
+, apfsMB ? 128
 }:
 
 assert lib.isDerivation baseSystem;
@@ -22,25 +24,31 @@ stdenv.mkDerivation {
 
   dontUnpack = true;
 
-  nativeBuildInputs = [ gptfdisk util-linux dosfstools mtools e2fsprogs ];
+  nativeBuildInputs = [ gptfdisk util-linux dosfstools mtools e2fsprogs apfsprogs ];
 
   buildPhase = ''
     runHook preBuild
     export MTOOLS_SKIP_CHECK=1
     LINUX_FS_GUID=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+    APFS_GUID=7C3457EF-0000-11AA-AA11-00306543ECAC
 
     img=puredarwin.img
     esp_sectors=$((${toString espMB} * 2048))
-    img_sectors=$((2048 + esp_sectors + ${toString rootMB} * 2048 + 2048))
+    root_sectors=$((${toString rootMB} * 2048))
+    apfs_sectors=$((${toString apfsMB} * 2048))
+    img_sectors=$((2048 + esp_sectors + root_sectors + apfs_sectors + 2048))
     truncate -s $((img_sectors * 512)) $img
     sgdisk \
       -n 1:2048:+${toString espMB}M -t 1:EF00            -c 1:"EFI System Partition" \
       -n 2:0:+${toString rootMB}M   -t 2:$LINUX_FS_GUID  -c 2:"Darwin ext4 Root" \
+      -n 3:0:+${toString apfsMB}M   -t 3:$APFS_GUID      -c 3:"Darwin APFS Test" \
       $img >/dev/null
 
     read -r esp_start esp_size <<<"$(sfdisk -d $img | grep -i type=C12A7328 \
       | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
     read -r root_start root_size <<<"$(sfdisk -d $img | grep -i type=$LINUX_FS_GUID \
+      | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
+    read -r apfs_start apfs_size <<<"$(sfdisk -d $img | grep -i type=$APFS_GUID \
       | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
 
     truncate -s $((esp_size * 512)) esp.img
@@ -284,6 +292,12 @@ EOF
 
     dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
 
+    truncate -s $((apfs_size * 512)) apfs.img
+    mkapfs -L apfs-test apfs.img >/dev/null
+    $CC -std=c99 -Wall -Wextra -O2 ${./tools/apfs_fixture.c} -o apfs-fixture
+    ./apfs-fixture apfs.img
+    dd if=apfs.img of=$img bs=512 seek=$apfs_start count=$apfs_size conv=notrunc status=none
+
     runHook postBuild
   '';
 
@@ -295,7 +309,7 @@ EOF
   '';
 
   meta = with lib; {
-    description = "Bootable PureDarwin GPT disk image (xnu-loader ESP + kc-tools kernel collection + ext4 BaseSystem root)";
+    description = "Bootable PureDarwin GPT disk image (xnu-loader ESP + kc-tools kernel collection + ext4 BaseSystem root + APFS test container)";
     platforms = platforms.linux;
   };
 }

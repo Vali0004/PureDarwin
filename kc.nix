@@ -35,6 +35,8 @@ stdenv.mkDerivation {
       -kext "$KEXTS/IOATAFamily.kext/Contents/PlugIns/AppleIntelPIIXATA.kext" \
       -kext "$KEXTS/IOATABlockStorage.kext" \
       -kext "$KEXTS/ext4.kext" \
+      -kext "$KEXTS/msdosfs.kext" \
+      -kext "$KEXTS/apfs.kext" \
       -kext "$KEXTS/HFSEncodings.kext" \
       -kext "$KEXTS/hfs.kext" \
       -kext "$KEXTS/AppleFileSystemDriver.kext" \

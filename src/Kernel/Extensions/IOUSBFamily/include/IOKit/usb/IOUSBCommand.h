@@ -30,6 +30,8 @@
 #include <IOKit/IODMACommand.h>
 #include <IOKit/usb/USB.h>
 
+typedef IOUSBDevRequest *IOUSBDeviceRequestPtr;
+
 /*
  * USB Command
  * This is the command block for a USB command to be queued on the
