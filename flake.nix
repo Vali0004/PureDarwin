@@ -176,9 +176,6 @@
                 int XdmcpUnwrap(const unsigned char *input, unsigned char *wrapper, const unsigned char *key) { (void)input; (void)wrapper; (void)key; return 0; }
               '';
             };
-          # nixpkgs' zlib is built for the Linux host (ELF); libfontenc's gzip
-          # encoding-table reader and libXfont2's gunzip.c need a real Mach-O
-          # zlib for the Darwin target.
           xvfbZlibBuild =
             if isDarwin then null else pkgs.callPackage ./xvfb-zlib.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -283,16 +280,8 @@
               libXdmcp = xvfbLibXdmcpBuild;
               libxcb = xcbBuild;
             };
-          # Actual font files for /usr/share/fonts -- the freetype2/libXfont2
-          # backend can read these now, but nothing populated the directory
-          # itself yet (it doesn't even exist in the image). mkfontscale and
-          # mkfontdir just parse font files and emit text index files, so
-          # they run fine on the Linux build machine.
           xvfbFontsBuild =
             if isDarwin then null else pkgs.callPackage ./xvfb-fonts.nix { };
-          # xkeyboard-config's own output is plain share/X11/xkb (no usr/
-          # prefix); repackage it to match this project's usr/-rooted image
-          # layout, and to the /usr/share/X11/xkb path xkbcomp/Xvfb expect.
           xkeyboardConfigBuild =
             if isDarwin then null else pkgs.runCommand "puredarwin-xkeyboard-config" { } ''
               mkdir -p "$out/usr/share"
