@@ -227,7 +227,12 @@ target_link_libraries(libsystem_kernel_static PUBLIC xnu_headers pthread_common_
 mig(mach/clock.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock.h NOVOUCHERS)
 mig(mach/clock_priv.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_priv.h NOVOUCHERS)
 mig(mach/clock_reply.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_reply.h NOVOUCHERS)
+mig(mach/clock_reply.defs INCLUDES_FROM_TARGET libsystem_kernel_static SERVER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_reply_server.h NOVOUCHERS)
 mig(mach/exc.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/exc.h NOVOUCHERS)
+mig(mach/exc.defs INCLUDES_FROM_TARGET libsystem_kernel_static SERVER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/exc_server.h NOVOUCHERS)
+mig(mach/mach_exc.defs INCLUDES_FROM_TARGET libsystem_kernel_static SERVER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/mach_exc_server.h NOVOUCHERS)
+mig(mach/notify.defs INCLUDES_FROM_TARGET libsystem_kernel_static SERVER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/notify_server.h NOVOUCHERS)
+mig(mach/memory_object_default.defs INCLUDES_FROM_TARGET libsystem_kernel_static SERVER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/memory_object_default_server.h NOVOUCHERS)
 mig(mach/host_priv.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/host_priv.h NOVOUCHERS)
 mig(mach/host_security.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/host_security.h NOVOUCHERS)
 mig(mach/lock_set.defs INCLUDES_FROM_TARGET libsystem_kernel_static USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/lock_set.h NOVOUCHERS)
@@ -330,6 +335,11 @@ target_sources(libsystem_kernel_static PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_priv.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_reply.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_reply_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/exc_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/mach_exc_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/notify_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/memory_object_default_server.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/exc.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/host_priv.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/host_security.h
@@ -353,6 +363,11 @@ set_source_files_properties(
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_priv.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_reply.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/clock_reply_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/exc_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/mach_exc_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/notify_server.h
+    ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/memory_object_default_server.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/exc.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/host_priv.h
     ${CMAKE_CURRENT_BINARY_DIR}/public_include/mach/host_security.h
@@ -424,6 +439,18 @@ install(TARGETS libsystem_kernel_static DESTINATION usr/local/lib/dyld_stub COMP
 
 add_darwin_shared_library(libsystem_kernel INSTALL_NAME_DIR /usr/lib/system)
 set_property(TARGET libsystem_kernel PROPERTY OUTPUT_NAME system_kernel)
+# Nothing in this tree depends on this target (only its _static sibling,
+# which is what libSystem_B_stub actually links); -all_load below force-
+# loads every object in libsystem_kernel_static, pulling in a dependency
+# web (libmalloc, corecrypto, pthread, all the pd_libSystem_compat.c
+# glue, ...) that only libSystem_B_stub's much larger link line actually
+# satisfies. Building this standalone was never exercised - no
+# buildTargets list in flake.nix ever names it - until a native macOS
+# unrestricted `ninja` (no target argument, builds literal ALL) reached
+# it first. Exclude it from that default set rather than duplicate
+# libSystem_B_stub's entire link line for a target nothing else needs;
+# `ninja libsystem_kernel` still works if anyone wants it explicitly.
+set_property(TARGET libsystem_kernel PROPERTY EXCLUDE_FROM_ALL TRUE)
 
 target_sources(libsystem_kernel PRIVATE empty.c)
 
@@ -450,6 +477,16 @@ target_compile_definitions(libsystem_kernel PRIVATE _FORTIFY_SOURCE=0 __DARWIN_V
 target_link_libraries(libsystem_kernel PRIVATE libsystem_kernel_static)
 target_link_libraries(libsystem_kernel PRIVATE CrashReporterClient)
 target_link_libraries(libsystem_kernel PRIVATE libc_public_headers)
+# -all_load below force-loads every member of libsystem_kernel_static,
+# including wrapper .c files (system-version-compat.c, persona.c,
+# posix_spawn.c, libproc.c) that call plain strlcpy/strlcat/strnlen
+# directly rather than the _libkernel_-prefixed internal aliases
+# wrappers/string/strlcpy.c provides. This target has no other buildTargets
+# entry pulling it in on the Nix/Linux path (only libsystem_kernel_static,
+# the plain archive, is ever requested there - see userlandBuild/fullBuild
+# in flake.nix), so this gap was never exercised until a native macOS
+# build's unrestricted `ninja` reached it for the first time.
+target_link_libraries(libsystem_kernel PRIVATE libc_static libplatform_static)
 target_link_options(libsystem_kernel PRIVATE -umbrella System -all_load)
 
 target_link_options(libsystem_kernel PRIVATE -umbrella System -all_load)

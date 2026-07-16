@@ -1,5 +1,23 @@
 find_program(dsymutil_path NAMES dsymutil llvm-dsymutil REQUIRED)
 
+# --output-sync (used below to keep XNU's recursive submake output from
+# interleaving) needs GNU Make >= 4.0. Nix's `make` always qualifies, but
+# native macOS builds get Xcode's own /usr/bin/make, which is still the
+# ancient 3.81-derived BSD fork (`make --version` there identifies as "GNU
+# Make 3.81" - --output-sync was added in 4.0) and rejects the flag
+# outright ("unrecognized option"). Detect it instead of assuming.
+execute_process(
+    COMMAND make --version
+    OUTPUT_VARIABLE _xnu_make_version_output
+    ERROR_QUIET
+)
+set(XNU_MAKE_OUTPUT_SYNC_FLAG "")
+if(_xnu_make_version_output MATCHES "GNU Make ([0-9]+)\\.")
+    if(CMAKE_MATCH_1 GREATER_EQUAL 4)
+        set(XNU_MAKE_OUTPUT_SYNC_FLAG "--output-sync=recurse")
+    endif()
+endif()
+
 # XNU build arch. x86_64 installs the i386/ machine headers (machine/types.h
 # includes "i386/types.h"); arm64 installs arm/ and needs a MACHINE_CONFIGS.
 if(PUREDARWIN_ARM64)
@@ -209,7 +227,7 @@ externalproject_add(xnu
         # llvm-strip can't strip the linked kernel ("shared library is not
         # yet supported").
         ${CMAKE_COMMAND} -E env LD=${XNU_LD_PATH} STRIP=${XNU_STRIP_PATH} ${XNU_HOST_CC_ENV} --unset=CC --unset=CXX --unset=NM --unset=CTFCONVERT --unset=CTFMERGE --unset=CTFINSERT
-        make --output-sync=recurse -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
+        make ${XNU_MAKE_OUTPUT_SYNC_FLAG} -C <SOURCE_DIR> install ARCH_CONFIGS=${XNU_ARCH_CONFIGS} ${XNU_MACHINE_CONFIGS} BUILD_LTO=0
             BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=${PUREDARWIN_XNU_KERNEL_CONFIG}
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
             SYMROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu_sym DSTROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu

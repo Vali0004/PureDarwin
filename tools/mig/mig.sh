@@ -95,7 +95,13 @@ if [ "$UNAME_S" = "Linux" ]; then
 	fi
 else
 	C=${MIGCC}
-	M=${MIGCOM-${migcomPath}}
+	M=${MIGCOM-}
+	if [ -z "$M" ] && [ -x "${migcomPath}" ]; then
+		M="${migcomPath}"
+	fi
+	if [ -z "$M" ] && [ -x "${xcrunPath}" ]; then
+		M=`"${xcrunPath}" -sdk "$sdkRoot" -find migcom 2>/dev/null`
+	fi
 fi
 
 if [ $# -eq 1 ] && [ "$1" = "-version" ] ; then

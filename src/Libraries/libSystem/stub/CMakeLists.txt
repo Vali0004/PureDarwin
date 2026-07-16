@@ -37,6 +37,7 @@ target_sources(libSystem_B_stub PRIVATE
     pd_libSystem_init.c
     pd_libSystem_compat.c
     pd_libSystem_process.c
+    pd_chkstk_darwin.s
     ${CMAKE_SOURCE_DIR}/src/Libraries/dyld/pd_libc_common_storage.c)
 
 # Match launchd-dummy's LC_LOAD_DYLIB expectation (from otool -L) so dyld's

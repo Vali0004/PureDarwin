@@ -64,11 +64,20 @@ function(mig filename)
     get_filename_component(basename ${filename} NAME_WE)
     get_filename_component(filename_abs ${filename} ABSOLUTE)
 
+    set(MIGCOM_ENV_PREFIX)
     if(TARGET migcom)
-        set(MIGCOM_PATH "$<TARGET_FILE:migcom>")
+        set(MIGCOM_ENV_PREFIX ${CMAKE_COMMAND} -E env "MIGCOM=$<TARGET_FILE:migcom>")
         set(MIGCOM_DEPENDS migcom)
     elseif(DEFINED ENV{NIX_MIGCOM_PATH})
-        set(MIGCOM_PATH "$ENV{NIX_MIGCOM_PATH}")
+        set(MIGCOM_ENV_PREFIX ${CMAKE_COMMAND} -E env "MIGCOM=$ENV{NIX_MIGCOM_PATH}")
+        set(MIGCOM_DEPENDS)
+    elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+        # Native macOS build: no cross-compiled migcom target and no Nix
+        # host-tool path to give it - tools/mig/mig.sh finds Xcode's own
+        # migcom itself (xcrun -sdk <sdk> -find migcom) when MIGCOM isn't
+        # set, same as it does for MIGCC. Leaving MIGCOM unset (not merely
+        # empty - mig.sh's ${MIGCOM-default} only falls back on unset,
+        # not on empty string) lets that fallback fire.
         set(MIGCOM_DEPENDS)
     else()
         message(SEND_ERROR "mig() requires the migcom target or NIX_MIGCOM_PATH")
@@ -76,7 +85,7 @@ function(mig filename)
     endif()
 
     add_custom_command(OUTPUT ${MIG_DEPS}
-        COMMAND ${CMAKE_COMMAND} -E env MIGCOM=${MIGCOM_PATH} ${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh -arch ${MIG_ARCH}
+        COMMAND ${MIGCOM_ENV_PREFIX} ${PUREDARWIN_SOURCE_DIR}/tools/mig/mig.sh -arch ${MIG_ARCH}
             -user ${MIG_USER_SOURCE} -header ${MIG_USER_HEADER} -server ${MIG_SERVER_SOURCE}
             -sheader ${MIG_SERVER_HEADER} ${MIG_FLAGS} ${filename_abs}
         DEPENDS ${MIGCOM_DEPENDS}
