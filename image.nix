@@ -138,7 +138,7 @@ EOF
     cat > $staging/etc/profile <<'EOF'
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export TERM=''${TERM:-vt220}
-export SHELL=''${SHELL:-/bin/sh}
+export SHELL=''${SHELL:-/bin/zsh}
 export HOME=''${HOME:-/var/root}
 export USER=''${USER:-root}
 export LOGNAME=''${LOGNAME:-root}
@@ -153,11 +153,12 @@ export USER=''${USER:-root}
 export LOGNAME=''${LOGNAME:-root}
 EOF
     cat > $staging/etc/zprofile <<'EOF'
-[ -r /etc/profile ] && . /etc/profile
+test -r /etc/profile && . /etc/profile
 EOF
     cat > $staging/etc/zshrc <<'EOF'
 [[ -o interactive ]] || return
 
+unsetopt monitor
 bindkey -e
 bindkey '^?' backward-delete-char
 bindkey '^H' backward-delete-char
@@ -171,23 +172,23 @@ EOF
 /bin/zsh
 EOF
     cat > $staging/etc/ttys <<'EOF'
-/dev/console /bin/sh -i
+/dev/console /bin/zsh -l
 EOF
     cat > $staging/etc/init/rc.boot <<'EOF'
 #!/bin/sh
 
-if [ -x /bin/netsetup ]; then
+if test -x /bin/netsetup; then
     /bin/netsetup
 fi
 EOF
     cat > $staging/var/root/.profile <<'EOF'
-[ -r /etc/profile ] && . /etc/profile
+test -r /etc/profile && . /etc/profile
 EOF
     cat > $staging/var/root/.zprofile <<'EOF'
-[ -r /etc/zprofile ] && . /etc/zprofile
+test -r /etc/zprofile && . /etc/zprofile
 EOF
     cat > $staging/var/root/.zshrc <<'EOF'
-[ -r /etc/zshrc ] && . /etc/zshrc
+test -r /etc/zshrc && . /etc/zshrc
 EOF
     chmod 644 \
       $staging/etc/passwd \

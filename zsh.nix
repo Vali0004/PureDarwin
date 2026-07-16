@@ -82,6 +82,24 @@ stdenv.mkDerivation {
       -e 's/^#define HAVE_SYS_PRCTL_H .*/#undef HAVE_SYS_PRCTL_H/' \
       config.h
 
+    substituteInPlace Src/init.c \
+      --replace-fail 'opts[MONITOR] = 2;   /* may be unset in init_io() */' \
+                     'opts[MONITOR] = 0;   /* PureDarwin: tty pgrp support is incomplete */'
+    substituteInPlace Src/signals.c \
+      --replace-fail '/* Array describing the state of each signal: an element contains *' \
+                     '/**/
+void wait_for_processes(void);
+
+/* Array describing the state of each signal: an element contains *' \
+      --replace-fail '    ret = sigsuspend(&set);' \
+                     '    if (sig == SIGCHLD) {
+	zsleep(10000);
+	wait_for_processes();
+	return -1;
+    }
+
+    ret = sigsuspend(&set);'
+
     runHook postConfigure
   '';
 

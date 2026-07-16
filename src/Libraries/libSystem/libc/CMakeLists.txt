@@ -344,6 +344,7 @@ target_sources(libc_internal_static PRIVATE
     stdio/FreeBSD/refill.c        # __srefill (read-mode refill; pulled in transitively)
     stdio/FreeBSD/fvwrite.c       # __sfvwrite (vfprintf's underlying buffered writer)
     stdio/FreeBSD/fflush.c        # __sflush / fflush (used by exit's stdio-flush + fvwrite)
+    stdio/FreeBSD/fpurge.c        # _fpurge (zsh redirection cleanup)
     stdio/FreeBSD/fclose.c        # fclose (fwalk's flush-and-close path referenced by findfp.c)
     stdio/FreeBSD/perror.c        # _perror (init error reporting)
     stdio/FreeBSD/vfprintf.c      # __vfprintf (the real BSD engine; xprintf variant is #if 0'd out)
@@ -421,6 +422,8 @@ target_sources(libc_internal_static PRIVATE
     stdio/FreeBSD/sprintf.c       # _sprintf (err.c's _e_visprintf)
     stdio/FreeBSD/sscanf.c        # _sscanf
     stdio/FreeBSD/fscanf.c        # _fscanf (libfontenc's encparse.c)
+    stdio/FreeBSD/funopen.c       # _funopen (cookie-backed stdio)
+    stdio/FreeBSD/fmemopen.c      # _fmemopen (memory-backed FILE*)
     stdlib/FreeBSD/atof.c         # _atof (freetype/libXfont2 config parsing)
     stdio/FreeBSD/fputs.c         # _fputs (err.c's _e_visprintf)
     stdio/FreeBSD/ferror.c        # _ferror

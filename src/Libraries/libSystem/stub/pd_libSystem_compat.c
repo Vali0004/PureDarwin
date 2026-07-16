@@ -24,6 +24,9 @@ extern FILE *__pd_fopen_extsn(const char *path, const char *mode) __asm("_fopen$
 
 typedef unsigned long long pd_dispatch_time_t;
 
+#define PD_DISPATCH_TIME_FOREVER (~0ULL)
+#define PD_NSEC_PER_SEC 1000000000ULL
+
 struct pd_dispatch_semaphore {
     pthread_mutex_t lock;
     pthread_cond_t cond;
@@ -509,6 +512,7 @@ dispatch_semaphore_wait(void *object, pd_dispatch_time_t timeout)
 {
     struct pd_dispatch_semaphore *semaphore = object;
     long result = 0;
+    struct timespec abstime;
 
     if (semaphore == NULL) {
         return -1;
@@ -527,8 +531,41 @@ dispatch_semaphore_wait(void *object, pd_dispatch_time_t timeout)
         return 1;
     }
 
+    if (timeout != PD_DISPATCH_TIME_FOREVER) {
+        struct timeval now;
+        uint64_t deadline_sec;
+        uint64_t deadline_nsec;
+
+        gettimeofday(&now, NULL);
+        deadline_sec = timeout / PD_NSEC_PER_SEC;
+        deadline_nsec = timeout % PD_NSEC_PER_SEC;
+
+        /*
+         * libdispatch encodes dispatch_time(DISPATCH_TIME_NOW, delta) as an
+         * absolute nanosecond deadline. For early clients that pass a small
+         * relative value directly, treat it as a delta from now.
+         */
+        if (deadline_sec < (uint64_t)now.tv_sec) {
+            deadline_sec += (uint64_t)now.tv_sec;
+            deadline_nsec += (uint64_t)now.tv_usec * 1000ULL;
+            if (deadline_nsec >= PD_NSEC_PER_SEC) {
+                deadline_sec++;
+                deadline_nsec -= PD_NSEC_PER_SEC;
+            }
+        }
+
+        abstime.tv_sec = (time_t)deadline_sec;
+        abstime.tv_nsec = (long)deadline_nsec;
+    }
+
     while (semaphore->value < 0) {
-        int err = pthread_cond_wait(&semaphore->cond, &semaphore->lock);
+        int err;
+
+        if (timeout == PD_DISPATCH_TIME_FOREVER) {
+            err = pthread_cond_wait(&semaphore->cond, &semaphore->lock);
+        } else {
+            err = pthread_cond_timedwait(&semaphore->cond, &semaphore->lock, &abstime);
+        }
         if (err != 0) {
             semaphore->value++;
             result = err == ETIMEDOUT ? 1 : -1;
@@ -1459,15 +1496,18 @@ pd_grcopy(struct group *dst, const struct group *src,
 {
     size_t need_name = src->gr_name ? strlen(src->gr_name) + 1 : 0;
     size_t need_passwd = src->gr_passwd ? strlen(src->gr_passwd) + 1 : 0;
-    size_t nmembers = 0, need_members, off = 0;
+    size_t nmembers = 0, need_members, need_member_strings = 0, off = 0;
     size_t i;
 
-    if (src->gr_mem != NULL)
-        while (src->gr_mem[nmembers] != NULL)
+    if (src->gr_mem != NULL) {
+        while (src->gr_mem[nmembers] != NULL) {
+            need_member_strings += strlen(src->gr_mem[nmembers]) + 1;
             nmembers++;
+        }
+    }
     need_members = (nmembers + 1) * sizeof(char *);
 
-    if (need_name + need_passwd + need_members > buflen) {
+    if (need_name + need_passwd + need_members + need_member_strings > buflen) {
         *result = NULL;
         return;
     }
@@ -1489,8 +1529,13 @@ pd_grcopy(struct group *dst, const struct group *src,
         dst->gr_passwd = NULL;
     }
     dst->gr_mem = (char **)(buf + off);
-    for (i = 0; i < nmembers; i++)
-        dst->gr_mem[i] = src->gr_mem[i];   /* points into the original getgrent() static buffer, valid until its next call */
+    off += need_members;
+    for (i = 0; i < nmembers; i++) {
+        size_t len = strlen(src->gr_mem[i]) + 1;
+        memcpy(buf + off, src->gr_mem[i], len);
+        dst->gr_mem[i] = buf + off;
+        off += len;
+    }
     dst->gr_mem[nmembers] = NULL;
 
     *result = dst;
@@ -1650,34 +1695,4 @@ strptime(const char *s, const char *format, struct tm *tm)
         }
     }
     return (char *)s;
-}
-
-FILE *
-fmemopen(void *buf, size_t size, const char *mode)
-{
-    FILE *f;
-    int fd;
-
-    if (mode != NULL && strchr(mode, 'w')) {
-        errno = ENOTSUP;
-        return NULL;
-    }
-
-    {
-        char path[64];
-        snprintf(path, sizeof(path), "/tmp/.pd_fmemopen.%d.%p", (int)getpid(), (void *)buf);
-        fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_EXCL, 0600);
-        if (fd < 0)
-            return NULL;
-        unlink(path);
-    }
-    if (buf != NULL && size != 0 && write(fd, buf, size) != (ssize_t)size) {
-        close(fd);
-        return NULL;
-    }
-    lseek(fd, 0, SEEK_SET);
-    f = fdopen(fd, "r");
-    if (f == NULL)
-        close(fd);
-    return f;
 }

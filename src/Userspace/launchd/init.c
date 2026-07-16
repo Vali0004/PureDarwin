@@ -196,8 +196,8 @@ parse_tty_line(char *line, struct tty_service *svc)
 
 	svc->argv[argc] = NULL;
 	if (argc == 0) {
-		svc->argv[0] = strdup("/bin/sh");
-		svc->argv[1] = strdup("-i");
+		svc->argv[0] = strdup("/bin/zsh");
+		svc->argv[1] = strdup("-l");
 		svc->argv[2] = NULL;
 		if (svc->argv[0] == NULL || svc->argv[1] == NULL) {
 			return -1;
@@ -211,7 +211,7 @@ static void
 add_default_ttys(void)
 {
 	const char *defaults[] = {
-		"/dev/console /bin/sh -i",
+		"/dev/console /bin/zsh -l",
 	};
 
 	for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
@@ -429,7 +429,7 @@ main(void)
 	setenv("HOME", "/var/root", 1);
 	setenv("USER", "root", 1);
 	setenv("LOGNAME", "root", 1);
-	setenv("SHELL", "/bin/sh", 1);
+	setenv("SHELL", "/bin/zsh", 1);
 	setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
 	setenv("TERM", "vt220", 0);
 

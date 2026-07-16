@@ -217,6 +217,7 @@ _fcntl
 _fdopen
 _ferror
 _fflush
+_fpurge
 _fgetc
 _fileno
 _fnmatch
