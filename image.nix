@@ -92,6 +92,7 @@ stdenv.mkDerivation {
       sbin \
       dev \
       etc \
+      etc/init \
       tmp \
       var \
       var/root \
@@ -136,13 +137,72 @@ staff:*:20:root
 EOF
     cat > $staging/etc/profile <<'EOF'
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
-export PS1='\u@\h:\w \$ '
+export TERM=''${TERM:-vt220}
+export SHELL=''${SHELL:-/bin/sh}
+export HOME=''${HOME:-/var/root}
+export USER=''${USER:-root}
+export LOGNAME=''${LOGNAME:-root}
+export PS1='# '
+EOF
+    cat > $staging/etc/zshenv <<'EOF'
+export PATH=''${PATH:-/bin:/sbin:/usr/bin:/usr/sbin}
+export TERM=''${TERM:-vt220}
+export SHELL=''${SHELL:-/bin/zsh}
+export HOME=''${HOME:-/var/root}
+export USER=''${USER:-root}
+export LOGNAME=''${LOGNAME:-root}
+EOF
+    cat > $staging/etc/zprofile <<'EOF'
+[ -r /etc/profile ] && . /etc/profile
+EOF
+    cat > $staging/etc/zshrc <<'EOF'
+[[ -o interactive ]] || return
+
+bindkey -e
+bindkey '^?' backward-delete-char
+bindkey '^H' backward-delete-char
+export PS1='# '
+EOF
+    cat > $staging/etc/resolv.conf <<'EOF'
+nameserver 10.0.2.3
 EOF
     cat > $staging/etc/shells <<'EOF'
 /bin/sh
 /bin/zsh
 EOF
-    chmod 644 $staging/etc/passwd $staging/etc/group $staging/etc/profile $staging/etc/shells
+    cat > $staging/etc/ttys <<'EOF'
+/dev/console /bin/sh -i
+EOF
+    cat > $staging/etc/init/rc.boot <<'EOF'
+#!/bin/sh
+
+if [ -x /bin/netsetup ]; then
+    /bin/netsetup
+fi
+EOF
+    cat > $staging/var/root/.profile <<'EOF'
+[ -r /etc/profile ] && . /etc/profile
+EOF
+    cat > $staging/var/root/.zprofile <<'EOF'
+[ -r /etc/zprofile ] && . /etc/zprofile
+EOF
+    cat > $staging/var/root/.zshrc <<'EOF'
+[ -r /etc/zshrc ] && . /etc/zshrc
+EOF
+    chmod 644 \
+      $staging/etc/passwd \
+      $staging/etc/group \
+      $staging/etc/profile \
+      $staging/etc/zshenv \
+      $staging/etc/zprofile \
+      $staging/etc/zshrc \
+      $staging/etc/resolv.conf \
+      $staging/etc/shells \
+      $staging/etc/ttys \
+      $staging/var/root/.profile \
+      $staging/var/root/.zprofile \
+      $staging/var/root/.zshrc
+    chmod 755 $staging/etc/init/rc.boot
 
     # Xorg config selecting the PureDarwin GOP framebuffer driver. No input
     # autodetection (no udev/hal on PD); the driver reads its geometry live
@@ -237,6 +297,7 @@ EOF
       mknod \
       more \
       mv \
+      netcat \
       patch \
       printf \
       pwd \

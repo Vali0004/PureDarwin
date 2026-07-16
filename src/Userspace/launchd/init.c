@@ -426,11 +426,12 @@ main(void)
 		run_wait(boot_argv);
 	}
 
-	setenv("HOME", "/root", 1);
+	setenv("HOME", "/var/root", 1);
 	setenv("USER", "root", 1);
 	setenv("LOGNAME", "root", 1);
 	setenv("SHELL", "/bin/sh", 1);
 	setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
+	setenv("TERM", "vt220", 0);
 
 	load_ttys("/etc/ttys");
 

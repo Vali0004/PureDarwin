@@ -16,6 +16,7 @@ _fopen
 _fprintf
 _ioctl
 _kill
+_killpg
 _mkdir
 _pause
 _perror
@@ -35,6 +36,8 @@ _strtok
 _sync
 _unmount
 _usleep
+_wait3
+_wait4
 _waitpid
 ___assert_rtn
 ___cxa_atexit
@@ -48,6 +51,7 @@ _exit
 _fork
 _free
 _getpid
+_getrusage
 _malloc
 _calloc
 _malloc_size
@@ -184,6 +188,7 @@ ___sprintf_chk
 ___stpcpy_chk
 ___stpncpy_chk
 ___strcpy_chk
+___strlcpy_chk
 ___strncpy_chk
 ___vsnprintf_chk
 _atoi
@@ -302,6 +307,7 @@ _symlink
 _sysconf
 _tcgetattr
 _tcsetattr
+_difftime
 _time
 _times
 _ttyname_r
@@ -545,6 +551,7 @@ _sigemptyset
 _sigfillset
 ___srget
 _tcgetpgrp
+_tcsetpgrp
 _tdelete
 _tfind
 _towlower

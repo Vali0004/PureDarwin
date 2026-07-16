@@ -114,7 +114,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "helloapp" "launchd" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "iokittest" "ioreg" "mousemon" "msdosfstest" "mount" "umount" ]
+            buildTargets = [ "helloapp" "launchd" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "netsetup" "ping" "iokittest" "ioreg" "mousemon" "msdosfstest" "mount" "umount" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
             enableProjects = false;
             enableKernel = false;
@@ -450,6 +450,12 @@
               libSystem = libSystemBuild;
               ncurses = pkgs.ncurses;
             };
+          libiconvBuild =
+            if isDarwin then null else pkgs.callPackage ./libiconv.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              libiconvReal = pkgs.libiconvReal;
+            };
           toyboxBuild =
             if isDarwin then null else pkgs.callPackage ./toybox.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -600,6 +606,7 @@
             xkbcomp = xkbcompBuild;
             xkeyboard-config = xkeyboardConfigBuild;
             fonts = xvfbFontsBuild;
+            libiconv = libiconvBuild;
             nano = nanoBuild;
             zsh = zshBuild;
             toybox = toyboxBuild;
@@ -624,6 +631,7 @@
             libX11 = xlibBuild;
             libxcb = xcbBuild;
             ncurses = ncursesBuild;
+            libiconv = libiconvBuild;
             libxkbfile = xvfbLibXkbfileBuild;
           };
 

@@ -92,7 +92,9 @@ target_sources(libc_static PRIVATE
     stdlib/FreeBSD/setenv.c      # _setenv/_unsetenv (init sets HOME/PATH/etc)
     gen/FreeBSD/waitpid.c        # _waitpid (init reaps/respawns children)
     gen/FreeBSD/wait.c           # __wait (BusyBox tar --seamless-compression child reaping)
+    gen/FreeBSD/wait3.c          # _wait3 (zsh job/process accounting)
     gen/pd_wait.c                # _wait forwarder (__weak_reference alias not emitted)
+    compat-43/FreeBSD/killpg.c   # _killpg (zsh job control)
     gen/pd_popen.c               # popen/pclose (BusyBox awk pipe redirection; fork+pipe based)
     gen/FreeBSD/pause.c          # _pause (init halt loop)
     string/FreeBSD/strrchr.c
@@ -188,6 +190,7 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/gethostname.c    # _gethostname
     gen/FreeBSD/getprogname.c    # _getprogname (malloc_printf.c's diagnostic prefix)
     gen/FreeBSD/time.c           # _time
+    stdtime/FreeBSD/difftime.c   # _difftime
     gen/FreeBSD/times.c          # _times
     gen/FreeBSD/ttyname.c        # _ttyname_r
     gen/FreeBSD/dirname.c        # _dirname
@@ -196,6 +199,7 @@ target_sources(libc_static PRIVATE
     sys/settimeofday.c           # _settimeofday
     secure/memmove_chk.c         # ___memmove_chk
     secure/strcpy_chk.c          # ___strcpy_chk
+    secure/strlcpy_chk.c         # ___strlcpy_chk
     secure/strncpy_chk.c         # ___strncpy_chk
     secure/sprintf_chk.c         # ___sprintf_chk
     gen/FreeBSD/termios.c        # _tcgetattr (isatty.c's underlying check)

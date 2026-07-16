@@ -5,11 +5,9 @@
  * publicly, so this is written from the public Intel 8254x programmer's
  * datasheet register layout, not derived from any Apple driver.
  *
- * MSI-driven RX: an IOInterruptEventSource registered on the nub's MSI vector
- * (source 0, wired up by IOPCIFamily's resolveMSIInterrupts at nub publish)
- * drives RX servicing. Falls back to the original IOTimerEventSource poll if
- * MSI registration fails (e.g. no messaged-interrupt controller available).
- * outputPacket() sends synchronously from the calling thread.
+ * RX is timer-polled, with MSI used as an optional fast path when QEMU/the
+ * platform routes it correctly. outputPacket() sends synchronously from the
+ * calling thread.
  */
 
 #ifndef _PDE1000_H
@@ -88,11 +86,15 @@ private:
     IOBufferMemoryDescriptor *fRxPacketBuf[kPDE1000RxDescCount];
     PDE1000RxDesc            *fRxDesc;
     uint32_t                  fRxTail;
+    uint32_t                  fRxPackets;
+    uint32_t                  fRxLogBudget;
 
     IOBufferMemoryDescriptor *fTxDescBuf;
     IOBufferMemoryDescriptor *fTxPacketBuf[kPDE1000TxDescCount];
     PDE1000TxDesc             *fTxDesc;
     uint32_t                  fTxTail;
+    uint32_t                  fTxPackets;
+    uint32_t                  fTxLogBudget;
 
     IOEthernetAddress fMACAddress;
     bool               fEnabled;
@@ -104,6 +106,7 @@ private:
     bool     initRxRing();
     bool     initTxRing();
     void     pollReceive();
+    bool     publishLinkMedium();
     static void pollTimerAction(OSObject *owner, IOTimerEventSource *sender);
     void     interruptOccurred(IOInterruptEventSource *sender, int count);
     static void interruptOccurredStatic(OSObject *owner, IOInterruptEventSource *sender, int count);

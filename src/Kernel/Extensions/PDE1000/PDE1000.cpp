@@ -70,11 +70,51 @@ enum {
 
 enum {
     TXDESC_CMD_EOP = (1u << 0),
+    TXDESC_CMD_IFCS = (1u << 1),
     TXDESC_CMD_RS  = (1u << 3),
     TXDESC_STATUS_DD = (1u << 0),
     RXDESC_STATUS_DD = (1u << 0),
     RXDESC_STATUS_EOP = (1u << 1),
 };
+
+static uint16_t readBE16(const uint8_t *p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+
+static uint32_t readBE32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+        ((uint32_t)p[2] << 8) | p[3];
+}
+
+static void logEtherFrame(const char *dir, uint32_t seq, const void *data, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    uint16_t type;
+
+    if (len < 14) {
+        IOLog("PDE1000: %s[%u] short len=%lu\n", dir, seq, (unsigned long)len);
+        return;
+    }
+
+    type = readBE16(p + 12);
+    IOLog("PDE1000: %s[%u] len=%lu dst=%02x:%02x:%02x:%02x:%02x:%02x "
+          "src=%02x:%02x:%02x:%02x:%02x:%02x type=0x%04x\n",
+        dir, seq, (unsigned long)len,
+        p[0], p[1], p[2], p[3], p[4], p[5],
+        p[6], p[7], p[8], p[9], p[10], p[11], type);
+
+    if (type == 0x0806 && len >= 42) {
+        IOLog("PDE1000: %s[%u] ARP op=%u sender=%u.%u.%u.%u target=%u.%u.%u.%u\n",
+            dir, seq, readBE16(p + 20),
+            p[28], p[29], p[30], p[31], p[38], p[39], p[40], p[41]);
+    } else if (type == 0x0800 && len >= 34) {
+        IOLog("PDE1000: %s[%u] IPv4 proto=%u %u.%u.%u.%u -> %u.%u.%u.%u\n",
+            dir, seq, p[23],
+            p[26], p[27], p[28], p[29], p[30], p[31], p[32], p[33]);
+    }
+}
 
 bool PDE1000::init(OSDictionary *properties)
 {
@@ -94,7 +134,11 @@ bool PDE1000::init(OSDictionary *properties)
     fRxDesc = NULL;
     fTxDesc = NULL;
     fRxTail = 0;
+    fRxPackets = 0;
+    fRxLogBudget = 32;
     fTxTail = 0;
+    fTxPackets = 0;
+    fTxLogBudget = 32;
     fEnabled = false;
     bzero(&fMACAddress, sizeof(fMACAddress));
     bzero(fRxPacketBuf, sizeof(fRxPacketBuf));
@@ -234,19 +278,22 @@ bool PDE1000::start(IOService *provider)
     // entry at source index 0 pointing at the family's messaged-interrupt
     // controller. IOInterruptEventSource::interruptEventSource() ends up
     // calling fPCIDevice->registerInterrupt(0, ...), which routes there and
-    // programs the device's MSI capability registers (enableDeviceMSI()).
+    // programs the device's MSI capability registers (enableDeviceMSI()). RX
+    // still gets timer-polled below because early PureDarwin/QEMU interrupt
+    // routing is not stable enough to make networking depend on MSI delivery.
     fInterruptSource = IOInterruptEventSource::interruptEventSource(
         this, &PDE1000::interruptOccurredStatic, fPCIDevice, 0);
     if (fInterruptSource && fWorkLoop->addEventSource(fInterruptSource) == kIOReturnSuccess) {
         IOLog("PDE1000: using MSI interrupt (source 0)\n");
     } else {
         if (fInterruptSource) { fInterruptSource->release(); fInterruptSource = NULL; }
-        IOLog("PDE1000: MSI registration failed, falling back to polling\n");
-        fPollTimer = IOTimerEventSource::timerEventSource(this, &PDE1000::pollTimerAction);
-        if (!fPollTimer || fWorkLoop->addEventSource(fPollTimer) != kIOReturnSuccess) {
-            IOLog("PDE1000: failed to create poll timer\n");
-            return false;
-        }
+        IOLog("PDE1000: MSI registration failed, using polling only\n");
+    }
+
+    fPollTimer = IOTimerEventSource::timerEventSource(this, &PDE1000::pollTimerAction);
+    if (!fPollTimer || fWorkLoop->addEventSource(fPollTimer) != kIOReturnSuccess) {
+        IOLog("PDE1000: failed to create poll timer\n");
+        return false;
     }
 
     // Reset the controller, then wait for it to come out of reset.
@@ -275,6 +322,8 @@ bool PDE1000::start(IOService *provider)
 
     if (!initRxRing() || !initTxRing())
         return false;
+    if (!publishLinkMedium())
+        return false;
 
     // attachInterface() creates the interface via createInterface() (overridden by
     // IOEthernetController to make an IOEthernetInterface), configures it, attaches
@@ -283,6 +332,7 @@ bool PDE1000::start(IOService *provider)
         IOLog("PDE1000: attachInterface failed\n");
         return false;
     }
+    setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive, getCurrentMedium());
 
     registerService();
     return true;
@@ -461,10 +511,46 @@ bool PDE1000::initTxRing()
     return true;
 }
 
+bool PDE1000::publishLinkMedium()
+{
+    OSDictionary *mediumDict = OSDictionary::withCapacity(2);
+    IONetworkMedium *autoMedium = NULL;
+    IONetworkMedium *gigMedium = NULL;
+    bool ok = false;
+
+    if (!mediumDict)
+        return false;
+
+    autoMedium = IONetworkMedium::medium(
+        kIOMediumEthernetAuto | kIOMediumOptionFullDuplex, 1000000000ULL);
+    gigMedium = IONetworkMedium::medium(
+        kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex, 1000000000ULL);
+
+    if (autoMedium && gigMedium &&
+        IONetworkMedium::addMedium(mediumDict, autoMedium) &&
+        IONetworkMedium::addMedium(mediumDict, gigMedium) &&
+        publishMediumDictionary(mediumDict) &&
+        setCurrentMedium(autoMedium)) {
+        ok = true;
+    }
+
+    if (gigMedium)
+        gigMedium->release();
+    if (autoMedium)
+        autoMedium->release();
+    mediumDict->release();
+
+    if (!ok)
+        IOLog("PDE1000: failed to publish link medium\n");
+    return ok;
+}
+
 IOReturn PDE1000::enable(IONetworkInterface *interface)
 {
     if (fEnabled)
         return kIOReturnSuccess;
+
+    IOLog("PDE1000: enable interface=%p\n", interface);
 
     if (fInterruptSource) {
         // RXT0 (receive timer, fires after a short delay following any RX
@@ -472,9 +558,10 @@ IOReturn PDE1000::enable(IONetworkInterface *interface)
         // to keep the RX ring drained without polling.
         regWrite(REG_IMS, (1u << 7) | (1u << 4));
         fInterruptSource->enable();
-    } else {
-        fPollTimer->setTimeoutMS(5);
     }
+    if (fPollTimer)
+        fPollTimer->setTimeoutMS(5);
+
     fEnabled = true;
     return kIOReturnSuccess;
 }
@@ -484,12 +571,15 @@ IOReturn PDE1000::disable(IONetworkInterface *interface)
     if (!fEnabled)
         return kIOReturnSuccess;
 
+    IOLog("PDE1000: disable interface=%p\n", interface);
+
     if (fInterruptSource) {
         fInterruptSource->disable();
         regWrite(REG_IMC, 0xFFFFFFFF);
-    } else {
-        fPollTimer->cancelTimeout();
     }
+    if (fPollTimer)
+        fPollTimer->cancelTimeout();
+
     fEnabled = false;
     return kIOReturnSuccess;
 }
@@ -533,12 +623,27 @@ void PDE1000::pollReceive()
         uint16_t len = desc->length;
         if (len > 0 && len <= kPDE1000RxBufferSize) {
             fRxPacketBuf[idx]->complete();
+            fRxPackets++;
+            if (fRxLogBudget) {
+                IOLog("PDE1000: RX desc=%u len=%u status=0x%02x errors=0x%02x "
+                      "rdh=%u rdt=%u\n",
+                    idx, len, desc->status, desc->errors, regRead(REG_RDH), regRead(REG_RDT));
+                logEtherFrame("RX", fRxPackets, fRxPacketBuf[idx]->getBytesNoCopy(), len);
+                fRxLogBudget--;
+            }
             mbuf_t m = allocatePacket(len);
             if (m) {
-                mbuf_copyback(m, 0, len, fRxPacketBuf[idx]->getBytesNoCopy(), MBUF_WAITOK);
+                if (mbuf_copyback(m, 0, len, fRxPacketBuf[idx]->getBytesNoCopy(), MBUF_WAITOK) == 0) {
+                    mbuf_pkthdr_setlen(m, len);
+                    mbuf_setlen(m, len);
+                }
                 fInterface->inputPacket(m, len, IONetworkInterface::kInputOptionQueuePacket);
             }
             fRxPacketBuf[idx]->prepare();
+        } else if (fRxLogBudget) {
+            IOLog("PDE1000: RX desc=%u invalid len=%u status=0x%02x errors=0x%02x\n",
+                idx, len, desc->status, desc->errors);
+            fRxLogBudget--;
         }
 
         desc->status = 0;
@@ -574,14 +679,21 @@ UInt32 PDE1000::outputPacket(mbuf_t m, void *param)
 
     mbuf_copydata(m, 0, pktLen, fTxPacketBuf[idx]->getBytesNoCopy());
     fTxPacketBuf[idx]->complete();
-    fTxPacketBuf[idx]->prepare();
 
     desc->length = (uint16_t)pktLen;
-    desc->cmd = TXDESC_CMD_EOP | TXDESC_CMD_RS;
+    desc->cmd = TXDESC_CMD_EOP | TXDESC_CMD_IFCS | TXDESC_CMD_RS;
     desc->status = 0;
+    fTxPackets++;
+    if (fTxLogBudget) {
+        IOLog("PDE1000: TX desc=%u len=%lu tdh=%u tdt=%u\n",
+            idx, (unsigned long)pktLen, regRead(REG_TDH), regRead(REG_TDT));
+        logEtherFrame("TX", fTxPackets, fTxPacketBuf[idx]->getBytesNoCopy(), pktLen);
+        fTxLogBudget--;
+    }
 
     fTxTail = (idx + 1) % kPDE1000TxDescCount;
     regWrite(REG_TDT, fTxTail);
+    (void)regRead(REG_STATUS);
 
     freePacket(m);
     return kIOReturnOutputSuccess;
@@ -635,5 +747,9 @@ const OSString *PDE1000::newModelString() const
 
 IOOutputQueue *PDE1000::createOutputQueue()
 {
-    return IOGatedOutputQueue::withTarget(this, getWorkLoop());
+    // This tree's IONetworkController does not currently start the optional
+    // IOOutputQueue during doEnable(), so a gated queue traps packets before
+    // they reach outputPacket(). Use the legacy direct output handler until the
+    // generic queue lifecycle is wired.
+    return NULL;
 }
