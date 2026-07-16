@@ -99,7 +99,7 @@ endforeach()
 add_dependencies(libSystem_B_stub
     libsystem_kernel_static libplatform_static pthread_static
     libc_static libc_internal_static libmalloc_static
-    corecrypto_static CrashReporterClient)
+    corecrypto_static CrashReporterClient libresolv_static)
 if(PUREDARWIN_USE_LD64_LLD)
     # ld64.lld resolves archive roots before its duplicate-dead-strip pass can
     # discard libsystem_kernel's _libc_funcptr dispatch wrappers. Let the real
@@ -114,7 +114,8 @@ if(PUREDARWIN_USE_LD64_LLD)
         $<TARGET_FILE:libsystem_kernel_static>
         ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/syscalls.a
         $<TARGET_FILE:corecrypto_static>
-        $<TARGET_FILE:CrashReporterClient>)
+        $<TARGET_FILE:CrashReporterClient>
+        $<TARGET_FILE:libresolv_static>)
 else()
     target_link_libraries(libSystem_B_stub PRIVATE
         $<TARGET_FILE:libsystem_kernel_static>
@@ -125,7 +126,8 @@ else()
         $<TARGET_FILE:libmalloc_static>
         ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/syscalls.a
         $<TARGET_FILE:corecrypto_static>
-        $<TARGET_FILE:CrashReporterClient>)
+        $<TARGET_FILE:CrashReporterClient>
+        $<TARGET_FILE:libresolv_static>)
 endif()
 if(TARGET libcxxabi_static)
     add_dependencies(libSystem_B_stub libcxxabi_static_build)

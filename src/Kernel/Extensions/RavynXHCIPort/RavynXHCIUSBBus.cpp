@@ -108,6 +108,12 @@ IOReturn RavynXHCIUSBBus::UIMReadWrite(IOMemoryDescriptor *buffer, USBDeviceAddr
     UInt32 len = (UInt32)buffer->getLength();
     if (!len) return kIOReturnSuccess;
 
+    if (endpoint->transferType == kUSBInterrupt) {
+        if (isWrite)
+            return kIOReturnUnsupported;
+        return fPort->interruptTransfer(slotId, endpoint->number, buffer, len, 20);
+    }
+
     IOBufferMemoryDescriptor *bounce =
         IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut, len);
     if (!bounce) return kIOReturnNoMemory;

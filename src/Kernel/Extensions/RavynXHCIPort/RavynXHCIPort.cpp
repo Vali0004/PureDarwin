@@ -28,8 +28,6 @@
 #include <kern/thread.h>
 #include "RavynXHCIPort.h"
 #include "RavynXHCIMassStorageDisk.h"
-#include "RavynXHCIKeyboard.h"
-#include "RavynXHCIMouse.h"
 #include "RavynXHCIUSBBus.h"
 #include <IOKit/usb/IOUSBDevice.h>
 
@@ -388,11 +386,9 @@ bool RavynXHCIPort::start(IOService *provider)
 
     bzero(fMSC, sizeof(fMSC));
     bzero(fDiskNubs, sizeof(fDiskNubs));
-    bzero(fKbd, sizeof(fKbd));
-    bzero(fKbdNubs, sizeof(fKbdNubs));
-    bzero(fMouse, sizeof(fMouse));
-    bzero(fMouseNubs, sizeof(fMouseNubs));
+    bzero(fIntrIn, sizeof(fIntrIn));
     bzero(fSlots, sizeof(fSlots));
+    bzero(fSlotRootPort, sizeof(fSlotRootPort));
     bzero(fPortOccupied, sizeof(fPortOccupied));
 
     fUSBBus = OSTypeAlloc(RavynXHCIUSBBus);
@@ -430,13 +426,13 @@ void RavynXHCIPort::free()
     for (int i = 0; i < 16; i++) {
         if (fDiskNubs[i]) { fDiskNubs[i]->release(); fDiskNubs[i] = NULL; }
     }
-    for (int i = 0; i < 8; i++) {
-        if (fKbdNubs[i]) { fKbdNubs[i]->release(); fKbdNubs[i] = NULL; }
-        if (fKbd[i].reportMem) { fKbd[i].reportMem->release(); fKbd[i].reportMem = NULL; }
-    }
-    for (int i = 0; i < 8; i++) {
-        if (fMouseNubs[i]) { fMouseNubs[i]->release(); fMouseNubs[i] = NULL; }
-        if (fMouse[i].reportMem) { fMouse[i].reportMem->release(); fMouse[i].reportMem = NULL; }
+    for (int slot = 0; slot < 64; slot++) {
+        for (int ep = 0; ep < 16; ep++) {
+            if (fIntrIn[slot][ep].reportMem) {
+                fIntrIn[slot][ep].reportMem->release();
+                fIntrIn[slot][ep].reportMem = NULL;
+            }
+        }
     }
     if (fWorkLoop && fInterruptSource)
         fWorkLoop->removeEventSource(fInterruptSource);
@@ -924,9 +920,17 @@ void RavynXHCIPort::scanPorts()
         /* Everything else: USB2 protocol ports and unknown protocol ports.
          * Even if a paired USB3 port is connected, enumerate this side too;
          * it may be the companion hub carrying high-/full-/low-speed
-         * devices. */
+         * devices. Exception: if the paired USB3 port was JUST enumerated
+         * in this very pass, skip - on real dual-hub silicon a companion
+         * device would show up on a later pass (it takes time to settle),
+         * not in lockstep on the same pass. QEMU's qemu-xhci instead
+         * reports CCS on both protocol views of the *same* physical port
+         * simultaneously for a single plugged device (e.g. usb-kbd/usb-
+         * mouse), which without this check double-attaches one device as
+         * two, producing doubled keystrokes/clicks. */
         for (UInt32 p = 0; p < fMaxPorts && p < 64; p++) {
             if (seen[p] || fPortMajorRev[p] == 3) continue;
+            if (fPairedPort[p] != 0xFF && fPortOccupied[fPairedPort[p]] && seen[fPairedPort[p]]) continue;
             UInt32 portsc = portRead32(p, XHCI_PORTSC);
             if (!(portsc & XHCI_PORTSC_CCS)) continue;
             seen[p] = true;
@@ -986,46 +990,26 @@ void RavynXHCIPort::handleRootPortDisconnect(UInt32 port0based, UInt32 portsc)
 {
     XHCI_Log("hotplug: Port %u disconnected, portsc=%08x", port0based, portsc);
 
-    for (int i = 0; i < 8; i++) {
-        if (fKbd[i].valid && fKbd[i].rootPort == port0based) {
-            UInt32 slotId = fKbd[i].slotId;
-            fKbd[i].valid = false;
-            fKbd[i].tdOutstanding = false;
-            if (fKbdNubs[i]) {
-                fKbdNubs[i]->stop(this);
-                fKbdNubs[i]->detach(this);
-                fKbdNubs[i]->release();
-                fKbdNubs[i] = NULL;
+    for (int slot = 1; slot < 64; slot++) {
+        bool slotOnPort = false;
+        for (int ep = 1; ep < 16; ep++) {
+            if (fIntrIn[slot][ep].valid && fIntrIn[slot][ep].rootPort == port0based) {
+                slotOnPort = true;
+                fIntrIn[slot][ep].valid = false;
+                fIntrIn[slot][ep].tdOutstanding = false;
+                if (fIntrIn[slot][ep].reportMem) {
+                    fIntrIn[slot][ep].reportMem->release();
+                    fIntrIn[slot][ep].reportMem = NULL;
+                    fIntrIn[slot][ep].reportVirt = NULL;
+                    fIntrIn[slot][ep].reportPhys = 0;
+                }
             }
-            if (fKbd[i].reportMem) {
-                fKbd[i].reportMem->release();
-                fKbd[i].reportMem = NULL;
-                fKbd[i].reportVirt = NULL;
-                fKbd[i].reportPhys = 0;
-            }
-            disableSlot(slotId);
-            freeSlotResources(slotId);
-            XHCI_Log("hotplug: Port %u removed usbkbd%d slot=%u", port0based, i, slotId);
         }
-        if (fMouse[i].valid && fMouse[i].rootPort == port0based) {
-            UInt32 slotId = fMouse[i].slotId;
-            fMouse[i].valid = false;
-            fMouse[i].tdOutstanding = false;
-            if (fMouseNubs[i]) {
-                fMouseNubs[i]->stop(this);
-                fMouseNubs[i]->detach(this);
-                fMouseNubs[i]->release();
-                fMouseNubs[i] = NULL;
-            }
-            if (fMouse[i].reportMem) {
-                fMouse[i].reportMem->release();
-                fMouse[i].reportMem = NULL;
-                fMouse[i].reportVirt = NULL;
-                fMouse[i].reportPhys = 0;
-            }
-            disableSlot(slotId);
-            freeSlotResources(slotId);
-            XHCI_Log("hotplug: Port %u removed usbmouse%d slot=%u", port0based, i, slotId);
+        if (slotOnPort) {
+            disableSlot((UInt32)slot);
+            freeSlotResources((UInt32)slot);
+            XHCI_Log("hotplug: Port %u removed generic interrupt slot=%u",
+                    port0based, slot);
         }
     }
 }
@@ -1225,6 +1209,7 @@ bool RavynXHCIPort::addressDevice(UInt32 slotId, UInt32 port0based, UInt32 route
 {
     SlotResources &sr = fSlots[slotId];
     UInt64 mask = 0xFFFFFFFFFFFFFFFFULL;
+    fSlotRootPort[slotId] = (UInt8)port0based;
 
     sr.deviceCtxMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
@@ -1487,97 +1472,76 @@ bool RavynXHCIPort::configureInterruptInEndpoint(UInt32 slotId, UInt8 epNum,
         XHCI_Log("Configure interrupt EP failed slot=%u cc=%u", slotId, cc);
         return false;
     }
+
+    InterruptInEndpoint &intr = fIntrIn[slotId][epNum & 0x0fU];
+    if (intr.reportMem) {
+        intr.reportMem->release();
+        intr.reportMem = NULL;
+    }
+    bzero(&intr, sizeof(intr));
+    UInt32 reportLen = maxPkt ? maxPkt : 8;
+    if (reportLen < 8) reportLen = 8;
+    if (reportLen > 64) reportLen = 64;
+    intr.reportMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
+        reportLen, 0xFFFFFFFFFFFFFFFFULL);
+    if (!intr.reportMem)
+        return false;
+    bzero(intr.reportMem->getBytesNoCopy(), reportLen);
+    intr.valid = true;
+    intr.slotId = slotId;
+    intr.rootPort = fSlotRootPort[slotId];
+    intr.intrEp = epNum & 0x0fU;
+    intr.intrMaxPkt = (UInt16)reportLen;
+    intr.reportVirt = (volatile UInt8 *)intr.reportMem->getBytesNoCopy();
+    intr.reportPhys = intr.reportMem->getPhysicalAddress();
     return true;
 }
 
-bool RavynXHCIPort::hidSetProtocol(UInt32 slotId, UInt8 iface, UInt8 protocol)
+IOReturn RavynXHCIPort::interruptTransfer(UInt32 slotId, UInt8 epNum,
+                                          IOMemoryDescriptor *buffer,
+                                          UInt32 len, UInt32 timeoutMs)
 {
-    USBSetupPacket setup = { USB_HID_REQTYPE_SET, USB_HID_REQ_SET_PROTOCOL,
-                             protocol, iface, 0 };
-    return controlTransfer(slotId, setup, NULL, 0, false);
-}
+    if (slotId >= 64 || epNum >= 16 || !buffer)
+        return kIOReturnBadArgument;
 
-bool RavynXHCIPort::hidSetIdle(UInt32 slotId, UInt8 iface, UInt8 duration)
-{
-    USBSetupPacket setup = { USB_HID_REQTYPE_SET, USB_HID_REQ_SET_IDLE,
-                             (UInt16)((UInt16)duration << 8), iface, 0 };
-    return controlTransfer(slotId, setup, NULL, 0, false);
-}
+    InterruptInEndpoint &intr = fIntrIn[slotId][epNum];
+    if (!intr.valid || !intr.reportMem)
+        return kIOReturnNotReady;
+    SlotResources &sr = fSlots[slotId];
+    UInt32 dci = epNum * 2 + 1;
+    UInt32 reportLen = intr.intrMaxPkt ? intr.intrMaxPkt : 8;
+    if (len && reportLen > len)
+        reportLen = len;
 
-bool RavynXHCIPort::pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutMs)
-{
-    if (kbdIdx < 0 || kbdIdx >= 8 || !fKbd[kbdIdx].valid) return false;
-    KbdDevice &k = fKbd[kbdIdx];
-    SlotResources &sr = fSlots[k.slotId];
-    UInt32 dci = k.intrEp * 2 + 1;
-
-    if (!k.tdOutstanding) {
-        /* Arm one 8-byte interrupt-IN transfer. Under SET_IDLE(0) the device
-         * only completes it when a key state changes, so we submit once and
-         * keep waiting across idle poll intervals rather than re-queuing a TD
-         * every call (which would pile up on the ring). */
+    if (!intr.tdOutstanding) {
+        bzero((void *)intr.reportVirt, intr.intrMaxPkt);
         pushTRB(sr.bulkInRing, sr.bulkInEnqueue, sr.bulkInCycle, kRingTRBs,
-                k.reportPhys, 8, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
-        ringDoorbell(k.slotId, dci);
-        k.tdOutstanding = true;
-        if (!k.loggedPollArm) {
-            XHCI_Log("usbkbd%d: armed interrupt IN slot=%u dci=%u ep=%u report=%016llx",
-                    kbdIdx, k.slotId, dci, k.intrEp, (unsigned long long)k.reportPhys);
-            k.loggedPollArm = true;
+                intr.reportPhys, intr.intrMaxPkt, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
+        ringDoorbell(slotId, dci);
+        intr.tdOutstanding = true;
+        if (!intr.loggedPollArm) {
+            XHCI_Log("intr-in: armed slot=%u dci=%u ep=%u report=%016llx",
+                    slotId, dci, epNum, (unsigned long long)intr.reportPhys);
+            intr.loggedPollArm = true;
         }
     }
 
     UInt8 cc = 0;
-    if (!waitTransferEvent(k.slotId, dci, &cc, timeoutMs))
-        return false; /* still armed; caller loops and waits again */
+    if (!waitTransferEvent(slotId, dci, &cc, timeoutMs))
+        return kIOUSBTransactionTimeout; /* still armed; caller will poll again */
 
-    k.tdOutstanding = false;
-    if (!k.loggedFirstCompletion) {
-        XHCI_Log("usbkbd%d: first interrupt completion cc=%u report=%02x %02x %02x %02x %02x %02x %02x %02x",
-                kbdIdx, cc, k.reportVirt[0], k.reportVirt[1], k.reportVirt[2], k.reportVirt[3],
-                k.reportVirt[4], k.reportVirt[5], k.reportVirt[6], k.reportVirt[7]);
-        k.loggedFirstCompletion = true;
+    intr.tdOutstanding = false;
+    if (!intr.loggedFirstCompletion) {
+        XHCI_Log("intr-in: first completion slot=%u ep=%u cc=%u report=%02x %02x %02x %02x %02x %02x %02x %02x",
+                slotId, epNum, cc, intr.reportVirt[0], intr.reportVirt[1], intr.reportVirt[2], intr.reportVirt[3],
+                intr.reportVirt[4], intr.reportVirt[5], intr.reportVirt[6], intr.reportVirt[7]);
+        intr.loggedFirstCompletion = true;
     }
     if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)
-        return false;
-    for (int i = 0; i < 8; i++) outReport[i] = k.reportVirt[i];
-    return true;
-}
-
-bool RavynXHCIPort::pollMouse(int mouseIdx, UInt8 outReport[8], UInt32 timeoutMs)
-{
-    if (mouseIdx < 0 || mouseIdx >= 8 || !fMouse[mouseIdx].valid) return false;
-    KbdDevice &m = fMouse[mouseIdx];
-    SlotResources &sr = fSlots[m.slotId];
-    UInt32 dci = m.intrEp * 2 + 1;
-
-    if (!m.tdOutstanding) {
-        pushTRB(sr.bulkInRing, sr.bulkInEnqueue, sr.bulkInCycle, kRingTRBs,
-                m.reportPhys, 8, TRB_SET_TYPE(TRB_TYPE_NORMAL) | TRB_IOC);
-        ringDoorbell(m.slotId, dci);
-        m.tdOutstanding = true;
-        if (!m.loggedPollArm) {
-            XHCI_Log("usbmouse%d: armed interrupt IN slot=%u dci=%u ep=%u report=%016llx",
-                    mouseIdx, m.slotId, dci, m.intrEp, (unsigned long long)m.reportPhys);
-            m.loggedPollArm = true;
-        }
-    }
-
-    UInt8 cc = 0;
-    if (!waitTransferEvent(m.slotId, dci, &cc, timeoutMs))
-        return false;
-
-    m.tdOutstanding = false;
-    if (!m.loggedFirstCompletion) {
-        XHCI_Log("usbmouse%d: first interrupt completion cc=%u report=%02x %02x %02x %02x %02x %02x %02x %02x",
-                mouseIdx, cc, m.reportVirt[0], m.reportVirt[1], m.reportVirt[2], m.reportVirt[3],
-                m.reportVirt[4], m.reportVirt[5], m.reportVirt[6], m.reportVirt[7]);
-        m.loggedFirstCompletion = true;
-    }
-    if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET)
-        return false;
-    for (int i = 0; i < 8; i++) outReport[i] = m.reportVirt[i];
-    return true;
+        return kIOReturnIOError;
+    buffer->writeBytes(0, (void *)intr.reportVirt, reportLen);
+    return kIOReturnSuccess;
 }
 
 /* A Normal TRB's Transfer Length is only a 17-bit field in TRB.status
@@ -1974,20 +1938,8 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
     UInt8 bulkInEp = 0, bulkOutEp = 0;
     UInt16 bulkInMaxPkt = 0, bulkOutMaxPkt = 0;
 
-    /* Also watch for a HID boot keyboard interface + its interrupt IN EP. */
-    bool foundKbd = false;
-    UInt8 kbdIface = 0, kbdIntrEp = 0, kbdInterval = 0;
-    UInt16 kbdIntrMaxPkt = 0;
-
-    /* ...and a HID boot mouse interface, same shape. */
-    bool foundMouse = false;
-    UInt8 mouseIface = 0, mouseIntrEp = 0, mouseInterval = 0;
-    UInt16 mouseIntrMaxPkt = 0;
-
     UInt32 off = 0;
     bool inMSCInterface = false;
-    bool inKbdInterface = false;
-    bool inMouseInterface = false;
     while (off + 2 <= totalLen) {
         UInt8 len = cfgBuf[off];
         UInt8 type = cfgBuf[off + 1];
@@ -1999,20 +1951,6 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
                               ifd->bInterfaceSubClass == USB_IF_SUBCLASS_SCSI &&
                               ifd->bInterfaceProtocol == USB_IF_PROTOCOL_BULK_ONLY);
             if (inMSCInterface) foundMSC = true;
-            inKbdInterface = (ifd->bInterfaceClass == USB_IF_CLASS_HID &&
-                              ifd->bInterfaceSubClass == USB_HID_SUBCLASS_BOOT &&
-                              ifd->bInterfaceProtocol == USB_HID_PROTOCOL_KEYBOARD);
-            if (inKbdInterface && !foundKbd) {
-                foundKbd = true;
-                kbdIface = ifd->bInterfaceNumber;
-            }
-            inMouseInterface = (ifd->bInterfaceClass == USB_IF_CLASS_HID &&
-                                 ifd->bInterfaceSubClass == USB_HID_SUBCLASS_BOOT &&
-                                 ifd->bInterfaceProtocol == USB_HID_PROTOCOL_MOUSE);
-            if (inMouseInterface && !foundMouse) {
-                foundMouse = true;
-                mouseIface = ifd->bInterfaceNumber;
-            }
         } else if (type == 5 /* endpoint */ && len >= sizeof(USBEndpointDescriptor)) {
             USBEndpointDescriptor *epd = (USBEndpointDescriptor *)(cfgBuf + off);
             if (inMSCInterface && (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_BULK) {
@@ -2023,50 +1961,14 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
                     bulkOutEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
                     bulkOutMaxPkt = epd->wMaxPacketSize;
                 }
-            } else if (inKbdInterface && !kbdIntrEp &&
-                       (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_INTERRUPT &&
-                       (epd->bEndpointAddress & USB_EP_DIR_IN)) {
-                kbdIntrEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
-                kbdIntrMaxPkt = epd->wMaxPacketSize;
-                kbdInterval = epd->bInterval;
-            } else if (inMouseInterface && !mouseIntrEp &&
-                       (epd->bmAttributes & USB_EP_TYPE_MASK) == USB_EP_TYPE_INTERRUPT &&
-                       (epd->bEndpointAddress & USB_EP_DIR_IN)) {
-                mouseIntrEp = epd->bEndpointAddress & USB_EP_ADDR_MASK;
-                mouseIntrMaxPkt = epd->wMaxPacketSize;
-                mouseInterval = epd->bInterval;
             }
         }
         off += len;
     }
     IOFree(cfgBuf, totalLen);
 
-    /* HID boot keyboard: configure its interrupt IN endpoint, select boot
-     * protocol + report-on-change, and publish an IOHIKeyboard nub that runs
-     * its own poll thread and feeds keys into IOBSDConsole. */
-    if (foundKbd && kbdIntrEp) {
-        XHCI_Log("slot %u: HID boot keyboard, iface=%u intrEp=%u(%u) interval=%u",
-                slotId, kbdIface, kbdIntrEp, kbdIntrMaxPkt, kbdInterval);
-        if (!configureInterruptInEndpoint(slotId, kbdIntrEp, kbdIntrMaxPkt, kbdInterval))
-            return false;
-        hidSetProtocol(slotId, kbdIface, USB_HID_PROTOCOL_BOOT);
-        hidSetIdle(slotId, kbdIface, 0);
-        return publishKeyboard(slotId, rootPort0based, kbdIntrEp, kbdIntrMaxPkt);
-    }
-
-    /* Same for a HID boot mouse. */
-    if (foundMouse && mouseIntrEp) {
-        XHCI_Log("slot %u: HID boot mouse, iface=%u intrEp=%u(%u) interval=%u",
-                slotId, mouseIface, mouseIntrEp, mouseIntrMaxPkt, mouseInterval);
-        if (!configureInterruptInEndpoint(slotId, mouseIntrEp, mouseIntrMaxPkt, mouseInterval))
-            return false;
-        hidSetProtocol(slotId, mouseIface, USB_HID_PROTOCOL_BOOT);
-        hidSetIdle(slotId, mouseIface, 0);
-        return publishMouse(slotId, rootPort0based, mouseIntrEp, mouseIntrMaxPkt);
-    }
-
     if (!foundMSC || !bulkInEp || !bulkOutEp) {
-        XHCI_Log("slot %u: no bulk-only mass storage or HID keyboard interface found", slotId);
+        XHCI_Log("slot %u: no bulk-only mass storage interface found; publishing generic USB device", slotId);
 
         /* Not one of our hand-special-cased device types - hand it to the
          * generic IOUSBController/IOUSBDevice/IOUSBInterface stack instead
@@ -2088,10 +1990,16 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
             dev->release();
             return false;
         }
+        /* Do NOT call dev->SetConfiguration() here: IOUSBCompositeDriver
+         * (matched below via registerService()) does exactly that as its
+         * entire job - "the driver itself essentially just calls
+         * SetConfiguration()" per its own header comment. Calling it
+         * ourselves too meant every generic USB device got configured
+         * twice, independently, by two different callers, each publishing
+         * its own IOUSBInterface nub for the same physical interface -
+         * observed as every USB HID device (keyboard, mouse) starting
+         * twice and producing doubled/stuck-feeling input. */
         dev->registerService();
-
-        if (dev->SetConfiguration(dev, cfgValue) != kIOReturnSuccess)
-            XHCI_Log("slot %u: SetConfiguration(%u) failed for generic device", slotId, cfgValue);
 
         return true;
     }
@@ -2130,104 +2038,6 @@ bool RavynXHCIPort::enumerateSlotDevice(UInt32 slotId, UInt32 rootPort0based, UI
         return false;
     }
     disk->registerService();
-    return true;
-}
-
-bool RavynXHCIPort::publishKeyboard(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt)
-{
-    int idx = -1;
-    for (int i = 0; i < 8; i++) if (!fKbd[i].valid) { idx = i; break; }
-    if (idx < 0) return false;
-
-    KbdDevice &k = fKbd[idx];
-    bzero(&k, sizeof(k));
-    k.reportMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut, 8,
-        0xFFFFFFFFFFFFFFFFULL);
-    if (!k.reportMem) return false;
-    bzero(k.reportMem->getBytesNoCopy(), 8);
-    k.valid       = true;
-    k.slotId      = slotId;
-    k.rootPort    = (UInt8)rootPort0based;
-    k.intrEp      = intrEp;
-    k.intrMaxPkt  = intrMaxPkt;
-    k.tdOutstanding = false;
-    k.reportVirt  = (volatile UInt8 *)k.reportMem->getBytesNoCopy();
-    k.reportPhys  = k.reportMem->getPhysicalAddress();
-
-    RavynXHCIKeyboard *kbd = new RavynXHCIKeyboard;
-    if (!kbd) { k.valid = false; return false; }
-    if (!kbd->initWithPort(this, idx) || !kbd->attach(this)) {
-        kbd->release();
-        k.valid = false;
-        return false;
-    }
-    fKbdNubs[idx] = kbd;
-    if (!kbd->start(this)) {
-        XHCI_Log("slot %u: usbkbd%d start() failed", slotId, idx);
-        kbd->detach(this);
-        kbd->release();
-        fKbdNubs[idx] = NULL;
-        k.valid = false;
-        if (k.reportMem) {
-            k.reportMem->release();
-            k.reportMem = NULL;
-            k.reportVirt = NULL;
-            k.reportPhys = 0;
-        }
-        return false;
-    }
-    kbd->registerService();
-    XHCI_Log("slot %u: usbkbd%d published", slotId, idx);
-    return true;
-}
-
-bool RavynXHCIPort::publishMouse(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt)
-{
-    int idx = -1;
-    for (int i = 0; i < 8; i++) if (!fMouse[i].valid) { idx = i; break; }
-    if (idx < 0) return false;
-
-    KbdDevice &m = fMouse[idx];
-    bzero(&m, sizeof(m));
-    m.reportMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut, 8,
-        0xFFFFFFFFFFFFFFFFULL);
-    if (!m.reportMem) return false;
-    bzero(m.reportMem->getBytesNoCopy(), 8);
-    m.valid       = true;
-    m.slotId      = slotId;
-    m.rootPort    = (UInt8)rootPort0based;
-    m.intrEp      = intrEp;
-    m.intrMaxPkt  = intrMaxPkt;
-    m.tdOutstanding = false;
-    m.reportVirt  = (volatile UInt8 *)m.reportMem->getBytesNoCopy();
-    m.reportPhys  = m.reportMem->getPhysicalAddress();
-
-    RavynXHCIMouse *mouse = new RavynXHCIMouse;
-    if (!mouse) { m.valid = false; return false; }
-    if (!mouse->initWithPort(this, idx) || !mouse->attach(this)) {
-        mouse->release();
-        m.valid = false;
-        return false;
-    }
-    fMouseNubs[idx] = mouse;
-    if (!mouse->start(this)) {
-        XHCI_Log("slot %u: usbmouse%d start() failed", slotId, idx);
-        mouse->detach(this);
-        mouse->release();
-        fMouseNubs[idx] = NULL;
-        m.valid = false;
-        if (m.reportMem) {
-            m.reportMem->release();
-            m.reportMem = NULL;
-            m.reportVirt = NULL;
-            m.reportPhys = 0;
-        }
-        return false;
-    }
-    mouse->registerService();
-    XHCI_Log("slot %u: usbmouse%d published", slotId, idx);
     return true;
 }
 

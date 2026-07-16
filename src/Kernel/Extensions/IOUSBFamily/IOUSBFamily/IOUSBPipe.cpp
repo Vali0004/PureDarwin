@@ -732,7 +732,7 @@ IOUSBPipe::Read(IOMemoryDescriptor *buffer, UInt32 noDataTimeout, UInt32 complet
 			_CORRECTSTATUS = kIOUSBPipeStalled;
 		}
 		
- 		if ( err == kIOUSBTransactionTimeout )
+ 		if ( err == kIOUSBTransactionTimeout && _endpoint.transferType != kUSBInterrupt )
 		{
 			USBLog(1, "IOUSBPipe[%p]::Read - Location: 0x%x returned a kIOUSBTransactionTimeout", this, (uint32_t)_DEVICE->_expansionData->_locationID);
 		}
@@ -1476,4 +1476,3 @@ OSMetaClassDefineReservedUnused(IOUSBPipe,  16);
 OSMetaClassDefineReservedUnused(IOUSBPipe,  17);
 OSMetaClassDefineReservedUnused(IOUSBPipe,  18);
 OSMetaClassDefineReservedUnused(IOUSBPipe,  19);
-

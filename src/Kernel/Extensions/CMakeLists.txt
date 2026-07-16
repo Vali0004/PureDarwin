@@ -11,6 +11,7 @@ endif()
 
 add_subdirectory(IOPCIFamily)
 add_subdirectory(IOStorageFamily)
+add_subdirectory(IONVMEFamily)
 add_subdirectory(IOUSBFamily)
 add_subdirectory(RavynAHCIPort)
 add_subdirectory(RavynXHCIPort)
@@ -22,10 +23,7 @@ add_subdirectory(IOGOPFramebuffer)
 add_subdirectory(IOHIDFamily)
 add_subdirectory(IONetworkingFamily)
 add_subdirectory(PDE1000)
-if(EXISTS "${CMAKE_SOURCE_DIR}/../mini-rv32ima/mini-rv32ima/mini-rv32ima.h")
-    add_subdirectory(MiniRV32IMA)
-    set(PUREDARWIN_HAVE_MINIRV32 TRUE)
-endif()
+add_subdirectory(RavynHDAudio)
 add_subdirectory(corecrypto)
 add_subdirectory(ext4)
 add_subdirectory(msdosfs)
@@ -41,17 +39,16 @@ add_subdirectory(pthread)
 # cross-compiled targets) can pull in every kext with one name.
 add_custom_target(kexts)
 add_dependencies(kexts
-    IOPCIFamily ApplePIODMA IOStorageFamily
+    IOPCIFamily ApplePIODMA IOStorageFamily IONVMEFamily.kext
     IOUSBFamily IOUSBCompositeDriver.kext AppleUSBMergeNub.kext
-    AppleUSBEHCI.kext AppleUSBOHCI.kext
+    IOUSBHIDDriver.kext
+    AppleUSBEHCI.kext AppleUSBOHCI.kext AppleUSBUHCI.kext
     RavynAHCIPort.kext RavynXHCIPort.kext
     IOGOPFramebuffer.kext IOHIDFamily.kext IONetworkingFamily.kext PDE1000.kext
+    RavynHDAudio.kext
     corecrypto.kext ext4.kext msdosfs.kext apfs.kext HFSEncodings.kext hfs.kext
     AppleFileSystemDriver.kext Ext4FileSystemDriver.kext pthread.kext
 )
-if(PUREDARWIN_HAVE_MINIRV32)
-    add_dependencies(kexts MiniRV32IMA.kext)
-endif()
 if(PUREDARWIN_ENABLE_IOGRAPHICS_FAMILY)
     add_dependencies(kexts IOGraphicsFamily.kext)
 endif()

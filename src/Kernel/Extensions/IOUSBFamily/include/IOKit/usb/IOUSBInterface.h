@@ -69,6 +69,7 @@ protected:
 		bool				_needToClose;
 		IOLock *			_pipeObjLock;				// Deprecated
 		OSSet *				_openClients;
+		IOService *			_openClient;
         UInt32              _RememberedStreams[kUSBMaxPipes];
     };
     ExpansionData * _expansionData;

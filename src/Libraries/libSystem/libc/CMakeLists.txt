@@ -139,9 +139,12 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/sethostname.c    # _sethostname (BusyBox hostname; sysctl-backed)
     net/FreeBSD/inet_ntoa.c      # _inet_ntoa
     net/inet_ntop.c              # _inet_ntop (inet_ntoa's formatter)
+    net/inet_pton.c              # _inet_pton (libresolv res_init/dns.c server-address parsing)
     string/FreeBSD/wmemcmp.c     # _wmemcmp (TRE regexec wide compares)
     string/FreeBSD/strcasestr.c  # _strcasestr (BusyBox grep -F paths)
     string/FreeBSD/strspn.c      # _strspn
+    string/FreeBSD/memmem.c      # _memmem (file(1) magic buffer scans)
+    gen/FreeBSD/fmtcheck.c       # _fmtcheck (file(1) locale-safe strerror formatting)
     secure/strcat_chk.c          # ___strcat_chk
     # POSIX regex: Apple's TRE engine (regcomp/regexec) + BSD regerror.
     regex/FreeBSD/regerror.c
@@ -184,6 +187,7 @@ target_sources(libc_static PRIVATE
     stdlib/FreeBSD/strtoull.c    # _strtoull/_strtoull_l
     stdlib/FreeBSD/rand.c        # _rand/_srand
     stdlib/FreeBSD/getopt.c      # _getopt/_optarg/_optind
+    stdlib/FreeBSD/getopt_long.c # _getopt_long/_getopt_long_only (file, curl CLI arg parsing)
     stdlib/FreeBSD/bsearch.c     # _bsearch
     gen/thread_stack_pcs.c       # _thread_stack_pcs (libmalloc's pguard/debug backtrace capture)
     gen/FreeBSD/usleep.c         # _usleep

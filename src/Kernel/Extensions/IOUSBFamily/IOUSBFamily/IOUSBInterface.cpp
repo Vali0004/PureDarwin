@@ -17,6 +17,18 @@
 
 OSDefineMetaClassAndStructors(IOUSBInterface, IOUSBNub)
 
+static bool
+matchUSBNumber(OSDictionary *table, const char *key, UInt32 value)
+{
+    OSObject *obj = table->getObject(key);
+    if (!obj)
+        return true;
+    OSNumber *num = OSDynamicCast(OSNumber, obj);
+    if (!num)
+        return false;
+    return num->unsigned32BitValue() == value;
+}
+
 IOUSBInterface *IOUSBInterface::withDescriptors(const IOUSBConfigurationDescriptor *cfDesc,
                                                  const IOUSBInterfaceDescriptor *ifDesc)
 {
@@ -75,14 +87,66 @@ bool IOUSBInterface::finalize(IOOptionBits options) { return super::finalize(opt
 bool IOUSBInterface::terminate(IOOptionBits options) { return super::terminate(options); }
 
 bool IOUSBInterface::handleIsOpen(const IOService *forClient) const { return super::handleIsOpen(forClient); }
-bool IOUSBInterface::handleOpen(IOService *forClient, IOOptionBits options, void *arg) { return super::handleOpen(forClient, options, arg); }
-void IOUSBInterface::handleClose(IOService *forClient, IOOptionBits options) { super::handleClose(forClient, options); }
+bool IOUSBInterface::handleOpen(IOService *forClient, IOOptionBits options, void *arg)
+{
+    if (!_expansionData || !forClient)
+        return false;
+    if (_expansionData->_openClient && _expansionData->_openClient != forClient)
+        return false;
+    if (!super::handleOpen(forClient, options, arg))
+        return false;
+    _expansionData->_openClient = forClient;
+    return true;
+}
+void IOUSBInterface::handleClose(IOService *forClient, IOOptionBits options)
+{
+    if (_expansionData && _expansionData->_openClient == forClient)
+        _expansionData->_openClient = NULL;
+    super::handleClose(forClient, options);
+}
 bool IOUSBInterface::open(IOService *forClient, IOOptionBits options, void *arg) { return super::open(forClient, options, arg); }
 void IOUSBInterface::close(IOService *forClient, IOOptionBits options) { super::close(forClient, options); }
 
 IOReturn IOUSBInterface::message(UInt32 type, IOService *provider, void *argument)
 {
     return super::message(type, provider, argument);
+}
+
+IOReturn IOUSBInterface::DeviceRequest(IOUSBDevRequest *request, IOUSBCompletion *completion)
+{
+    if (!_device)
+        return kIOReturnNotAttached;
+    return _device->DeviceRequest(request, completion);
+}
+
+IOReturn IOUSBInterface::DeviceRequest(IOUSBDevRequestDesc *request, IOUSBCompletion *completion)
+{
+    if (!_device)
+        return kIOReturnNotAttached;
+    return _device->DeviceRequest(request, completion);
+}
+
+bool IOUSBInterface::matchPropertyTable(OSDictionary *table, SInt32 *score)
+{
+    if (!super::matchPropertyTable(table, score))
+        return false;
+    if (!matchUSBNumber(table, kUSBInterfaceNumber, _bInterfaceNumber))
+        return false;
+    if (!matchUSBNumber(table, kUSBInterfaceClass, _bInterfaceClass))
+        return false;
+    if (!matchUSBNumber(table, kUSBInterfaceSubClass, _bInterfaceSubClass))
+        return false;
+    if (!matchUSBNumber(table, kUSBInterfaceProtocol, _bInterfaceProtocol))
+        return false;
+    if (_device) {
+        if (!matchUSBNumber(table, kUSBVendorID, _device->GetVendorID()))
+            return false;
+        if (!matchUSBNumber(table, kUSBProductID, _device->GetProductID()))
+            return false;
+        if (!matchUSBNumber(table, kUSBDeviceReleaseNumber, _device->GetDeviceRelease()))
+            return false;
+    }
+    return true;
 }
 
 void IOUSBInterface::free()
@@ -124,7 +188,7 @@ IOReturn IOUSBInterface::CreatePipes(void)
              * this interface/altsetting are exhausted. */
             break;
         }
-        if (type == kUSBEndpointDesc && len >= sizeof(IOUSBEndpointDescriptor)) {
+        if (type == kUSBEndpointDesc && len >= 7) {
             const IOUSBEndpointDescriptor *epd = (const IOUSBEndpointDescriptor *)(base + off);
             IOUSBPipe *pipe = _device->MakePipe(epd, this);
             if (pipe) {

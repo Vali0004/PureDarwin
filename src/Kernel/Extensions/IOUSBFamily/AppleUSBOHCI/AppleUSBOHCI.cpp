@@ -10,10 +10,6 @@
  * hub ports and, on connect, resets + addresses the device and hands it to
  * IOUSBController::CreateAndConfigureDevice so the normal
  * IOUSBDevice/IOUSBInterface/IOUSBCompositeDriver stack lights up.
- *
- * Scope: control transfers (enumeration) and interrupt-IN pipes, polled - no
- * hardware interrupts, no bulk/isoch, single controller. Functionality over
- * form.
  */
 
 #include <IOKit/IOLib.h>
@@ -550,7 +546,7 @@ IOReturn AppleUSBOHCI::UIMReadWrite(IOMemoryDescriptor *buffer, USBDeviceAddress
                                     Endpoint *endpoint, bool isWrite)
 {
     // A single polled interrupt-IN transfer with a short timeout. Used by the
-    // synchronous Read() path; returns kIOReturnTimeout when the device has
+    // synchronous Read() path; returns kIOUSBTransactionTimeout when the device has
     // nothing to report (e.g. an idle mouse), which callers treat as "no data".
     if (!buffer || !endpoint || isWrite)
         return kIOReturnUnsupported;
@@ -560,7 +556,8 @@ IOReturn AppleUSBOHCI::UIMReadWrite(IOMemoryDescriptor *buffer, USBDeviceAddress
     if (len == 0 || len > (kOHCIPageSize - BOUNCE_DATA_OFF)) return kIOReturnBadArgument;
 
     UInt8 epNum = endpoint->number & 0x0F;
-    UInt8 mps = gAddrMaxPkt[address] ? gAddrMaxPkt[address] : 8;
+    UInt8 mps = endpoint->maxPacketSize ? endpoint->maxPacketSize
+                                         : (gAddrMaxPkt[address] ? gAddrMaxPkt[address] : 8);
     bool  low = gAddrLow[address];
 
     volatile UInt32 *dt = tdAt(TD_INTR);
@@ -599,7 +596,7 @@ IOReturn AppleUSBOHCI::UIMReadWrite(IOMemoryDescriptor *buffer, USBDeviceAddress
     for (int i = 0; i < 32; i++) hcca[i] = 0;
 
     if (halted) return kIOReturnIOError;
-    if (!done)  return kIOReturnTimeout;
+    if (!done)  return kIOUSBTransactionTimeout;
 
     UInt32 cbp = dt[1];
     UInt32 moved = (cbp == 0) ? len : (cbp - (gBouncePhys + BOUNCE_DATA_OFF));

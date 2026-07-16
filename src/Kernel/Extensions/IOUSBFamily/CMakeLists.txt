@@ -26,6 +26,7 @@ target_include_directories(IOUSBFamilyHeaders INTERFACE
 
 add_subdirectory(IOUSBCompositeDriver)
 add_subdirectory(AppleUSBMergeNub)
+add_subdirectory(IOUSBHIDDriver)
 
 add_kext_bundle(AppleUSBEHCI.kext KERNEL_PRIVATE INFO_PLIST AppleUSBEHCI/Info.plist
     BUNDLE_IDENTIFIER com.apple.driver.AppleUSBEHCI BUNDLE_VERSION 4.1.5)
@@ -63,14 +64,7 @@ install(TARGETS AppleUSBOHCI.kext DESTINATION System/Library/Extensions COMPONEN
 add_kext_bundle(AppleUSBUHCI.kext KERNEL_PRIVATE INFO_PLIST AppleUSBUHCI/Info.plist
     BUNDLE_IDENTIFIER com.apple.driver.AppleUSBUHCI BUNDLE_VERSION 4.1.5)
 target_sources(AppleUSBUHCI.kext PRIVATE
-    AppleUSBUHCI/AppleUHCIListElement.cpp
-    AppleUSBUHCI/AppleUHCIqhMemoryBlock.cpp
-    AppleUSBUHCI/AppleUHCItdMemoryBlock.cpp
     AppleUSBUHCI/AppleUSBUHCI.cpp
-    AppleUSBUHCI/AppleUSBUHCI_Obsolete.cpp
-    AppleUSBUHCI/AppleUSBUHCI_PwrMgmt.cpp
-    AppleUSBUHCI/AppleUSBUHCI_RootHub.cpp
-    AppleUSBUHCI/AppleUSBUHCI_UIM.cpp
 )
 set_property(TARGET AppleUSBUHCI.kext PROPERTY OUTPUT_NAME AppleUSBUHCI)
 set_property(TARGET AppleUSBUHCI.kext PROPERTY CXX_STANDARD 11)

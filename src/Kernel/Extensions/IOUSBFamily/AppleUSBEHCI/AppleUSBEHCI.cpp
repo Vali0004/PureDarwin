@@ -1,5 +1,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IODMACommand.h>
+#include <kern/thread.h>
 #include "AppleUSBEHCI.h"
 
 #define super IOUSBControllerV3
@@ -40,6 +41,20 @@ bool AppleUSBEHCI::init(OSDictionary *propTable)
     _qTDMem = NULL;
     _qTDPool = NULL;
     _qTDPoolPhys = 0;
+    _periodicListMem = NULL;
+    _periodicList = NULL;
+    _periodicListPhys = 0;
+    _intrQHMem = NULL;
+    _intrQH = NULL;
+    _intrQHPhys = 0;
+    _intrTDMem = NULL;
+    _intrTDPool = NULL;
+    _intrTDPoolPhys = 0;
+    bzero(_portDevices, sizeof(_portDevices));
+    bzero(_addrMaxPacket, sizeof(_addrMaxPacket));
+    bzero(_intrDataToggle, sizeof(_intrDataToggle));
+    _nextAddress = 1;
+    _enumRunning = false;
     return true;
 }
 
@@ -93,17 +108,40 @@ bool AppleUSBEHCI::start(IOService *provider)
         EHCI_Log("async schedule allocation failed");
         return false;
     }
+    if (!setupPeriodicSchedule()) {
+        EHCI_Log("periodic schedule allocation failed");
+        return false;
+    }
 
     EHCI_Log("after reset USBCMD=%08x USBSTS=%08x USBINTR=%08x CONFIGFLAG=%08x",
              opRead32(kEHCIUSBCmd), opRead32(kEHCIUSBSts),
              opRead32(kEHCIUSBIntr), opRead32(kEHCIConfigFlag));
 
-    EHCI_Log("register bring-up complete; async schedule allocated, EP0 not queued yet");
-    return false;
+    opWrite32(kEHCIConfigFlag, 1);
+    if (!runController(true)) {
+        EHCI_Log("controller failed to run");
+        return false;
+    }
+    enablePeriodicSchedule(true);
+
+    _uimInitialized = true;
+    _enumRunning = true;
+    thread_t thread = THREAD_NULL;
+    if (kernel_thread_start((thread_continue_t)&AppleUSBEHCI::enumThreadEntry,
+                            this, &thread) == KERN_SUCCESS) {
+        thread_deallocate(thread);
+    } else {
+        EHCI_Log("failed to start enumeration thread");
+    }
+
+    registerService();
+    EHCI_Log("started");
+    return true;
 }
 
 void AppleUSBEHCI::stop(IOService *provider)
 {
+    _enumRunning = false;
     UIMFinalize();
     super::stop(provider);
 }
@@ -374,6 +412,51 @@ bool AppleUSBEHCI::setupAsyncSchedule(void)
     return true;
 }
 
+bool AppleUSBEHCI::setupPeriodicSchedule(void)
+{
+    _periodicListMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
+        kEHCIPageSize, 0x00000000fffff000ULL);
+    _intrQHMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
+        kEHCIPageSize, 0x00000000fffff000ULL);
+    _intrTDMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
+        kEHCIPageSize, 0x00000000fffff000ULL);
+    if (!_periodicListMem || !_intrQHMem || !_intrTDMem)
+        return false;
+    if (_periodicListMem->prepare() != kIOReturnSuccess ||
+        _intrQHMem->prepare() != kIOReturnSuccess ||
+        _intrTDMem->prepare() != kIOReturnSuccess)
+        return false;
+
+    _periodicList = (volatile USBPhysicalAddress32 *)_periodicListMem->getBytesNoCopy();
+    _periodicListPhys = (USBPhysicalAddress32)_periodicListMem->getPhysicalAddress();
+    _intrQH = (EHCIQueueHeadSharedPtr)_intrQHMem->getBytesNoCopy();
+    _intrQHPhys = (USBPhysicalAddress32)_intrQHMem->getPhysicalAddress();
+    _intrTDPool = (EHCIGeneralTransferDescriptorSharedPtr)_intrTDMem->getBytesNoCopy();
+    _intrTDPoolPhys = (USBPhysicalAddress32)_intrTDMem->getPhysicalAddress();
+    bzero((void *)_periodicList, kEHCIPageSize);
+    bzero(_intrQH, kEHCIPageSize);
+    bzero(_intrTDPool, kEHCIPageSize);
+
+    for (UInt32 i = 0; i < kEHCIFrameListEntries; i++)
+        _periodicList[i] = HostToUSBLong((_intrQHPhys & kEHCILinkPointerMask) | kEHCILinkTypeQH);
+
+    _intrQH->horizLinkPtr = HostToUSBLong(kEHCILinkTerminate);
+    _intrQH->endpointCaps = HostToUSBLong(kEHCIQHEndpointSpeedHigh | (8U << kEHCIQHMaxPacketShift));
+    _intrQH->endpointSplitCaps = HostToUSBLong(1U << kEHCIQHMultShift);
+    _intrQH->currentqTDPtr = 0;
+    _intrQH->nextqTDPtr = HostToUSBLong(kEHCIqTDTerminate);
+    _intrQH->altqTDPtr = HostToUSBLong(kEHCIqTDTerminate);
+    _intrQH->qTDFlags = HostToUSBLong(kEHCIqTDStatusHalted);
+
+    opWrite32(kEHCIPeriodicListBase, _periodicListPhys);
+    EHCI_Log("periodic schedule fl=%08x intrQH=%08x intrTD=%08x",
+             _periodicListPhys, _intrQHPhys, _intrTDPoolPhys);
+    return true;
+}
+
 bool AppleUSBEHCI::enableAsyncSchedule(bool enable)
 {
     UInt32 cmd = opRead32(kEHCIUSBCmd);
@@ -385,6 +468,24 @@ bool AppleUSBEHCI::enableAsyncSchedule(bool enable)
 
     for (int i = 0; i < 100; i++) {
         bool status = (opRead32(kEHCIUSBSts) & kEHCIUSBStsAsyncStatus) != 0;
+        if (status == enable)
+            return true;
+        IOSleep(10);
+    }
+    return false;
+}
+
+bool AppleUSBEHCI::enablePeriodicSchedule(bool enable)
+{
+    UInt32 cmd = opRead32(kEHCIUSBCmd);
+    if (enable)
+        cmd |= kEHCIUSBCmdPeriodicEnable;
+    else
+        cmd &= ~kEHCIUSBCmdPeriodicEnable;
+    opWrite32(kEHCIUSBCmd, cmd);
+
+    for (int i = 0; i < 100; i++) {
+        bool status = (opRead32(kEHCIUSBSts) & kEHCIUSBStsPeriodicStatus) != 0;
         if (status == enable)
             return true;
         IOSleep(10);
@@ -610,6 +711,201 @@ IOReturn AppleUSBEHCI::controlTransfer(USBDeviceAddress address,
     return ret;
 }
 
+IOReturn AppleUSBEHCI::interruptTransfer(IOMemoryDescriptor *buffer,
+                                         USBDeviceAddress address,
+                                         Endpoint *endpoint)
+{
+    if (!_intrQH || !_intrTDPool || !buffer || !endpoint)
+        return kIOReturnBadArgument;
+    if (endpoint->direction != kUSBIn || endpoint->transferType != kUSBInterrupt)
+        return kIOReturnUnsupported;
+
+    UInt32 length = (UInt32)buffer->getLength();
+    if (!length)
+        return kIOReturnBadArgument;
+    if (length > endpoint->maxPacketSize && endpoint->maxPacketSize)
+        length = endpoint->maxPacketSize;
+
+    IOBufferMemoryDescriptor *dataMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIOMemoryPhysicallyContiguous | kIODirectionInOut,
+        length, 0x00000000ffffffffULL);
+    if (!dataMem || dataMem->prepare() != kIOReturnSuccess) {
+        if (dataMem)
+            dataMem->release();
+        return kIOReturnNoMemory;
+    }
+    bzero(dataMem->getBytesNoCopy(), length);
+
+    EHCIGeneralTransferDescriptorSharedPtr td = &_intrTDPool[0];
+    USBPhysicalAddress32 tdPhys = _intrTDPoolPhys;
+    UInt8 epNum = endpoint->number & 0x0fU;
+    UInt8 toggle = _intrDataToggle[address & 0x7fU][epNum];
+
+    fillQTD(td, 0, kEHCIqTDPIDIn, toggle, (USBPhysicalAddress32)dataMem->getPhysicalAddress(),
+            length, true);
+
+    _intrQH->endpointCaps = HostToUSBLong(((UInt32)address & 0x7fU) |
+                                          ((UInt32)epNum << 8) |
+                                          kEHCIQHEndpointSpeedHigh |
+                                          ((UInt32)(endpoint->maxPacketSize ? endpoint->maxPacketSize : 8)
+                                           << kEHCIQHMaxPacketShift));
+    _intrQH->endpointSplitCaps = HostToUSBLong(1U << kEHCIQHMultShift);
+    _intrQH->currentqTDPtr = 0;
+    _intrQH->nextqTDPtr = HostToUSBLong(tdPhys);
+    _intrQH->altqTDPtr = HostToUSBLong(kEHCIqTDTerminate);
+    _intrQH->qTDFlags = 0;
+    for (int i = 0; i < 5; i++) {
+        _intrQH->bufferPtr[i] = 0;
+        _intrQH->extBufferPtr[i] = 0;
+    }
+    __asm__ __volatile__("mfence" : : : "memory");
+
+    IOReturn ret = waitForQTD(td, 20);
+    UInt32 token = USBToHostLong(td->flags);
+    _intrQH->nextqTDPtr = HostToUSBLong(kEHCIqTDTerminate);
+    _intrQH->qTDFlags = HostToUSBLong(kEHCIqTDStatusHalted);
+
+    if (ret == kIOReturnTimeout) {
+        ret = kIOUSBTransactionTimeout;
+    } else if (ret == kIOReturnSuccess && (token & kEHCIqTDStatusHalted)) {
+        ret = kIOReturnIOError;
+    } else if (ret == kIOReturnSuccess) {
+        UInt32 remaining = (token & kEHCIqTDBytesMask) >> kEHCIqTDBytesShift;
+        UInt32 moved = length - remaining;
+        if (moved) {
+            buffer->writeBytes(0, dataMem->getBytesNoCopy(), moved);
+            _intrDataToggle[address & 0x7fU][epNum] ^= 1;
+        } else {
+            ret = kIOUSBTransactionTimeout;
+        }
+    }
+
+    dataMem->complete();
+    dataMem->release();
+    return ret;
+}
+
+UInt32 AppleUSBEHCI::portRead32(UInt32 port)
+{
+    return opRead32(kEHCIPortSCBase + (port - 1) * 4);
+}
+
+void AppleUSBEHCI::portWrite32(UInt32 port, UInt32 value)
+{
+    opWrite32(kEHCIPortSCBase + (port - 1) * 4, value);
+}
+
+void AppleUSBEHCI::enumThreadEntry(void *arg, wait_result_t)
+{
+    ((AppleUSBEHCI *)arg)->enumThreadLoop();
+    thread_terminate(current_thread());
+}
+
+void AppleUSBEHCI::enumThreadLoop(void)
+{
+    IOSleep(300);
+    while (_enumRunning) {
+        for (UInt32 port = 1; port <= _rootHubPorts && port < 16; port++) {
+            UInt32 status = portRead32(port);
+            if (status & kEHCIPortSCChangeMask)
+                portWrite32(port, status);
+
+            bool connected = (status & kEHCIPortSCConnect) != 0;
+            if (connected && !_portDevices[port]) {
+                enumeratePort(port);
+            } else if (!connected && _portDevices[port]) {
+                EHCI_Log("port %u disconnect", port);
+                _portDevices[port]->terminate();
+                _portDevices[port]->release();
+                _portDevices[port] = NULL;
+            }
+        }
+        IOSleep(256);
+    }
+}
+
+void AppleUSBEHCI::enumeratePort(UInt32 port)
+{
+    UInt32 status = portRead32(port);
+    if (!(status & kEHCIPortSCConnect))
+        return;
+
+    if (!(status & kEHCIPortSCPower))
+        portWrite32(port, (status & ~kEHCIPortSCChangeMask) | kEHCIPortSCPower);
+
+    portWrite32(port, (portRead32(port) & ~kEHCIPortSCChangeMask) | kEHCIPortSCReset);
+    IOSleep(60);
+    portWrite32(port, portRead32(port) & ~(UInt32)(kEHCIPortSCReset | kEHCIPortSCChangeMask));
+    IOSleep(20);
+
+    status = portRead32(port);
+    if (!(status & kEHCIPortSCConnect)) {
+        EHCI_Log("port %u disconnected during reset", port);
+        return;
+    }
+    if (!(status & kEHCIPortSCEnabled)) {
+        EHCI_Log("port %u not high-speed after reset, handing to companion status=%08x",
+                 port, status);
+        portWrite32(port, (status & ~kEHCIPortSCChangeMask) | kEHCIPortSCOwner);
+        return;
+    }
+
+    _addrMaxPacket[0] = 64;
+    IOUSBDeviceDescriptor devdesc;
+    bzero(&devdesc, sizeof(devdesc));
+    IOUSBDevRequest req;
+    bzero(&req, sizeof(req));
+    req.bmRequestType = 0x80;
+    req.bRequest = kUSBRqGetDescriptor;
+    req.wValue = kUSBDeviceDesc << 8;
+    req.wIndex = 0;
+    req.wLength = 8;
+    req.pData = &devdesc;
+    if (controlTransfer(0, &req) != kIOReturnSuccess || req.wLenDone < 8) {
+        EHCI_Log("port %u GET_DESCRIPTOR(8) failed", port);
+        return;
+    }
+
+    UInt8 maxPkt0 = devdesc.bMaxPacketSize0 ? devdesc.bMaxPacketSize0 : 64;
+    UInt8 newAddr = _nextAddress++;
+    if (_nextAddress > 127)
+        _nextAddress = 1;
+
+    bzero(&req, sizeof(req));
+    req.bmRequestType = 0x00;
+    req.bRequest = kUSBRqSetAddress;
+    req.wValue = newAddr;
+    if (controlTransfer(0, &req) != kIOReturnSuccess) {
+        EHCI_Log("port %u SET_ADDRESS(%u) failed", port, newAddr);
+        return;
+    }
+    IOSleep(2);
+
+    _addrMaxPacket[newAddr] = maxPkt0;
+    IOUSBDevice *dev = CreateAndConfigureDevice(newAddr, kUSBDeviceSpeedHigh, maxPkt0);
+    if (!dev) {
+        EHCI_Log("port %u CreateAndConfigureDevice failed", port);
+        return;
+    }
+    if (!dev->attach(this)) {
+        dev->release();
+        return;
+    }
+    if (!dev->start(this)) {
+        dev->detach(this);
+        dev->release();
+        return;
+    }
+    dev->registerService();
+
+    if (dev->SetConfiguration(dev, 1) != kIOReturnSuccess)
+        EHCI_Log("port %u SetConfiguration failed (continuing)", port);
+
+    _portDevices[port] = dev;
+    EHCI_Log("port %u device %u published vid=%04x pid=%04x",
+             port, newAddr, dev->GetVendorID(), dev->GetProductID());
+}
+
 void AppleUSBEHCI::releaseAsyncSchedule(void)
 {
     if (_qTDMem) {
@@ -628,10 +924,36 @@ void AppleUSBEHCI::releaseAsyncSchedule(void)
     _qTDPoolPhys = 0;
 }
 
+void AppleUSBEHCI::releasePeriodicSchedule(void)
+{
+    if (_intrTDMem) {
+        _intrTDMem->complete();
+        _intrTDMem->release();
+        _intrTDMem = NULL;
+    }
+    if (_intrQHMem) {
+        _intrQHMem->complete();
+        _intrQHMem->release();
+        _intrQHMem = NULL;
+    }
+    if (_periodicListMem) {
+        _periodicListMem->complete();
+        _periodicListMem->release();
+        _periodicListMem = NULL;
+    }
+    _periodicList = NULL;
+    _periodicListPhys = 0;
+    _intrQH = NULL;
+    _intrQHPhys = 0;
+    _intrTDPool = NULL;
+    _intrTDPoolPhys = 0;
+}
+
 void AppleUSBEHCI::releaseHardwareResources(void)
 {
     if (_opRegs)
         haltController();
+    releasePeriodicSchedule();
     releaseAsyncSchedule();
     if (_deviceBase) {
         _deviceBase->release();
@@ -649,14 +971,20 @@ void AppleUSBEHCI::releaseHardwareResources(void)
     _opRegs = NULL;
 }
 
-IOReturn AppleUSBEHCI::UIMOpenPipe(USBDeviceAddress, UInt8, Endpoint *)
+IOReturn AppleUSBEHCI::UIMOpenPipe(USBDeviceAddress, UInt8, Endpoint *endpoint)
 {
+    if (!endpoint)
+        return kIOReturnSuccess;
+    if (endpoint->transferType == kUSBInterrupt && endpoint->direction == kUSBIn)
+        return kIOReturnSuccess;
+    if (endpoint->transferType == kUSBControl)
+        return kIOReturnSuccess;
     return kIOReturnUnsupported;
 }
 
 IOReturn AppleUSBEHCI::UIMClosePipe(USBDeviceAddress, Endpoint *)
 {
-    return kIOReturnUnsupported;
+    return kIOReturnSuccess;
 }
 
 IOReturn AppleUSBEHCI::UIMAbortPipe(USBDeviceAddress, Endpoint *)
@@ -674,10 +1002,12 @@ IOReturn AppleUSBEHCI::UIMDeviceRequest(IOUSBDevRequest *request, USBDeviceAddre
     return controlTransfer(address, request);
 }
 
-IOReturn AppleUSBEHCI::UIMReadWrite(IOMemoryDescriptor *, USBDeviceAddress,
-                                    Endpoint *, bool)
+IOReturn AppleUSBEHCI::UIMReadWrite(IOMemoryDescriptor *buffer, USBDeviceAddress address,
+                                    Endpoint *endpoint, bool isWrite)
 {
-    return kIOReturnUnsupported;
+    if (isWrite)
+        return kIOReturnUnsupported;
+    return interruptTransfer(buffer, address, endpoint);
 }
 
 IOReturn AppleUSBEHCI::UIMInitialize(IOService *)
@@ -687,6 +1017,10 @@ IOReturn AppleUSBEHCI::UIMInitialize(IOService *)
 
 IOReturn AppleUSBEHCI::UIMFinalize()
 {
+    _enumRunning = false;
+    enablePeriodicSchedule(false);
+    enableAsyncSchedule(false);
+    runController(false);
     _uimInitialized = false;
     return kIOReturnSuccess;
 }

@@ -41,8 +41,7 @@ enum {
 /*!
     @class IOUSBHubDevice
     @abstract New in MAC OS X 10.5. The IOKit object representing a hub device on the USB bus. It is a subclass of IOUSBDevice.
-    @discussion With the exception of the IOUSBRootHubDevice objects representing the root hubs, every IOUSBDevice
-	will have an IOUSBHubDevice as its parent in the IOUSB plane. USB KEXT drivers will have the ability to 
+    @discussion Hub-attached devices will have an IOUSBHubDevice as their parent in the IOUSB plane. USB KEXT drivers will have the ability to 
 	query this device for characteristics of the hub into which they are connected. This class will also give a dive driver
 	the abilty to get an IOService* pointing to the hub driver itself, which can then be used as the parent in the power plane.
 */

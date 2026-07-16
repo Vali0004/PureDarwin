@@ -7,6 +7,7 @@
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/usb/IOUSBCommand.h>
 #include <IOKit/usb/IOUSBControllerV3.h>
+#include <IOKit/usb/IOUSBDevice.h>
 
 #include "USBEHCI.h"
 
@@ -122,6 +123,20 @@ protected:
     IOBufferMemoryDescriptor *_qTDMem;
     EHCIGeneralTransferDescriptorSharedPtr _qTDPool;
     USBPhysicalAddress32 _qTDPoolPhys;
+    IOBufferMemoryDescriptor *_periodicListMem;
+    volatile USBPhysicalAddress32 *_periodicList;
+    USBPhysicalAddress32 _periodicListPhys;
+    IOBufferMemoryDescriptor *_intrQHMem;
+    EHCIQueueHeadSharedPtr _intrQH;
+    USBPhysicalAddress32 _intrQHPhys;
+    IOBufferMemoryDescriptor *_intrTDMem;
+    EHCIGeneralTransferDescriptorSharedPtr _intrTDPool;
+    USBPhysicalAddress32 _intrTDPoolPhys;
+    IOUSBDevice *_portDevices[16];
+    UInt8 _addrMaxPacket[128];
+    UInt8 _intrDataToggle[128][16];
+    UInt8 _nextAddress;
+    bool _enumRunning;
 
     UInt8 capRead8(UInt32 offset);
     UInt16 capRead16(UInt32 offset);
@@ -133,8 +148,10 @@ protected:
     bool haltController(void);
     bool resetController(void);
     bool setupAsyncSchedule(void);
+    bool setupPeriodicSchedule(void);
     bool runController(bool run);
     bool enableAsyncSchedule(bool enable);
+    bool enablePeriodicSchedule(bool enable);
     EHCIGeneralTransferDescriptorSharedPtr qTDAt(UInt32 index);
     USBPhysicalAddress32 qTDPhys(UInt32 index);
     void setQTDBuffer(EHCIGeneralTransferDescriptorSharedPtr qtd,
@@ -145,7 +162,15 @@ protected:
     IOReturn waitForQTD(EHCIGeneralTransferDescriptorSharedPtr qtd,
                         UInt32 timeoutMs);
     IOReturn controlTransfer(USBDeviceAddress address, IOUSBDevRequest *request);
+    IOReturn interruptTransfer(IOMemoryDescriptor *buffer, USBDeviceAddress address,
+                               Endpoint *endpoint);
+    static void enumThreadEntry(void *arg, wait_result_t);
+    void enumThreadLoop(void);
+    void enumeratePort(UInt32 port);
+    UInt32 portRead32(UInt32 port);
+    void portWrite32(UInt32 port, UInt32 value);
     void releaseAsyncSchedule(void);
+    void releasePeriodicSchedule(void);
     void releaseHardwareResources(void);
 };
 

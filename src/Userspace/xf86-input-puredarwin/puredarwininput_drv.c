@@ -1,9 +1,8 @@
 /*
  * xf86-input-puredarwin: loadable Xorg input driver for PureDarwin.
  *
- * The USB HID drivers (RavynXHCIKeyboard / RavynXHCIMouse) expose raw event
- * streams as character devices: /dev/xhci_mouse (XHCIMouseEvent) and
- * /dev/xhci_kbd (XHCIKbdEvent). A userspace X server can't read the in-kernel
+ * The generic USB HID driver exposes raw event streams as character devices:
+ * /dev/usb_hid_mouse and /dev/usb_hid_kbd. A userspace X server can't read the in-kernel
  * IOHIDSystem, so this driver polls those char devices and re-posts the events
  * through the xf86 input API.
  *
@@ -25,8 +24,8 @@
 #include "xkbsrv.h"
 #include <X11/keysym.h>
 
-/* Must match RavynXHCIMouse.cpp / RavynXHCIKeyboard.cpp. */
-struct XHCIMouseEvent {
+/* Must match IOUSBHIDDriver's userspace event structs. */
+struct USBHIDMouseEvent {
     uint32_t sequence;
     uint8_t  mouseIndex;
     uint8_t  buttons;
@@ -36,7 +35,7 @@ struct XHCIMouseEvent {
     uint8_t  reserved[3];
 };
 
-struct XHCIKbdEvent {
+struct USBHIDKbdEvent {
     uint32_t sequence;
     uint8_t  usage;   /* USB HID usage */
     uint8_t  down;
@@ -106,7 +105,7 @@ PDReadInput(InputInfoPtr pInfo)
     PDInputPrivPtr priv = pInfo->private;
 
     if (priv->type == PD_MOUSE) {
-        struct XHCIMouseEvent ev;
+        struct USBHIDMouseEvent ev;
         while (read(pInfo->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
             uint8_t changed = ev.buttons ^ priv->lastButtons;
             int rel[2] = { ev.dx, ev.dy };
@@ -132,7 +131,7 @@ PDReadInput(InputInfoPtr pInfo)
             priv->lastButtons = ev.buttons;
         }
     } else {
-        struct XHCIKbdEvent ev;
+        struct USBHIDKbdEvent ev;
         while (read(pInfo->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
             uint16_t evdev = usbToEvdev[ev.usage];
             if (evdev)
@@ -210,11 +209,11 @@ PDPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
     typeStr = xf86SetStrOption(pInfo->options, "PDType", "mouse");
     if (typeStr && !strcasecmp(typeStr, "keyboard")) {
         priv->type = PD_KEYBOARD;
-        priv->device = xf86SetStrOption(pInfo->options, "Device", "/dev/xhci_kbd");
+        priv->device = xf86SetStrOption(pInfo->options, "Device", "/dev/usb_hid_kbd");
         pInfo->type_name = XI_KEYBOARD;
     } else {
         priv->type = PD_MOUSE;
-        priv->device = xf86SetStrOption(pInfo->options, "Device", "/dev/xhci_mouse");
+        priv->device = xf86SetStrOption(pInfo->options, "Device", "/dev/usb_hid_mouse");
         pInfo->type_name = XI_MOUSE;
     }
 

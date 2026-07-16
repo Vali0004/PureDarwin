@@ -130,6 +130,11 @@ CMakeCache.txt
 *.hfs
 *.fd
 
+# Local test media
+*.pcm
+*.mp3
+*.wav
+
 # Nix files
 result*
 */output.txt

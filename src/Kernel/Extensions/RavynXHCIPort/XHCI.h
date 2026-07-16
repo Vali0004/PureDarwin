@@ -328,22 +328,6 @@ typedef struct {
 #define USB_IF_SUBCLASS_SCSI        0x06
 #define USB_IF_PROTOCOL_BULK_ONLY   0x50
 
-/* USB HID class (interface class 0x03): a boot-protocol keyboard
- * (bInterfaceSubClass=1 boot, bInterfaceProtocol=1 keyboard) delivers fixed
- * 8-byte reports on an interrupt IN endpoint, which is all a text console
- * needs - no report-descriptor parsing required. */
-#define USB_IF_CLASS_HID            0x03
-#define USB_HID_SUBCLASS_BOOT       0x01
-#define USB_HID_PROTOCOL_KEYBOARD   0x01
-#define USB_HID_PROTOCOL_MOUSE      0x02
-#define USB_EP_TYPE_INTERRUPT       0x03
-/* HID class-specific requests (bmRequestType 0x21 = host->device, class,
- * interface recipient). SET_PROTOCOL wValue 0 selects the boot protocol;
- * SET_IDLE wValue 0 = report only on state change (no periodic duplicates). */
-#define USB_HID_REQTYPE_SET         0x21
-#define USB_HID_REQ_SET_IDLE        0x0A
-#define USB_HID_REQ_SET_PROTOCOL    0x0B
-#define USB_HID_PROTOCOL_BOOT       0x00
 /* xHCI Endpoint Context Type for an interrupt IN endpoint (Table 6-9). */
 #define EP_TYPE_INTERRUPT_IN        7
 

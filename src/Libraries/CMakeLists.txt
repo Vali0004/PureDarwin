@@ -5,6 +5,7 @@ foreach(_puredarwin_library_dir
     CommonCrypto
     clang_bootstrap
     libSystem
+    libresolv
     libcxxabi
     dyld
     IOKit

@@ -16,7 +16,7 @@ add_darwin_shared_library(puredarwininput_drv
     INSTALL_NAME /usr/lib/xorg/modules/input/puredarwininput_drv.so)
 
 # Xorg's loader looks the module up as "<name>_drv"; strip CMake's "lib".
-set_target_properties(puredarwininput_drv PROPERTIES PREFIX "")
+set_target_properties(puredarwininput_drv PROPERTIES PREFIX "" SUFFIX ".so")
 
 # xf86 server symbols (xf86PostMotionEventP, InitPointerDeviceStruct, ...)
 # resolve at dlopen from the already-loaded Xorg image. Leave them undefined

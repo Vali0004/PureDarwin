@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
-struct XHCIMouseEvent {
+struct USBHIDMouseEvent {
 	uint32_t sequence;
 	uint8_t mouseIndex;
 	uint8_t buttons;
@@ -18,7 +18,7 @@ struct XHCIMouseEvent {
 int
 main(int argc, char **argv)
 {
-	const char *path = "/dev/xhci_mouse";
+	const char *path = "/dev/usb_hid_mouse";
 	int fd;
 
 	if (argc > 1) {
@@ -34,7 +34,7 @@ main(int argc, char **argv)
 
 	printf("mousemon: reading %s\n", path);
 	for (;;) {
-		struct XHCIMouseEvent event;
+		struct USBHIDMouseEvent event;
 		ssize_t n = read(fd, &event, sizeof(event));
 
 		if (n == (ssize_t)sizeof(event)) {

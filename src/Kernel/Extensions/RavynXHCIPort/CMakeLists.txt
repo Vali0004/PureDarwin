@@ -7,8 +7,6 @@ set_property(TARGET RavynXHCIPort.kext PROPERTY OUTPUT_NAME RavynXHCIPort)
 target_sources(RavynXHCIPort.kext PRIVATE
     RavynXHCIPort.cpp
     RavynXHCIMassStorageDisk.cpp
-    RavynXHCIKeyboard.cpp
-    RavynXHCIMouse.cpp
     RavynXHCIUSBBus.cpp
 )
 

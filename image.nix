@@ -13,6 +13,7 @@
 , espMB ? 64
 , rootMB ? 640
 , apfsMB ? 128
+, testAudioFile ? null
 }:
 
 assert lib.isDerivation baseSystem;
@@ -205,6 +206,10 @@ EOF
       $staging/var/root/.zshrc
     chmod 755 $staging/etc/init/rc.boot
 
+    ${lib.optionalString (testAudioFile != null) ''
+      cp ${testAudioFile} $staging/badapple.pcm
+    ''}
+
     # Xorg config selecting the PureDarwin GOP framebuffer driver. No input
     # autodetection (no udev/hal on PD); the driver reads its geometry live
     # from IOGOPFramebuffer, so no Modeline/resolution is needed here.
@@ -238,14 +243,14 @@ Section "InputDevice"
     Identifier "Mouse0"
     Driver     "puredarwininput"
     Option     "PDType" "mouse"
-    Option     "Device" "/dev/xhci_mouse"
+    Option     "Device" "/dev/usb_hid_mouse"
 EndSection
 
 Section "InputDevice"
     Identifier "Keyboard0"
     Driver     "puredarwininput"
     Option     "PDType" "keyboard"
-    Option     "Device" "/dev/xhci_kbd"
+    Option     "Device" "/dev/usb_hid_kbd"
 EndSection
 
 Section "ServerLayout"
@@ -372,12 +377,11 @@ EOF
 
     dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
 
-    # I think this causes problems, so let's remove it for now
-    #truncate -s $((apfs_size * 512)) apfs.img
-    #mkapfs -L apfs-test apfs.img >/dev/null
-    #$CC -std=c99 -Wall -Wextra -O2 ${./tools/apfs_fixture.c} -o apfs-fixture
-    #./apfs-fixture apfs.img
-    #dd if=apfs.img of=$img bs=512 seek=$apfs_start count=$apfs_size conv=notrunc status=none
+    truncate -s $((apfs_size * 512)) apfs.img
+    mkapfs -L apfs-test apfs.img >/dev/null
+    $CC -std=c99 -Wall -Wextra -O2 ${./tools/apfs_fixture.c} -o apfs-fixture
+    ./apfs-fixture apfs.img
+    dd if=apfs.img of=$img bs=512 seek=$apfs_start count=$apfs_size conv=notrunc status=none
 
     runHook postBuild
   '';

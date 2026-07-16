@@ -37,7 +37,8 @@ enum {
     kEHCICtrlDSegment = 0x10,
     kEHCIPeriodicListBase = 0x14,
     kEHCIAsyncListAddr = 0x18,
-    kEHCIConfigFlag = 0x40
+    kEHCIConfigFlag = 0x40,
+    kEHCIPortSCBase = 0x44
 };
 
 enum {
@@ -48,7 +49,24 @@ enum {
     kEHCIUSBCmdAsyncEnable = 1U << 5,
 
     kEHCIUSBStsHalted = 1U << 12,
+    kEHCIUSBStsPeriodicStatus = 1U << 14,
     kEHCIUSBStsAsyncStatus = 1U << 15
+};
+
+enum {
+    kEHCIPortSCConnect = 1U << 0,
+    kEHCIPortSCConnectChange = 1U << 1,
+    kEHCIPortSCEnabled = 1U << 2,
+    kEHCIPortSCEnableChange = 1U << 3,
+    kEHCIPortSCOverCurrentChange = 1U << 5,
+    kEHCIPortSCReset = 1U << 8,
+    kEHCIPortSCPower = 1U << 12,
+    kEHCIPortSCOwner = 1U << 13,
+    kEHCIPortSCResetChange = 1U << 20,
+    kEHCIPortSCChangeMask = kEHCIPortSCConnectChange |
+                            kEHCIPortSCEnableChange |
+                            kEHCIPortSCOverCurrentChange |
+                            kEHCIPortSCResetChange
 };
 
 enum {
@@ -61,7 +79,9 @@ enum {
     kEHCIQHEndpointSpeedHigh = 2U << 12,
     kEHCIQHDTC = 1U << 14,
     kEHCIQHHead = 1U << 15,
-    kEHCIQHMaxPacketShift = 16
+    kEHCIQHMaxPacketShift = 16,
+    kEHCIQHCMaskShift = 8,
+    kEHCIQHMultShift = 30
 };
 
 enum {

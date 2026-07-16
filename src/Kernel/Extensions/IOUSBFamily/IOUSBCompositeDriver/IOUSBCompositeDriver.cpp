@@ -142,10 +142,10 @@ IOUSBCompositeDriver::init(OSDictionary * propTable)
     // allocate our expansion data
     if (!fIOUSBCompositeExpansionData)
     {
-		fIOUSBCompositeExpansionData = (IOUSBCompositeDriverExpansionData *)IOMalloc(sizeof(fIOUSBCompositeExpansionData));
+		fIOUSBCompositeExpansionData = (IOUSBCompositeDriverExpansionData *)IOMalloc(sizeof(*fIOUSBCompositeExpansionData));
 		if (!fIOUSBCompositeExpansionData)
 			return false;
-		bzero(fIOUSBCompositeExpansionData, sizeof(fIOUSBCompositeExpansionData));
+		bzero(fIOUSBCompositeExpansionData, sizeof(*fIOUSBCompositeExpansionData));
     }
 	
 	return true;
@@ -168,7 +168,7 @@ IOUSBCompositeDriver::free()
     //
     if (fIOUSBCompositeExpansionData)
     {
-        IOFree(fIOUSBCompositeExpansionData, sizeof(fIOUSBCompositeExpansionData));
+        IOFree(fIOUSBCompositeExpansionData, sizeof(*fIOUSBCompositeExpansionData));
         fIOUSBCompositeExpansionData = NULL;
     }
 	

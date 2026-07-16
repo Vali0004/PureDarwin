@@ -76,7 +76,7 @@ typedef struct {
     UInt8  bmAttributes;
     UInt16 wMaxPacketSize;
     UInt8  bInterval;
-} IOUSBEndpointDescriptor;
+} __attribute__((packed)) IOUSBEndpointDescriptor;
 
 typedef struct {
     UInt8  bLength;

@@ -39,16 +39,12 @@
 extern void XHCI_Log(const char *fmt, ...);
 
 class RavynXHCIMassStorageDisk;
-class RavynXHCIKeyboard;
-class RavynXHCIMouse;
 class RavynXHCIUSBBus;
 
 class RavynXHCIPort : public IOService
 {
     OSDeclareDefaultStructors(RavynXHCIPort);
     friend class RavynXHCIMassStorageDisk;
-    friend class RavynXHCIKeyboard;
-    friend class RavynXHCIMouse;
     friend class RavynXHCIUSBBus;
 
 public:
@@ -62,17 +58,6 @@ public:
                          const void *cbwCB, UInt8 cbwLen,
                          UInt32 dataLen, bool dataIn,
                          IOMemoryDescriptor *buffer, UInt64 bufOff);
-
-    /* Called by the RavynXHCIKeyboard poll thread. Submits one interrupt-IN
-     * TD (only if none is outstanding for this device) and waits up to
-     * timeoutMs for its completion; on a report it copies the 8-byte HID
-     * boot report into outReport and returns true. A timeout leaves the TD
-     * armed so the next call keeps waiting the same transfer - a boot
-     * keyboard under SET_IDLE(0) only completes it when a key state changes. */
-    bool pollKeyboard(int kbdIdx, UInt8 outReport[8], UInt32 timeoutMs);
-
-    /* Same protocol as pollKeyboard, against fMouse[] instead of fKbd[]. */
-    bool pollMouse(int mouseIdx, UInt8 outReport[8], UInt32 timeoutMs);
 
 private:
     /* One tracked USB device slot that turned out to be Mass Storage. */
@@ -89,8 +74,12 @@ private:
         char     product[17];
     };
 
-    /* One tracked USB device slot that turned out to be a HID boot keyboard. */
-    struct KbdDevice {
+    /* One tracked interrupt-IN endpoint. A boot HID device often leaves an
+     * interrupt transfer pending until the next state change, so the generic
+     * IOUSB synchronous read path needs a persistent TD/buffer across idle
+     * poll calls rather than stack-allocating a bounce buffer and freeing it
+     * after every timeout. */
+    struct InterruptInEndpoint {
         bool                       valid;
         UInt32                     slotId;
         UInt8                      rootPort;     /* 0-based root hub port */
@@ -99,7 +88,7 @@ private:
         bool                       tdOutstanding; /* an interrupt-IN TD is armed */
         bool                       loggedPollArm;
         bool                       loggedFirstCompletion;
-        IOBufferMemoryDescriptor * reportMem;    /* 8-byte DMA report buffer */
+        IOBufferMemoryDescriptor * reportMem;
         volatile UInt8           * reportVirt;
         UInt64                     reportPhys;
     };
@@ -130,7 +119,7 @@ private:
 
     /* IOUSBController-shaped view of this port, backing IOUSBDevice/
      * IOUSBInterface for any slot enumerateSlotDevice() doesn't already
-     * special-case as hub/mass-storage/keyboard - see RavynXHCIUSBBus. */
+     * special-case as hub/mass-storage - see RavynXHCIUSBBus. */
     RavynXHCIUSBBus      * fUSBBus;
 
     /* USB2/USB3 root hub port pairing, from the xHCI Extended Capabilities'
@@ -149,9 +138,8 @@ private:
      * re-issuing Enable Slot/Address Device for the same connect event on
      * every pass. Cleared when CCS drops so a later replug on that port is
      * picked up again. Note: this only detects *new* connects; a device
-     * physically removed does not tear down its already-published nub
-     * (RavynXHCIMassStorageDisk/RavynXHCIKeyboard stay registered until a
-     * future reboot) - only reconnection/insertion is handled. */
+     * physically removed tears down the controller-owned transfer state;
+     * higher-level nubs are owned by IOUSBFamily or the mass-storage path. */
     bool                   fPortOccupied[64];
     volatile bool          fHotplugRunning;
     static void hotplugThread(void *arg, wait_result_t);
@@ -222,17 +210,12 @@ private:
         UInt8                       bulkOutCycle;
     };
     SlotResources fSlots[64]; /* index by slot ID, 0 unused */
+    UInt8 fSlotRootPort[64];  /* 0-based root hub port for each slot */
 
     MSCDevice fMSC[16];
     RavynXHCIMassStorageDisk * fDiskNubs[16];
 
-    KbdDevice fKbd[8];
-    RavynXHCIKeyboard * fKbdNubs[8];
-
-    /* Same shape/protocol as KbdDevice - HID boot mouse interrupt-IN
-     * reports (buttons, dx, dy, wheel) fit in the same 8-byte buffer. */
-    KbdDevice fMouse[8];
-    RavynXHCIMouse * fMouseNubs[8];
+    InterruptInEndpoint fIntrIn[64][16]; /* [slotId][endpoint number] */
 
     inline UInt32 capRead32(UInt32 off) const
         { return *(volatile UInt32 *)(fCapRegs + off); }
@@ -307,19 +290,11 @@ private:
     void interruptOccurred(IOInterruptEventSource *sender, int count);
     static void interruptOccurredStatic(OSObject *owner, IOInterruptEventSource *sender, int count);
 
-    /* Configure a single interrupt IN endpoint (for a HID boot keyboard),
-     * reusing the slot's bulk-IN ring fields (a keyboard slot has no bulk). */
+    /* Configure a single interrupt IN endpoint, reusing the slot's bulk-IN
+     * ring fields for the current reconstructed IOUSBController path. */
     bool configureInterruptInEndpoint(UInt32 slotId, UInt8 epNum, UInt16 maxPkt, UInt8 interval);
-    /* HID class control requests on interface 0 (SET_PROTOCOL boot / SET_IDLE). */
-    bool hidSetProtocol(UInt32 slotId, UInt8 iface, UInt8 protocol);
-    bool hidSetIdle(UInt32 slotId, UInt8 iface, UInt8 duration);
-
-    /* Record a keyboard slot (allocating its DMA report buffer) and publish
-     * an IOHIKeyboard nub that polls it. */
-    bool publishKeyboard(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt);
-
-    /* Same idea for a HID boot mouse: publishes a RavynXHCIMouse nub. */
-    bool publishMouse(UInt32 slotId, UInt32 rootPort0based, UInt8 intrEp, UInt16 intrMaxPkt);
+    IOReturn interruptTransfer(UInt32 slotId, UInt8 epNum, IOMemoryDescriptor *buffer,
+                               UInt32 len, UInt32 timeoutMs);
 
     bool enableSlot(UInt32 *outSlotId);
     void disableSlot(UInt32 slotId);

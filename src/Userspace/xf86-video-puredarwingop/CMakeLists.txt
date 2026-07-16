@@ -25,12 +25,10 @@ add_darwin_shared_library(puredarwingop_drv
     MACOSX_VERSION_MIN 11.0
     INSTALL_NAME /usr/lib/xorg/modules/drivers/puredarwingop_drv.so)
 
-# Strip CMake's default "lib" prefix: Xorg's loader looks the driver up as
-# "<name>_drv", not "lib<name>_drv". The build emits puredarwingop_drv.dylib;
-# build.nix installs it as puredarwingop_drv.so (the name LoaderOpen wants) -
-# so do NOT set SUFFIX here, or build.nix's find for *.dylib stops matching and
-# the module never gets installed.
-set_target_properties(puredarwingop_drv PROPERTIES PREFIX "")
+# Strip CMake's default "lib" prefix and emit the filename Xorg's loader
+# probes: <name>_drv.so. The Mach-O filetype is still a dylib; only the
+# filesystem suffix is .so.
+set_target_properties(puredarwingop_drv PROPERTIES PREFIX "" SUFFIX ".so")
 
 # xf86 modules resolve the server's own symbols (xf86DrvMsg, fbScreenInit,
 # XNFcallocarray, ...) at dlopen time from the already-loaded Xorg image, so

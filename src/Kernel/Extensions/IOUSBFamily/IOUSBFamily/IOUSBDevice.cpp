@@ -24,6 +24,18 @@
 
 OSDefineMetaClassAndStructors(IOUSBDevice, IOUSBNub)
 
+static bool
+matchUSBNumber(OSDictionary *table, const char *key, UInt32 value)
+{
+    OSObject *obj = table->getObject(key);
+    if (!obj)
+        return true;
+    OSNumber *num = OSDynamicCast(OSNumber, obj);
+    if (!num)
+        return false;
+    return num->unsigned32BitValue() == value;
+}
+
 IOUSBDevice *IOUSBDevice::NewDevice(void)
 {
     return OSTypeAlloc(IOUSBDevice);
@@ -118,7 +130,21 @@ IOReturn IOUSBDevice::message(UInt32 type, IOService *provider, void *argument)
 
 bool IOUSBDevice::matchPropertyTable(OSDictionary *table, SInt32 *score)
 {
-    return super::matchPropertyTable(table, score);
+    if (!super::matchPropertyTable(table, score))
+        return false;
+    if (!matchUSBNumber(table, kUSBVendorID, _descriptor.idVendor))
+        return false;
+    if (!matchUSBNumber(table, kUSBProductID, _descriptor.idProduct))
+        return false;
+    if (!matchUSBNumber(table, kUSBDeviceReleaseNumber, _descriptor.bcdDevice))
+        return false;
+    if (!matchUSBNumber(table, kUSBDeviceClass, _descriptor.bDeviceClass))
+        return false;
+    if (!matchUSBNumber(table, kUSBDeviceSubClass, _descriptor.bDeviceSubClass))
+        return false;
+    if (!matchUSBNumber(table, kUSBDeviceProtocol, _descriptor.bDeviceProtocol))
+        return false;
+    return true;
 }
 
 void IOUSBDevice::SetPort(void *port) { /* obsolete, no-op */ }
@@ -292,8 +318,13 @@ IOReturn IOUSBDevice::SetConfiguration(IOService *forClient, UInt8 configValue, 
                     IOUSBInterface *intf = IOUSBInterface::withDescriptors(cd, ifd);
                     if (intf) {
                         if (intf->attach(this)) {
-                            if (startInterfaceMatching)
-                                intf->registerService();
+                            if (intf->start(this)) {
+                                if (startInterfaceMatching)
+                                    intf->registerService();
+                            } else {
+                                intf->detach(this);
+                                intf->release();
+                            }
                         } else {
                             intf->release();
                         }
