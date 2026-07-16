@@ -1,2 +1,0 @@
-# Reserved words are not recognized after redirects
-</dev/null ! true; echo 127:$?

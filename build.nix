@@ -97,10 +97,6 @@ stdenv.mkDerivation ({
     if [ -e src/Kernel/xnu/Makefile ]; then
       sed -i 's#/bin/pwd#pwd#g' src/Kernel/xnu/Makefile
     fi
-    if [ -e src/Userspace/busybox/upstream/Makefile ]; then
-      sed -i 's#/bin/pwd#pwd#g' src/Userspace/busybox/upstream/Makefile
-    fi
-
   '' + lib.optionalString (!isDarwinHost) ''
     if [ -e src/Kernel/xnu/cmake/MakeInc.cmd.in ]; then
       sed -i "s#/usr/local/osxcross/bin/xcrun#${darwinCrossToolchain}/bin/xcrun#g" \
@@ -199,48 +195,15 @@ EOF
   installPhase = ''
     runHook preInstall
     mkdir -p $out
-  '' + lib.optionalString installUserland ''
-    mkdir -p $out/bin $out/sbin
-    for bin in \
-      build-nix/src/Userspace/helloapp/helloapp \
-      build-nix/src/Userspace/busybox/build/busybox \
-      build-nix/src/Userspace/sw_vers/sw_vers \
-      build-nix/src/Userspace/ps/ps \
-      build-nix/src/Userspace/system_cmds/mkfile \
-      build-nix/src/Userspace/system_cmds/sync \
-      build-nix/src/Userspace/tcc/build/tcc \
-      build-nix/src/Userspace/fbtri/fbtri \
-      build-nix/src/Userspace/malloctest/malloctest \
-      build-nix/src/Userspace/sockettest/sockettest \
-      build-nix/src/Userspace/iokittest/iokittest \
-      build-nix/src/Userspace/iokittest/ioreg \
-      build-nix/src/Userspace/mousemon/mousemon \
-      build-nix/src/Userspace/msdosfstest/msdosfstest \
-      build-nix/src/Userspace/diskdev_cmds/mount \
-      build-nix/src/Userspace/diskdev_cmds/umount
-    do
-      if [ -x "$bin" ]; then
-        cp "$bin" $out/bin/
-      fi
-    done
-    if [ -x build-nix/src/Userspace/launchd/launchd ]; then
-      cp build-nix/src/Userspace/launchd/launchd $out/sbin/
-    fi
-    # tcc runtime support: private headers (tccdefs.h et al, needed at runtime
-    # with --config-predefs=no) and libtcc1.a (built by the native cross tcc).
-    if [ -f build-nix/src/Userspace/tcc/build-native/x86_64-osx-libtcc1.a ]; then
-      mkdir -p $out/usr/lib/tcc/include
-      cp build-nix/src/Userspace/tcc/build-native/x86_64-osx-libtcc1.a $out/usr/lib/tcc/libtcc1.a
-      cp build-nix/src/Userspace/tcc/src/include/*.h $out/usr/lib/tcc/include/
-      if [ -f build-nix/src/Userspace/tcc/build-native/runmain.o ]; then
-        cp build-nix/src/Userspace/tcc/build-native/runmain.o $out/usr/lib/tcc/
-      fi
-    fi
-    _pdgop_drv="$(find build-nix -name 'puredarwingop_drv.dylib' -print -quit 2>/dev/null || true)"
-    echo "puredarwingop driver module: ''${_pdgop_drv:-<not built>}"
-    if [ -n "$_pdgop_drv" ]; then
-      mkdir -p $out/usr/lib/xorg/modules/drivers
-      cp "$_pdgop_drv" $out/usr/lib/xorg/modules/drivers/puredarwingop_drv.so
+  '' + lib.optionalString (installUserland && !enableTcc) ''
+    cmake --install build-nix --component BaseSystem --prefix $out
+  '' + lib.optionalString (installUserland && enableTcc) ''
+    mkdir -p $out/bin $out/usr/lib/tcc/include
+    cp build-nix/src/Userspace/tcc/build/tcc $out/bin/
+    cp build-nix/src/Userspace/tcc/build-native/x86_64-osx-libtcc1.a $out/usr/lib/tcc/libtcc1.a
+    cp build-nix/src/Userspace/tcc/src/include/*.h $out/usr/lib/tcc/include/
+    if [ -f build-nix/src/Userspace/tcc/build-native/runmain.o ]; then
+      cp build-nix/src/Userspace/tcc/build-native/runmain.o $out/usr/lib/tcc/
     fi
   '' + lib.optionalString installKernel ''
     cp -R build-nix/src/Kernel/xnu/xnu/. $out/

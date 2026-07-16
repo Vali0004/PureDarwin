@@ -11,6 +11,7 @@
 #include <sys/ubc.h>
 #include <mach/kmod.h>
 #include <libkern/libkern.h>
+#include <IOKit/IOLocks.h>
 #include <string.h>
 
 static vfstable_t ext4_vfsconf;
@@ -67,6 +68,12 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 	emp->em_devvp = devvp;
 	emp->em_dev   = vnode_specrdev(devvp);
 
+	emp->em_hash_lock = IOLockAlloc();
+	if (emp->em_hash_lock == NULL) {
+		error = ENOMEM;
+		goto fail;
+	}
+
 	error = ext4_read_super(emp);
 	if (error)
 		goto fail;
@@ -103,6 +110,8 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 	return 0;
 
 fail:
+	if (emp->em_hash_lock)
+		IOLockFree((IOLock *)emp->em_hash_lock);
 	_FREE(emp, M_TEMP);
 	return error;
 }
@@ -130,6 +139,8 @@ ext4_unmount(struct mount *mp, int mntflags, __unused vfs_context_t ctx)
 
 	if (emp) {
 		vfs_setfsprivate(mp, NULL);
+		if (emp->em_hash_lock)
+			IOLockFree((IOLock *)emp->em_hash_lock);
 		_FREE(emp, M_TEMP);
 	}
 	return 0;

@@ -1,8 +1,0 @@
-# If job control is disabled, skip the test
-test "`type jobs`" = "jobs is a shell builtin" || exit 77
-
-sleep 0 | (sleep 0;exit 3) &
-sleep 1
-echo Zero:$?
-wait %1
-echo Three:$?

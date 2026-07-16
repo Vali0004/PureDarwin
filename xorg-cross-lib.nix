@@ -14,6 +14,7 @@
 , nativeDeps ? []
 , configureFlags ? []
 , preConfigureExtra ? ""
+, postInstallExtra ? ""
 , patches ? []
 }:
 
@@ -53,8 +54,8 @@ stdenv.mkDerivation {
     export AR="${darwinCrossToolchain}/bin/x86_64-apple-darwin20.4-ar"
     export RANLIB="${darwinCrossToolchain}/bin/x86_64-apple-darwin20.4-ranlib"
     export STRIP="${darwinCrossToolchain}/bin/x86_64-apple-darwin20.4-strip"
-    export CFLAGS="-isysroot $DARWIN_SDK_ROOT -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I${libSystem}/usr/include"
-    export LDFLAGS="-isysroot $DARWIN_SDK_ROOT -fuse-ld=${nativeLd}/bin/ld -nostdlib -L${libSystem}/usr/lib -Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib -Wl,-dylinker_install_name,/usr/lib/dyld -Wl,-platform_version,macos,11.0,11.5 -lSystem"
+    export CFLAGS="-isysroot $DARWIN_SDK_ROOT -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I${libSystem}/usr/include ${lib.concatMapStringsSep " " (dep: "-I${lib.getDev dep}/include") deps}"
+    export LDFLAGS="-isysroot $DARWIN_SDK_ROOT -fuse-ld=${nativeLd}/bin/ld -nostdlib -L${libSystem}/usr/lib ${lib.concatMapStringsSep " " (dep: "-L${dep}/lib") deps} -Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib -Wl,-dylinker_install_name,/usr/lib/dyld -Wl,-platform_version,macos,11.0,11.5 -lSystem"
 
     ${preConfigureExtra}
 
@@ -78,6 +79,7 @@ stdenv.mkDerivation {
   installPhase = ''
     runHook preInstall
     make install
+    ${postInstallExtra}
     runHook postInstall
   '';
 

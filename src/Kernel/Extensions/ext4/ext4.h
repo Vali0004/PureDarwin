@@ -13,7 +13,20 @@
 #include <sys/types.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
+#include <sys/queue.h>
 #include <libkern/OSByteOrder.h>
+
+/*
+ * In-core inode (ext4node) hash. Without it, ext4_vget() minted a fresh vnode
+ * on every name-cache miss, so a single inode could end up with several vnodes
+ * whose cached e_raw/block maps diverge - directory entries then intermittently
+ * "disappeared" as lookups landed on a stale duplicate. Buckets are power-of-two
+ * so the mask indexes directly; the table lives in ext4mount, guarded by
+ * em_hash_lock (an IOLock, stored as void* to keep IOKit headers out of the
+ * plain-C sources that include this).
+ */
+#define EXT4_NODE_HASH_SIZE 256u
+#define EXT4_NODE_HASH(ino) ((uint32_t)(ino) & (EXT4_NODE_HASH_SIZE - 1u))
 
 /* ext4 is little-endian on disk; XNU x86_64 is little-endian, so these are
  * pass-through, but keep them explicit for clarity/portability. */
@@ -222,6 +235,8 @@ struct ext4mount {
 	uint64_t         em_blocks_count;
 	uint64_t         em_inodes_count;
 	struct ext4_super_block em_sb;  /* cached copy */
+	void            *em_hash_lock;  /* IOLock* guarding the ext4node hash */
+	LIST_HEAD(ext4_node_bucket, ext4node) em_node_hash[EXT4_NODE_HASH_SIZE];
 };
 
 /* in-core inode (attached to vnode fsnode) */
@@ -232,6 +247,8 @@ struct ext4node {
 	struct ext4_inode e_raw;        /* cached on-disk inode */
 	uint64_t          e_size;
 	enum vtype        e_vtype;
+	LIST_ENTRY(ext4node) e_hash;    /* em_node_hash linkage */
+	int               e_alloc_wip;  /* vnode_create in progress; sleep on &e_vp */
 };
 
 #define VTOE(vp)  ((struct ext4node *)vnode_fsnode(vp))

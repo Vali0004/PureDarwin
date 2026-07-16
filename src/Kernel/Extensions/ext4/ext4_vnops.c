@@ -14,6 +14,7 @@
 #include <sys/syslimits.h>
 #include <string.h>
 #include <vm/vm_kern.h>
+#include <IOKit/IOLocks.h>
 
 int (**ext4_vnodeop_p)(void *);
 
@@ -21,14 +22,18 @@ static int ext4_ensure_block(struct ext4node *ep, uint32_t lblk,
     uint64_t *pblk_out);
 
 /*
- * Create (or return) a vnode for inode `ino`.  No inode hash yet: we create a
- * fresh vnode per call and rely on the VFS name cache.  Adequate for a
- * read-only boot volume.
+ * Create (or return) a vnode for inode `ino`.  Backed by a per-mount inode
+ * hash so a given inode has exactly one in-core vnode: repeated lookups (after
+ * name-cache misses, or from concurrent threads) return the existing vnode via
+ * vnode_getwithvid() rather than minting duplicates whose cached inode state
+ * would drift out of sync.
  */
 int
 ext4_vget(struct ext4mount *emp, ino_t ino, vnode_t dvp, vnode_t *vpp,
     struct componentname *cnp)
 {
+	IOLock *hlock = (IOLock *)emp->em_hash_lock;
+	struct ext4_node_bucket *bucket = &emp->em_node_hash[EXT4_NODE_HASH(ino)];
 	struct ext4node *ep;
 	struct vnode_fsparam vfsp;
 	struct ext4_inode raw;
@@ -36,18 +41,50 @@ ext4_vget(struct ext4mount *emp, ino_t ino, vnode_t dvp, vnode_t *vpp,
 	uint64_t size;
 	int error;
 
+	/* Fast path: an existing (or being-created) vnode for this inode. */
+	IOLockLock(hlock);
+restart:
+	LIST_FOREACH(ep, bucket, e_hash) {
+		if (ep->e_ino != ino)
+			continue;
+		if (ep->e_alloc_wip) {
+			/* Another thread is inside vnode_create(); wait for it. */
+			IOLockSleep(hlock, &ep->e_vp, THREAD_UNINT);
+			goto restart;
+		}
+		{
+			vnode_t vp = ep->e_vp;
+			uint32_t vid = vnode_vid(vp);
+			IOLockUnlock(hlock);
+			if (vnode_getwithvid(vp, vid) == 0) {
+				*vpp = vp;
+				return 0;
+			}
+			/* vnode was being reclaimed; retry from the top. */
+			IOLockLock(hlock);
+			goto restart;
+		}
+	}
+
+	/* Not present: insert a placeholder so concurrent callers wait. */
+	ep = (struct ext4node *)_MALLOC(sizeof(*ep), M_TEMP, M_WAITOK | M_ZERO);
+	if (ep == NULL) {
+		IOLockUnlock(hlock);
+		return ENOMEM;
+	}
+	ep->e_mount     = emp;
+	ep->e_ino       = ino;
+	ep->e_alloc_wip = 1;
+	LIST_INSERT_HEAD(bucket, ep, e_hash);
+	IOLockUnlock(hlock);
+
+	/* Heavy lifting (disk read, vnode_create) done without the hash lock. */
 	error = ext4_read_inode(emp, ino, &raw);
 	if (error)
-		return error;
+		goto fail;
 
 	vtype = ext4_mode_to_vtype(le16(raw.i_mode));
 	size  = le32(raw.i_size_lo) | ((uint64_t)le32(raw.i_size_high) << 32);
-
-	ep = (struct ext4node *)_MALLOC(sizeof(*ep), M_TEMP, M_WAITOK | M_ZERO);
-	if (ep == NULL)
-		return ENOMEM;
-	ep->e_mount = emp;
-	ep->e_ino   = ino;
 	ep->e_raw   = raw;
 	ep->e_size  = size;
 	ep->e_vtype = vtype;
@@ -69,13 +106,26 @@ ext4_vget(struct ext4mount *emp, ino_t ino, vnode_t dvp, vnode_t *vpp,
 		vfsp.vnfs_flags |= VNFS_NOCACHE;
 
 	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, vpp);
-	if (error) {
-		_FREE(ep, M_TEMP);
-		return error;
-	}
-	ep->e_vp = *vpp;
+	if (error)
+		goto fail;
+
 	vnode_settag(*vpp, VT_OTHER);
+
+	IOLockLock(hlock);
+	ep->e_vp        = *vpp;
+	ep->e_alloc_wip = 0;
+	IOLockWakeup(hlock, &ep->e_vp, false);   /* wake all waiters */
+	IOLockUnlock(hlock);
 	return 0;
+
+fail:
+	IOLockLock(hlock);
+	LIST_REMOVE(ep, e_hash);
+	ep->e_alloc_wip = 0;
+	IOLockWakeup(hlock, &ep->e_vp, false);
+	IOLockUnlock(hlock);
+	_FREE(ep, M_TEMP);
+	return error;
 }
 
 /* --- directory scan --- */
@@ -583,7 +633,20 @@ ext4_drop_inode(struct ext4node *ep)
 	error = ext4_write_inode(ep->e_mount, ep->e_ino, &ep->e_raw);
 	if (error)
 		return error;
-	return ext4_free_inode(ep->e_mount, ep->e_ino, ep->e_vtype);
+	error = ext4_free_inode(ep->e_mount, ep->e_ino, ep->e_vtype);
+	if (error)
+		return error;
+	/*
+	 * The inode number is now free for reuse. free_extents() just zeroed
+	 * this node's i_block (extent header magic -> 0), so it must not linger
+	 * in the inode hash: a later ext4_alloc_inode() that hands the same
+	 * number to a new file would otherwise get this stale vnode back from
+	 * ext4_vget() and every bmap on it would fault "bad extent magic 0x0".
+	 * vnode_recycle() drives it to reclaim, which unhooks it from the hash.
+	 */
+	if (ep->e_vp)
+		vnode_recycle(ep->e_vp);
+	return 0;
 }
 
 static int
@@ -638,6 +701,31 @@ ext4_ensure_block(struct ext4node *ep, uint32_t lblk, uint64_t *pblk_out)
 	    (emp->em_blocksize / 512));
 	*pblk_out = pblk;
 	return 0;
+}
+
+/* Write [off, off+len) of the file from a kernel buffer `src` (len<=bs),
+ * allocating the block if needed. Mirrors ext4_read_range for pagein. */
+static int
+ext4_write_range(struct ext4node *ep, uint64_t foff, const void *src, size_t len)
+{
+	struct ext4mount *emp = ep->e_mount;
+	uint32_t bs = emp->em_blocksize;
+	uint32_t boff = (uint32_t)(foff % bs);
+	uint64_t pblk = 0;
+	buf_t bp = NULL;
+	int error;
+
+	if (boff + len > bs)
+		len = bs - boff;
+
+	error = ext4_ensure_block(ep, (uint32_t)(foff / bs), &pblk);
+	if (error)
+		return error;
+	error = ext4_blkread(emp, pblk, &bp);
+	if (error)
+		return error;
+	memcpy((char *)buf_dataptr(bp) + boff, src, len);
+	return buf_bwrite(bp);
 }
 
 static int
@@ -1505,14 +1593,66 @@ ext4_vnop_pagein(struct vnop_pagein_args *ap)
 	return error;
 }
 
+/*
+ * No VNOP_STRATEGY is implemented for ext4 (block numbers returned by
+ * ext4_vnop_blockmap are extent-tree physical blocks, not something a
+ * generic buf_strategy/device dispatch can consume), so routing pageout
+ * through cluster_pageout() (which relies on VNOP_STRATEGY doing the actual
+ * I/O) silently no-ops or misdirects dirty-page writeback. Do direct block
+ * I/O here instead, mirroring how ext4_vnop_pagein bypasses cluster_io.
+ */
 static int
 ext4_vnop_pageout(struct vnop_pageout_args *ap)
 {
-	struct ext4node *ep = VTOE(ap->a_vp);
-	off_t filesize = (off_t)ep->e_size;
+	vnode_t vp = ap->a_vp;
+	struct ext4node *ep = VTOE(vp);
+	struct ext4mount *emp = ep->e_mount;
+	upl_t pl = ap->a_pl;
+	vm_offset_t ioaddr = 0;
+	off_t f_offset = ap->a_f_offset;
+	size_t size = ap->a_size;
+	kern_return_t kr;
+	int error = 0;
+	size_t done;
 
-	return cluster_pageout(ap->a_vp, ap->a_pl, ap->a_pl_offset,
-	    ap->a_f_offset, (int)ap->a_size, filesize, ap->a_flags);
+	kr = ubc_upl_map(pl, &ioaddr);
+	if (kr != KERN_SUCCESS)
+		return EIO;
+	ioaddr += ap->a_pl_offset;
+
+	for (done = 0; done < size; ) {
+		char *src = (char *)ioaddr + done;
+		off_t foff = f_offset + done;
+		size_t chunk = emp->em_blocksize;
+
+		chunk -= (foff % emp->em_blocksize);
+		if (chunk > size - done)
+			chunk = size - done;
+
+		if (foff >= (off_t)ep->e_size) {
+			done += chunk;
+			continue;   /* beyond EOF: nothing to write back */
+		}
+		if (foff + (off_t)chunk > (off_t)ep->e_size)
+			chunk = (size_t)(ep->e_size - foff);
+
+		error = ext4_write_range(ep, foff, src, chunk);
+		if (error)
+			break;
+		done += chunk;
+	}
+
+	ubc_upl_unmap(pl);
+
+	if (!(ap->a_flags & UPL_NOCOMMIT)) {
+		if (error)
+			ubc_upl_abort_range(pl, ap->a_pl_offset, size,
+			    UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
+		else
+			ubc_upl_commit_range(pl, ap->a_pl_offset, size,
+			    UPL_COMMIT_FREE_ON_EMPTY);
+	}
+	return error;
 }
 
 static int
@@ -1571,6 +1711,12 @@ ext4_vnop_reclaim(struct vnop_reclaim_args *ap)
 	vnode_t vp = ap->a_vp;
 	struct ext4node *ep = VTOE(vp);
 
+	if (ep) {
+		IOLock *hlock = (IOLock *)ep->e_mount->em_hash_lock;
+		IOLockLock(hlock);
+		LIST_REMOVE(ep, e_hash);
+		IOLockUnlock(hlock);
+	}
 	vnode_removefsref(vp);
 	vnode_clearfsnode(vp);
 	if (ep)

@@ -516,14 +516,309 @@ ext4_free_block(struct ext4mount *emp, uint64_t pblk)
 	return ext4_write_super(emp);
 }
 
+/* Entry capacity of a full-block extent node (extent and extent_idx are both
+ * 12 bytes, so leaves and index nodes hold the same count). */
+static uint16_t
+ext4_ext_block_max(struct ext4mount *emp)
+{
+	return (uint16_t)((emp->em_blocksize - sizeof(struct ext4_extent_header)) /
+	    sizeof(struct ext4_extent));
+}
+
+/* Entry capacity of the inline root that lives in i_block[] (60 bytes). */
+static uint16_t
+ext4_ext_root_max(void)
+{
+	return (uint16_t)((sizeof(((struct ext4_inode *)0)->i_block) -
+	    sizeof(struct ext4_extent_header)) / sizeof(struct ext4_extent));
+}
+
+/* Count one freshly-allocated tree metadata block against the inode. */
+static void
+ext4_ext_account_meta(struct ext4mount *emp, struct ext4_inode *inode)
+{
+	inode->i_blocks_lo = le32(le32(inode->i_blocks_lo) +
+	    (emp->em_blocksize / 512));
+}
+
+static int
+ext4_ext_read_block(struct ext4mount *emp, uint64_t blk, char *out)
+{
+	buf_t bp = NULL;
+	int error = ext4_blkread(emp, blk, &bp);
+	if (error)
+		return error;
+	memcpy(out, (char *)buf_dataptr(bp), emp->em_blocksize);
+	buf_brelse(bp);
+	return 0;
+}
+
+static int
+ext4_ext_write_block(struct ext4mount *emp, uint64_t blk, const char *data)
+{
+	buf_t bp = NULL;
+	int error = ext4_blkread(emp, blk, &bp);
+	if (error)
+		return error;
+	memcpy((char *)buf_dataptr(bp), data, emp->em_blocksize);
+	return buf_bwrite(bp);
+}
+
+/* Allocate a fresh right-sibling leaf holding the single extent lblk->pblk. */
+static int
+ext4_ext_new_leaf(struct ext4mount *emp, struct ext4_inode *inode,
+    uint32_t lblk, uint64_t pblk, uint64_t *out_blk, uint32_t *out_lblk)
+{
+	struct ext4_extent_header *nh;
+	struct ext4_extent *ex;
+	uint64_t nb = 0;
+	char *buf;
+	int error;
+
+	error = ext4_alloc_block(emp, 0, &nb);
+	if (error)
+		return error;
+	buf = (char *)_MALLOC(emp->em_blocksize, M_TEMP, M_WAITOK);
+	if (buf == NULL) {
+		(void)ext4_free_block(emp, nb);
+		return ENOMEM;
+	}
+	memset(buf, 0, emp->em_blocksize);
+	nh = (struct ext4_extent_header *)buf;
+	nh->eh_magic = le16(EXT4_EXT_MAGIC);
+	nh->eh_entries = le16(1);
+	nh->eh_max = le16(ext4_ext_block_max(emp));
+	nh->eh_depth = 0;
+	ex = (struct ext4_extent *)(nh + 1);
+	ex[0].ee_block = le32(lblk);
+	ex[0].ee_len = le16(1);
+	ex[0].ee_start_hi = le16((uint16_t)(pblk >> 32));
+	ex[0].ee_start_lo = le32((uint32_t)pblk);
+	error = ext4_ext_write_block(emp, nb, buf);
+	_FREE(buf, M_TEMP);
+	if (error) {
+		(void)ext4_free_block(emp, nb);
+		return error;
+	}
+	ext4_ext_account_meta(emp, inode);
+	*out_blk = nb;
+	*out_lblk = lblk;
+	return 0;
+}
+
+/* Allocate a fresh right-sibling index node (at `depth`) holding one entry
+ * covering child_lblk via child_blk. */
+static int
+ext4_ext_new_index(struct ext4mount *emp, struct ext4_inode *inode,
+    uint16_t depth, uint32_t child_lblk, uint64_t child_blk,
+    uint64_t *out_blk, uint32_t *out_lblk)
+{
+	struct ext4_extent_header *nh;
+	struct ext4_extent_idx *ix;
+	uint64_t nb = 0;
+	char *buf;
+	int error;
+
+	error = ext4_alloc_block(emp, 0, &nb);
+	if (error)
+		return error;
+	buf = (char *)_MALLOC(emp->em_blocksize, M_TEMP, M_WAITOK);
+	if (buf == NULL) {
+		(void)ext4_free_block(emp, nb);
+		return ENOMEM;
+	}
+	memset(buf, 0, emp->em_blocksize);
+	nh = (struct ext4_extent_header *)buf;
+	nh->eh_magic = le16(EXT4_EXT_MAGIC);
+	nh->eh_entries = le16(1);
+	nh->eh_max = le16(ext4_ext_block_max(emp));
+	nh->eh_depth = le16(depth);
+	ix = (struct ext4_extent_idx *)(nh + 1);
+	ix[0].ei_block = le32(child_lblk);
+	ix[0].ei_leaf_lo = le32((uint32_t)child_blk);
+	ix[0].ei_leaf_hi = le16((uint16_t)(child_blk >> 32));
+	ix[0].ei_unused = 0;
+	error = ext4_ext_write_block(emp, nb, buf);
+	_FREE(buf, M_TEMP);
+	if (error) {
+		(void)ext4_free_block(emp, nb);
+		return error;
+	}
+	ext4_ext_account_meta(emp, inode);
+	*out_blk = nb;
+	*out_lblk = child_lblk;
+	return 0;
+}
+
+/*
+ * Insert (lblk -> pblk, one block) at the rightmost position of the extent
+ * (sub)tree node `node` (capacity `node_max` entries). Files only ever grow at
+ * the tail here, so we always descend the rightmost path and never split in the
+ * middle.
+ *   *did_split == 0: entry absorbed (caller writes the node back if on disk).
+ *   *did_split == 1: node was full; a fresh right sibling was allocated at
+ *                    *split_blk covering *split_lblk, for the caller to index.
+ */
+static int
+ext4_ext_insert(struct ext4mount *emp, struct ext4_inode *inode,
+    char *node, uint16_t node_max, uint32_t lblk, uint64_t pblk,
+    int *did_split, uint64_t *split_blk, uint32_t *split_lblk)
+{
+	struct ext4_extent_header *eh = (struct ext4_extent_header *)node;
+	uint16_t entries = le16(eh->eh_entries);
+	uint16_t depth = le16(eh->eh_depth);
+
+	*did_split = 0;
+
+	if (depth == 0) {
+		struct ext4_extent *ex = (struct ext4_extent *)(eh + 1);
+		if (entries > 0) {
+			struct ext4_extent *last = &ex[entries - 1];
+			uint32_t first = le32(last->ee_block);
+			uint16_t len = le16(last->ee_len);
+			uint64_t start = le32(last->ee_start_lo) |
+			    ((uint64_t)le16(last->ee_start_hi) << 32);
+
+			if (len < 32768 && lblk == first + len &&
+			    pblk == start + len) {
+				last->ee_len = le16((uint16_t)(len + 1));
+				return 0;
+			}
+			if (lblk < first + len)
+				return EINVAL;
+		}
+		if (entries < node_max) {
+			ex[entries].ee_block = le32(lblk);
+			ex[entries].ee_len = le16(1);
+			ex[entries].ee_start_hi = le16((uint16_t)(pblk >> 32));
+			ex[entries].ee_start_lo = le32((uint32_t)pblk);
+			eh->eh_entries = le16((uint16_t)(entries + 1));
+			return 0;
+		}
+		*did_split = 1;
+		return ext4_ext_new_leaf(emp, inode, lblk, pblk,
+		    split_blk, split_lblk);
+	} else {
+		struct ext4_extent_idx *ix = (struct ext4_extent_idx *)(eh + 1);
+		uint64_t child_blk;
+		char *child;
+		int cs = 0;
+		uint64_t cs_blk = 0;
+		uint32_t cs_lblk = 0;
+		int error;
+
+		if (entries == 0)
+			return EIO;
+		child_blk = le32(ix[entries - 1].ei_leaf_lo) |
+		    ((uint64_t)le16(ix[entries - 1].ei_leaf_hi) << 32);
+
+		child = (char *)_MALLOC(emp->em_blocksize, M_TEMP, M_WAITOK);
+		if (child == NULL)
+			return ENOMEM;
+		error = ext4_ext_read_block(emp, child_blk, child);
+		if (error) {
+			_FREE(child, M_TEMP);
+			return error;
+		}
+		error = ext4_ext_insert(emp, inode, child,
+		    ext4_ext_block_max(emp), lblk, pblk, &cs, &cs_blk, &cs_lblk);
+		if (error) {
+			_FREE(child, M_TEMP);
+			return error;
+		}
+		error = ext4_ext_write_block(emp, child_blk, child);
+		_FREE(child, M_TEMP);
+		if (error)
+			return error;
+
+		if (!cs)
+			return 0;
+
+		if (entries < node_max) {
+			ix[entries].ei_block = le32(cs_lblk);
+			ix[entries].ei_leaf_lo = le32((uint32_t)cs_blk);
+			ix[entries].ei_leaf_hi = le16((uint16_t)(cs_blk >> 32));
+			ix[entries].ei_unused = 0;
+			eh->eh_entries = le16((uint16_t)(entries + 1));
+			return 0;
+		}
+		*did_split = 1;
+		return ext4_ext_new_index(emp, inode, depth, cs_lblk, cs_blk,
+		    split_blk, split_lblk);
+	}
+}
+
+/* The inline root filled up: push its contents into a new block and turn the
+ * root into a one-deeper index node with two children (old contents + the new
+ * right sibling). */
+static int
+ext4_ext_grow_root(struct ext4mount *emp, struct ext4_inode *inode,
+    uint64_t sib_blk, uint32_t sib_lblk)
+{
+	struct ext4_extent_header *reh =
+	    (struct ext4_extent_header *)inode->i_block;
+	uint16_t root_entries = le16(reh->eh_entries);
+	uint16_t root_depth = le16(reh->eh_depth);
+	struct ext4_extent_idx *rix;
+	uint32_t old_first;
+	uint64_t ob = 0;
+	char *buf;
+	int error;
+
+	if (root_depth == 0)
+		old_first = le32(((struct ext4_extent *)(reh + 1))[0].ee_block);
+	else
+		old_first = le32(((struct ext4_extent_idx *)(reh + 1))[0].ei_block);
+
+	error = ext4_alloc_block(emp, 0, &ob);
+	if (error)
+		return error;
+	buf = (char *)_MALLOC(emp->em_blocksize, M_TEMP, M_WAITOK);
+	if (buf == NULL) {
+		(void)ext4_free_block(emp, ob);
+		return ENOMEM;
+	}
+	memset(buf, 0, emp->em_blocksize);
+	memcpy(buf, inode->i_block, sizeof(struct ext4_extent_header) +
+	    (size_t)root_entries * sizeof(struct ext4_extent));
+	((struct ext4_extent_header *)buf)->eh_max = le16(ext4_ext_block_max(emp));
+	error = ext4_ext_write_block(emp, ob, buf);
+	_FREE(buf, M_TEMP);
+	if (error) {
+		(void)ext4_free_block(emp, ob);
+		return error;
+	}
+	ext4_ext_account_meta(emp, inode);
+
+	memset(inode->i_block, 0, sizeof(inode->i_block));
+	reh = (struct ext4_extent_header *)inode->i_block;
+	reh->eh_magic = le16(EXT4_EXT_MAGIC);
+	reh->eh_entries = le16(2);
+	reh->eh_max = le16(ext4_ext_root_max());
+	reh->eh_depth = le16((uint16_t)(root_depth + 1));
+	reh->eh_generation = 0;
+	rix = (struct ext4_extent_idx *)(reh + 1);
+	rix[0].ei_block = le32(old_first);
+	rix[0].ei_leaf_lo = le32((uint32_t)ob);
+	rix[0].ei_leaf_hi = le16((uint16_t)(ob >> 32));
+	rix[0].ei_unused = 0;
+	rix[1].ei_block = le32(sib_lblk);
+	rix[1].ei_leaf_lo = le32((uint32_t)sib_blk);
+	rix[1].ei_leaf_hi = le16((uint16_t)(sib_blk >> 32));
+	rix[1].ei_unused = 0;
+	return 0;
+}
+
 int
 ext4_inode_append_extent(struct ext4mount *emp, struct ext4_inode *inode,
     uint32_t lblk, uint64_t pblk)
 {
 	struct ext4_extent_header *eh =
 	    (struct ext4_extent_header *)inode->i_block;
-	struct ext4_extent *ex = (struct ext4_extent *)(eh + 1);
-	uint16_t entries, max;
+	int did_split = 0;
+	uint64_t split_blk = 0;
+	uint32_t split_lblk = 0;
+	int error;
 
 	if ((le32(inode->i_flags) & EXT4_EXTENTS_FL) == 0 ||
 	    le16(eh->eh_magic) != EXT4_EXT_MAGIC) {
@@ -531,43 +826,78 @@ ext4_inode_append_extent(struct ext4mount *emp, struct ext4_inode *inode,
 		inode->i_flags = le32(le32(inode->i_flags) | EXT4_EXTENTS_FL);
 		eh->eh_magic = le16(EXT4_EXT_MAGIC);
 		eh->eh_entries = 0;
-		eh->eh_max = le16((uint16_t)((sizeof(inode->i_block) -
-		    sizeof(*eh)) / sizeof(*ex)));
+		eh->eh_max = le16(ext4_ext_root_max());
 		eh->eh_depth = 0;
 		eh->eh_generation = 0;
 	}
-	if (le16(eh->eh_depth) != 0)
-		return EFBIG;
 
+	error = ext4_ext_insert(emp, inode, (char *)inode->i_block,
+	    ext4_ext_root_max(), lblk, pblk, &did_split, &split_blk, &split_lblk);
+	if (error)
+		return error;
+	if (!did_split)
+		return 0;
+
+	/* Rightmost path filled all the way up to the inline root: deepen it. */
+	return ext4_ext_grow_root(emp, inode, split_blk, split_lblk);
+}
+
+/*
+ * Free every data block referenced by the extent (sub)tree node `node`, plus,
+ * for index nodes, the child node blocks themselves (depth-first). Does NOT
+ * free the block holding `node` - that is the caller's job (the inline root has
+ * no block of its own).
+ */
+static int
+ext4_ext_free_subtree(struct ext4mount *emp, char *node)
+{
+	struct ext4_extent_header *eh = (struct ext4_extent_header *)node;
+	uint16_t entries, depth, i;
+	int error;
+
+	if (le16(eh->eh_magic) != EXT4_EXT_MAGIC)
+		return EIO;
 	entries = le16(eh->eh_entries);
-	max = le16(eh->eh_max);
-	if (max == 0 || max > (sizeof(inode->i_block) - sizeof(*eh)) / sizeof(*ex))
-		max = (uint16_t)((sizeof(inode->i_block) - sizeof(*eh)) / sizeof(*ex));
+	depth = le16(eh->eh_depth);
 
-	if (entries > 0) {
-		struct ext4_extent *last = &ex[entries - 1];
-		uint32_t first = le32(last->ee_block);
-		uint16_t len = le16(last->ee_len);
-		uint64_t start = le32(last->ee_start_lo) |
-		    ((uint64_t)le16(last->ee_start_hi) << 32);
-
-		if (len < 32768 && lblk == first + len && pblk == start + len) {
-			last->ee_len = le16((uint16_t)(len + 1));
-			return 0;
+	if (depth == 0) {
+		struct ext4_extent *ex = (struct ext4_extent *)(eh + 1);
+		for (i = 0; i < entries; i++) {
+			uint16_t j, len = le16(ex[i].ee_len);
+			uint64_t start = le32(ex[i].ee_start_lo) |
+			    ((uint64_t)le16(ex[i].ee_start_hi) << 32);
+			if (len > 32768)
+				len -= 32768;
+			for (j = 0; j < len; j++) {
+				error = ext4_free_block(emp, start + j);
+				if (error)
+					return error;
+			}
 		}
-		if (lblk < first + len)
-			return EINVAL;
+		return 0;
 	}
 
-	if (entries >= max)
-		return EFBIG;
-	ex[entries].ee_block = le32(lblk);
-	ex[entries].ee_len = le16(1);
-	ex[entries].ee_start_hi = le16((uint16_t)(pblk >> 32));
-	ex[entries].ee_start_lo = le32((uint32_t)pblk);
-	eh->eh_entries = le16((uint16_t)(entries + 1));
-	(void)emp;
-	return 0;
+	{
+		struct ext4_extent_idx *ix = (struct ext4_extent_idx *)(eh + 1);
+		for (i = 0; i < entries; i++) {
+			uint64_t child_blk = le32(ix[i].ei_leaf_lo) |
+			    ((uint64_t)le16(ix[i].ei_leaf_hi) << 32);
+			char *child = (char *)_MALLOC(emp->em_blocksize, M_TEMP,
+			    M_WAITOK);
+			if (child == NULL)
+				return ENOMEM;
+			error = ext4_ext_read_block(emp, child_blk, child);
+			if (error == 0)
+				error = ext4_ext_free_subtree(emp, child);
+			_FREE(child, M_TEMP);
+			if (error)
+				return error;
+			error = ext4_free_block(emp, child_blk);
+			if (error)
+				return error;
+		}
+		return 0;
+	}
 }
 
 int
@@ -575,30 +905,17 @@ ext4_inode_free_extents(struct ext4mount *emp, struct ext4_inode *inode)
 {
 	struct ext4_extent_header *eh =
 	    (struct ext4_extent_header *)inode->i_block;
-	struct ext4_extent *ex = (struct ext4_extent *)(eh + 1);
-	uint16_t entries, depth, i;
-	int error = 0;
+	int error;
 
 	if ((le32(inode->i_flags) & EXT4_EXTENTS_FL) == 0)
 		return 0;
 	if (le16(eh->eh_magic) != EXT4_EXT_MAGIC)
 		return EIO;
-	depth = le16(eh->eh_depth);
-	if (depth != 0)
-		return EFBIG;
-	entries = le16(eh->eh_entries);
-	for (i = 0; i < entries; i++) {
-		uint16_t j, len = le16(ex[i].ee_len);
-		uint64_t start = le32(ex[i].ee_start_lo) |
-		    ((uint64_t)le16(ex[i].ee_start_hi) << 32);
-		if (len > 32768)
-			len -= 32768;
-		for (j = 0; j < len; j++) {
-			error = ext4_free_block(emp, start + j);
-			if (error)
-				return error;
-		}
-	}
+
+	error = ext4_ext_free_subtree(emp, (char *)inode->i_block);
+	if (error)
+		return error;
+
 	memset(inode->i_block, 0, sizeof(inode->i_block));
 	inode->i_blocks_lo = 0;
 	inode->i_size_lo = 0;
@@ -621,8 +938,23 @@ ext4_inode_truncate_extents(struct ext4mount *emp, struct ext4_inode *inode,
 	if (le16(eh->eh_magic) != EXT4_EXT_MAGIC)
 		return EIO;
 	depth = le16(eh->eh_depth);
-	if (depth != 0)
-		return EFBIG;
+	if (depth != 0) {
+		/* Truncating a multi-level tree to empty is just a full free +
+		 * reset; partial shrink of a deep tree isn't supported yet. */
+		if (keep_blocks != 0)
+			return EFBIG;
+		error = ext4_inode_free_extents(emp, inode);
+		if (error)
+			return error;
+		eh = (struct ext4_extent_header *)inode->i_block;
+		eh->eh_magic = le16(EXT4_EXT_MAGIC);
+		eh->eh_entries = 0;
+		eh->eh_max = le16(ext4_ext_root_max());
+		eh->eh_depth = 0;
+		eh->eh_generation = 0;
+		inode->i_flags = le32(le32(inode->i_flags) | EXT4_EXTENTS_FL);
+		return 0;
+	}
 
 	entries = le16(eh->eh_entries);
 	while (entries > 0) {

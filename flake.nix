@@ -114,8 +114,8 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "helloapp" "launchd" "busybox" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "iokittest" "ioreg" "mousemon" "msdosfstest" "mount" "umount" ]
-              ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" ];
+            buildTargets = [ "helloapp" "launchd" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "iokittest" "ioreg" "mousemon" "msdosfstest" "mount" "umount" ]
+              ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
             enableProjects = false;
             enableKernel = false;
             enableLibraries = false;
@@ -256,6 +256,115 @@
                 export PYTHONPATH="${pkgs.xcb-proto}/${pkgs.python3.sitePackages}:$PYTHONPATH"
               '';
             };
+          xvfbLibICEBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libICE";
+              version = pkgs.libICE.version;
+              src = pkgs.libICE.src;
+              deps = [ pkgs.xorgproto pkgs.xtrans ];
+              preConfigureExtra = ''
+                export ac_cv_func_arc4random_buf=yes
+              '';
+            };
+          xvfbLibSMBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libSM";
+              version = pkgs.libSM.version;
+              src = pkgs.libSM.src;
+              deps = [ pkgs.xorgproto pkgs.xtrans xvfbLibICEBuild ];
+              configureFlags = [
+                "--without-libuuid"
+              ];
+            };
+          xvfbLibXtBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXt";
+              version = pkgs.libXt.version;
+              src = pkgs.libXt.src;
+              deps = [
+                pkgs.xorgproto
+                xlibBuild
+                xvfbLibICEBuild
+                xvfbLibSMBuild
+              ];
+            };
+          xvfbLibXextBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXext";
+              version = pkgs.libXext.version;
+              src = pkgs.libXext.src;
+              deps = [ pkgs.xorgproto xlibBuild xvfbLibXauBuild ];
+            };
+          xvfbLibXmuBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXmu";
+              version = pkgs.libXmu.version;
+              src = pkgs.libXmu.src;
+              deps = [
+                pkgs.xorgproto
+                xlibBuild
+                xvfbLibXextBuild
+                xvfbLibXtBuild
+                # libXmu's CvtStdSel.c pulls in Xt's ShellP.h -> Shell.h ->
+                # <X11/SM/SMlib.h>, so libSM (and its libICE dep) headers must
+                # be on the include path even though libXmu doesn't link them
+                # directly.
+                xvfbLibSMBuild
+                xvfbLibICEBuild
+              ];
+            };
+          xvfbLibXpmBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXpm";
+              version = pkgs.libXpm.version;
+              src = pkgs.libXpm.src;
+              deps = [ pkgs.xorgproto xlibBuild ];
+            };
+          xvfbLibXawBuild =
+            if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXaw";
+              version = pkgs.libXaw.version;
+              src = pkgs.libXaw.src;
+              deps = [
+                pkgs.xorgproto
+                xlibBuild
+                xvfbLibXextBuild
+                xvfbLibXmuBuild
+                xvfbLibXpmBuild
+                xvfbLibXtBuild
+                # Same transitive header need as libXmu: Xt's Shell.h pulls in
+                # <X11/SM/SMlib.h>, so libSM/libICE headers must be reachable.
+                xvfbLibSMBuild
+                xvfbLibICEBuild
+              ];
+              # XawI18n.c uses MB_LEN_MAX without including <limits.h> - it
+              # relies on it arriving transitively, which happens on glibc but
+              # not through the Darwin SDK header chain. Force-include it.
+              preConfigureExtra = ''
+                export CFLAGS="$CFLAGS -include limits.h"
+              '';
+              # libXaw installs versioned Athena archives (libXaw6.a/libXaw7.a)
+              # but no plain libXaw.a, and its .dylib symlinks dangle under
+              # --disable-shared. Consumers (xterm) link -lXaw, so provide the
+              # unversioned static alias.
+              postInstallExtra = ''
+                ln -sf libXaw7.a $out/lib/libXaw.a
+              '';
+            };
           xvfbLibXkbfileBuild =
             if isDarwin then null else pkgs.callPackage ./xorg-cross-lib.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -335,6 +444,51 @@
               libXdmcp = xvfbLibXdmcpBuild;
               inherit (pkgs) xorgproto;
             };
+          ncursesBuild =
+            if isDarwin then null else pkgs.callPackage ./ncurses.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              ncurses = pkgs.ncurses;
+            };
+          toyboxBuild =
+            if isDarwin then null else pkgs.callPackage ./toybox.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              toybox = pkgs.toybox;
+              zlib = xvfbZlibBuild;
+            };
+          nanoBuild =
+            if isDarwin then null else pkgs.callPackage ./nano.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              nano = pkgs.nano;
+              ncurses = ncursesBuild;
+            };
+          zshBuild =
+            if isDarwin then null else pkgs.callPackage ./zsh.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              zsh = pkgs.zsh;
+              ncurses = ncursesBuild;
+            };
+          xtermBuild =
+            if isDarwin then null else pkgs.callPackage ./xterm.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              xterm = pkgs.xterm;
+              libX11 = xlibBuild;
+              libxcb = xcbBuild;
+              libXau = xvfbLibXauBuild;
+              libXdmcp = xvfbLibXdmcpBuild;
+              libICE = xvfbLibICEBuild;
+              libSM = xvfbLibSMBuild;
+              libXt = xvfbLibXtBuild;
+              libXext = xvfbLibXextBuild;
+              libXmu = xvfbLibXmuBuild;
+              libXpm = xvfbLibXpmBuild;
+              libXaw = xvfbLibXawBuild;
+              inherit (pkgs) xorgproto;
+            };
           startxBuild =
             if isDarwin then null else pkgs.callPackage ./startx.nix {
               xvfb = xvfbBuild;
@@ -403,7 +557,7 @@
           fullBuild = mkPureDarwinBuild {
             pname = "puredarwin";
             src = ./.;
-            buildTargets = [ "helloapp" "launchd" "busybox" "fbtri" "xnu" "kexts" "libsystem_kernel" ];
+            buildTargets = [ "helloapp" "launchd" "fbtri" "xnu" "kexts" "libsystem_kernel" ];
             installUserland = false;
             installKernel = false;
             installBaseSystem = true;
@@ -436,6 +590,21 @@
             cp -a ${xvfbFontsBuild}/. "$out/"
           '');
 
+          imageExtraPackageSet = lib.optionalAttrs (!isDarwin) {
+            xvfb = xvfbBuild;
+            xorg = xorgBuild;
+            libxcvt = xvfbLibxcvtBuild;
+            xeyes = xeyesBuild;
+            xterm = xtermBuild;
+            startx = startxBuild;
+            xkbcomp = xkbcompBuild;
+            xkeyboard-config = xkeyboardConfigBuild;
+            fonts = xvfbFontsBuild;
+            nano = nanoBuild;
+            zsh = zshBuild;
+            toybox = toyboxBuild;
+          };
+
           commonPackages = {
             userland = userlandBuild;
             tcc = tccBuild;
@@ -451,16 +620,11 @@
             basesystem = fullBuild;
             basesystem-split = splitBaseSystem;
             default = fullBuild;
-          } // lib.optionalAttrs (!isDarwin) {
-            xvfb = xvfbBuild;
+          } // imageExtraPackageSet // lib.optionalAttrs (!isDarwin) {
             libX11 = xlibBuild;
             libxcb = xcbBuild;
-            xeyes = xeyesBuild;
-            startx = startxBuild;
+            ncurses = ncursesBuild;
             libxkbfile = xvfbLibXkbfileBuild;
-            xkbcomp = xkbcompBuild;
-            xkeyboard-config = xkeyboardConfigBuild;
-            fonts = xvfbFontsBuild;
           };
 
           linuxPackages =
@@ -472,16 +636,7 @@
               };
               imageBuild = pkgs.callPackage ./image.nix {
                 baseSystem = splitBaseSystem;
-                extraPackages = [
-                  xvfbBuild
-                  xorgBuild
-                  xvfbLibxcvtBuild
-                  xeyesBuild
-                  startxBuild
-                  xkbcompBuild
-                  xkeyboardConfigBuild
-                  xvfbFontsBuild
-                ];
+                extraPackages = lib.attrValues imageExtraPackageSet;
                 kc = kcBuild;
                 xnuLoader = xnu-loader.packages.${system}.default;
                 apfsprogs = pkgs.apfsprogs;
@@ -526,6 +681,9 @@
                     -drive if=pflash,format=raw,unit=0,readonly=on,file="$ovmf_code" \
                     -drive if=pflash,format=raw,unit=1,file="$ovmf_vars" \
                     -drive id=root,format=raw,file="$image"$image_readonly_opt \
+                    -device qemu-xhci,id=xhci \
+                    -device usb-kbd,bus=xhci.0 \
+                    -device usb-mouse,bus=xhci.0 \
                     -serial mon:stdio \
                     -no-reboot \
                     -no-shutdown \
@@ -577,9 +735,9 @@
                     -device ide-hd,bus=sata.0,drive=system \
                     -device e1000-82545em,netdev=net0 \
                     -netdev user,id=net0 \
-                    -usb \
-                    -device usb-kbd \
-                    -device usb-tablet \
+                    -device qemu-xhci,id=xhci \
+                    -device usb-kbd,bus=xhci.0 \
+                    -device usb-mouse,bus=xhci.0 \
                     -serial mon:stdio \
                     -no-reboot \
                     -no-shutdown \

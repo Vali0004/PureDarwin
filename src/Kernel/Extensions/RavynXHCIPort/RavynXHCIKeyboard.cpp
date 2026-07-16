@@ -2,6 +2,11 @@
 #include <IOKit/hidsystem/IOHIDParameter.h>
 #include <IOKit/hidsystem/IOHIDShared.h>
 #include <kern/thread.h>
+#include <kern/thread_call.h>
+#include <miscfs/devfs/devfs.h>
+#include <sys/conf.h>
+#include <sys/errno.h>
+#include <sys/uio.h>
 #include "RavynXHCIKeyboard.h"
 #include "RavynXHCIPort.h"
 #include "../ApplePS2Controller/ApplePS2KeyboardMap.h"
@@ -42,6 +47,182 @@ static const UInt8 gUSBModToADB[8] = {
     0x36  /* right command */
 };
 
+/* ------------------------------------------------------------------------
+ * /dev/xhci_kbd character device.
+ *
+ * The keyboard already feeds the in-kernel IOHIDSystem via IOHIKeyboard, but
+ * a userspace X server has no way to read that. Mirror the mouse's cdev: a
+ * small ring buffer of raw key events (USB HID usage + up/down) exposed as a
+ * non-blocking char device that the Xorg input driver polls.
+ * ------------------------------------------------------------------------ */
+
+extern "C" int devfs_is_ready(void);
+
+struct XHCIKbdEvent {
+    UInt32 sequence;
+    UInt8  usage;       /* USB HID usage (regular 0x04..0x75, mods 0xE0..0xE7) */
+    UInt8  down;        /* 1 = pressed, 0 = released */
+    UInt8  reserved[2];
+};
+
+static void *gKbdNode;
+static int gKbdMajor = -1;
+static thread_call_t gKbdRetryCall;
+static IONotifier *gKbdBSDNotifier;
+static IOLock *gKbdLock;
+static UInt32 gKbdSequence;
+static UInt32 gKbdReadIndex;
+static UInt32 gKbdWriteIndex;
+static XHCIKbdEvent gKbdEvents[64];
+
+static void xhci_kbd_publish_retry(thread_call_param_t, thread_call_param_t);
+static bool xhci_kbd_iobsd_published(void *, void *, IOService *, IONotifier *);
+
+static int xhci_kbd_open(dev_t, int, int, struct proc *) { return 0; }
+static int xhci_kbd_close(dev_t, int, int, struct proc *) { return 0; }
+
+static int
+xhci_kbd_read(dev_t, struct uio *uio, int)
+{
+    XHCIKbdEvent event;
+    int error = 0;
+
+    if (!gKbdLock)
+        return ENXIO;
+    if (uio_resid(uio) < (user_ssize_t)sizeof(event))
+        return EINVAL;
+
+    IOLockLock(gKbdLock);
+    if (gKbdReadIndex == gKbdWriteIndex) {
+        error = EAGAIN;
+    } else {
+        event = gKbdEvents[gKbdReadIndex % (UInt32)(sizeof(gKbdEvents) / sizeof(gKbdEvents[0]))];
+        gKbdReadIndex++;
+    }
+    IOLockUnlock(gKbdLock);
+
+    if (error)
+        return error;
+    return uiomove((const char *)&event, (int)sizeof(event), uio);
+}
+
+static struct cdevsw xhci_kbd_cdevsw =
+{
+    /* d_open     */ xhci_kbd_open,
+    /* d_close    */ xhci_kbd_close,
+    /* d_read     */ xhci_kbd_read,
+    /* d_write    */ eno_rdwrt,
+    /* d_ioctl    */ eno_ioctl,
+    /* d_stop     */ eno_stop,
+    /* d_reset    */ eno_reset,
+    /* d_ttys     */ 0,
+    /* d_select   */ eno_select,
+    /* d_mmap     */ eno_mmap,
+    /* d_strategy */ eno_strat,
+    /* d_getc     */ eno_getc,
+    /* d_putc     */ eno_putc,
+    /* d_type     */ 0
+};
+
+static void
+xhci_kbd_schedule_retry()
+{
+    AbsoluteTime deadline;
+
+    if (gKbdNode)
+        return;
+    if (!gKbdRetryCall) {
+        gKbdRetryCall = thread_call_allocate(xhci_kbd_publish_retry, NULL);
+        if (!gKbdRetryCall)
+            return;
+    }
+    clock_interval_to_deadline(1, kSecondScale, &deadline);
+    thread_call_enter_delayed(gKbdRetryCall, deadline);
+}
+
+static void
+xhci_kbd_publish()
+{
+    if (gKbdNode)
+        return;
+    if (!gKbdLock) {
+        gKbdLock = IOLockAlloc();
+        if (!gKbdLock)
+            return;
+    }
+    if (gKbdMajor < 0) {
+        gKbdMajor = cdevsw_add(-1, &xhci_kbd_cdevsw);
+        if (gKbdMajor < 0)
+            return;
+    }
+
+    if (!devfs_is_ready()) {
+        if (!gKbdBSDNotifier) {
+            OSDictionary *matching = IOService::resourceMatching("IOBSD");
+            if (matching) {
+                gKbdBSDNotifier = IOService::addMatchingNotification(gIOPublishNotification,
+                                                                     matching,
+                                                                     xhci_kbd_iobsd_published,
+                                                                     NULL, NULL);
+                matching->release();
+            }
+        }
+        xhci_kbd_schedule_retry();
+        return;
+    }
+
+    gKbdNode = devfs_make_node(makedev(gKbdMajor, 0), DEVFS_CHAR,
+                               0, 0, 0666, "xhci_kbd");
+    if (!gKbdNode)
+        xhci_kbd_schedule_retry();
+    else
+        IOLog("RavynXHCIKeyboard: published /dev/xhci_kbd\n");
+}
+
+static void
+xhci_kbd_publish_retry(thread_call_param_t, thread_call_param_t)
+{
+    xhci_kbd_publish();
+}
+
+static bool
+xhci_kbd_iobsd_published(void *, void *, IOService *, IONotifier *notifier)
+{
+    xhci_kbd_publish();
+    if (gKbdNode && notifier) {
+        notifier->remove();
+        if (gKbdBSDNotifier == notifier)
+            gKbdBSDNotifier = NULL;
+    }
+    return true;
+}
+
+static void
+xhci_kbd_push_event(UInt8 usage, bool down)
+{
+    UInt32 slot;
+    XHCIKbdEvent event;
+
+    if (!gKbdLock) {
+        xhci_kbd_publish();
+        if (!gKbdLock)
+            return;
+    }
+
+    event.sequence = ++gKbdSequence;
+    event.usage = usage;
+    event.down = down ? 1 : 0;
+    event.reserved[0] = event.reserved[1] = 0;
+
+    IOLockLock(gKbdLock);
+    slot = gKbdWriteIndex % (UInt32)(sizeof(gKbdEvents) / sizeof(gKbdEvents[0]));
+    gKbdEvents[slot] = event;
+    gKbdWriteIndex++;
+    if (gKbdWriteIndex - gKbdReadIndex > (UInt32)(sizeof(gKbdEvents) / sizeof(gKbdEvents[0])))
+        gKbdReadIndex = gKbdWriteIndex - (UInt32)(sizeof(gKbdEvents) / sizeof(gKbdEvents[0]));
+    IOLockUnlock(gKbdLock);
+}
+
 bool RavynXHCIKeyboard::initWithPort(RavynXHCIPort * port, int kbdIndex)
 {
     if (!super::init()) return false;
@@ -68,6 +249,8 @@ bool RavynXHCIKeyboard::start(IOService * provider)
 {
     if (!super::start(provider)) return false;
     _running = true;
+
+    xhci_kbd_publish();
 
     thread_t thread = THREAD_NULL;
     if (kernel_thread_start((thread_continue_t)&RavynXHCIKeyboard::pollThread, this, &thread) != KERN_SUCCESS) {
@@ -162,6 +345,8 @@ void RavynXHCIKeyboard::dispatchUSBUsage(UInt8 usage, bool down)
 {
     if (usage > 0x75) return;
 
+    xhci_kbd_push_event(usage, down);
+
     UInt8 adb = gUSBToADB[usage];
     if (adb == DEADKEY) return;
 
@@ -173,6 +358,8 @@ void RavynXHCIKeyboard::dispatchUSBUsage(UInt8 usage, bool down)
 void RavynXHCIKeyboard::dispatchModifier(UInt8 bit, bool down)
 {
     if (bit >= 8) return;
+
+    xhci_kbd_push_event((UInt8)(0xE0 + bit), down);
 
     AbsoluteTime now;
     clock_get_uptime((uint64_t *)&now);
