@@ -1,4 +1,11 @@
 add_darwin_static_library(libdispatch_static)
+mig(src/protocol.defs INCLUDES_FROM_TARGET libdispatch_static
+    USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/protocol.h
+    USER_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/protocol.c
+    SERVER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/protocolServer.h
+    SERVER_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/protocolServer.c
+    NOVOUCHERS)
+
 target_sources(libdispatch_static PRIVATE
     src/allocator.c
     src/apply.c
@@ -25,6 +32,9 @@ target_sources(libdispatch_static PRIVATE
     src/shims/yield.c
     src/BlocksRuntime/data.c
     src/BlocksRuntime/runtime.c
+    ${CMAKE_CURRENT_BINARY_DIR}/protocol.c
+    ${CMAKE_CURRENT_BINARY_DIR}/protocolServer.c
+    compat-include/pd_libdispatch_link_gaps.c
 )
 set_target_properties(libdispatch_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_compile_definitions(libdispatch_static PRIVATE
@@ -36,19 +46,14 @@ target_compile_definitions(libdispatch_static PRIVATE
     # build time (dtrace -h) - we have no DTrace and don't generate it.
     # TARGET_OS_OSX (needed elsewhere) would otherwise auto-enable this.
     DISPATCH_USE_DTRACE=0
-    # voucher.c's VOUCHER_USE_MACH_VOUCHER=1 path needs real firehose
-    # activity-tracing internals (firehose_buffer_create et al, from a
-    # separate Apple "firehose" project not vendored here). Upstream already
-    # wrote a simpler, firehose-free fallback implementation for platforms
-    # without it - the #else branch (voucher.c:1758 onward) - route there
-    # instead of implementing firehose ourselves.
     VOUCHER_USE_MACH_VOUCHER=0
-    # mach_get_times()'s userspace declaration in osfmk/mach/mach_time.h is
-    # gated on `#if !defined(KERNEL) && defined(PRIVATE)` - same convention
-    # pthread_static's CMakeLists already uses.
     PRIVATE=1
+    __PTHREAD_EXPOSE_INTERNALS__=1
+    OS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1
+    DISPATCH_VARIANT_STATIC=1
 )
 target_include_directories(libdispatch_static PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/compat-include
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -58,14 +63,13 @@ target_include_directories(libdispatch_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/private
     ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/private_include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/mach
     ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/public_include
     # event_kevent.c wants BSD's sys/event.h, sys/queue.h.
     ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/bsd
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/include
     # mach_get_times() (mach/mach_time.h - libc/include's copy lacks it,
     # only xnu's own osfmk one declares it) and libproc.h (proc_pidinfo).
     ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/osfmk
-    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/include
 )
 target_link_libraries(libdispatch_static PRIVATE
     AvailabilityHeaders
@@ -87,7 +91,9 @@ target_compile_options(libdispatch_static PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_SOURCE_DIR}/src/Libraries/dyld/dyld_sdk_compat.h>
     # kdebug_trace() declaration (real implementation already exists and
     # builds in libsystem_kernel/wrappers/kdebug_trace.c).
-    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_SOURCE_DIR}/src/Kernel/xnu/bsd/sys_private/kdebug_private.h>)
+    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_SOURCE_DIR}/src/Kernel/xnu/bsd/sys_private/kdebug_private.h>
+    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_SOURCE_DIR}/src/Kernel/xnu/libkern/os/base_private.h>
+    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_CURRENT_SOURCE_DIR}/compat-include/pd_work_interval_instance.h>)
 
 # The MIG-generated mach headers (public_include) must exist first.
 add_dependencies(libdispatch_static libsystem_kernel_static)
@@ -100,3 +106,9 @@ add_dependencies(libdispatch_static libsystem_kernel_static)
 # must NOT win over the generated tree's
 target_include_directories(libdispatch_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../libc/include)
+
+target_include_directories(libdispatch_static PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/mach)
+
+target_include_directories(libdispatch_static PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/libkern)

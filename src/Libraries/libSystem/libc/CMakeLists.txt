@@ -133,7 +133,6 @@ target_sources(libc_static PRIVATE
     gen/pd_getgrent.c            # getgrnam/getgrgid/getgrouplist (/etc/group reader; no libinfo)
     gen/pd_netdb_stub.c          # gethostbyname/h_errno/hstrerror (no libinfo/libresolv yet)
     gen/pd_getservbyname.c       # getservbyname (/etc/services reader; no libinfo)
-    gen/pd_dispatch_once.c       # dispatch_once/dispatch_once_f (real libdispatch not linked yet - see libSystem/libdispatch/)
     libm/pd_libm_trig.c          # sin/cos/atan/atan2/asin/acos (from-scratch libm)
     libm/pd_libm_pow.c           # log/exp/pow/cbrt/hypot (from-scratch libm)
     gen/clock_gettime.c          # _clock_gettime / _clock_settime (BusyBox date -s)

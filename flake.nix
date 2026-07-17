@@ -580,7 +580,7 @@
           libSystemBuild = mkPureDarwinBuild {
             pname = "puredarwin-libsystem";
             src = libSystemSource;
-            buildTargets = [ "libSystem_B_stub" "dyld" "libsystem_kernel_static" ];
+            buildTargets = [ "libSystem_B_stub" "dyld" "libsystem_kernel_static" "libdispatch_static" ];
             enableUserspace = false;
             enableKernel = false;
             installUserland = false;
@@ -730,7 +730,7 @@
                 kc = kcBuild;
                 xnuLoader = xnu-loader.packages.${system}.default;
                 apfsprogs = pkgs.apfsprogs;
-                testAudioFile = /home/vali/development/darwin/badapple.pcm;
+                #gtestAudioFile = /home/vali/development/darwin/badapple.pcm;
               };
               imageDebugBuild = pkgs.callPackage ./image.nix {
                 baseSystem = splitBaseSystem;

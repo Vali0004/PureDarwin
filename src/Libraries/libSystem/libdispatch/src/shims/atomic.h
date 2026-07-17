@@ -93,6 +93,22 @@
 #define _os_rel_barrier_dependency              memory_order_release
 #define _os_acq_barrier_dependency              memory_order_acquire
 #define _os_atomic_mo_dependency_smp            memory_order_relaxed
+/* os_atomic_thread_fence()'s atomic_signal_fence() half token-pastes
+ * _os_atomic_mo_##m (no _smp suffix) - only the _smp-suffixed one above
+ * was patched in initially, missing this plain variant. */
+#define _os_atomic_mo_dependency                memory_order_relaxed
+
+/*
+ * PureDarwin: same version gap as above - our vendored os/atomic_private.h
+ * uses _os_atomic_auto_dependency(e) in os_atomic_inject_dependency() (and
+ * os_atomic_load_with_dependency_on()) but never defines it. Per its own
+ * doc comment ("capable of automatically creating dependency tokens"),
+ * this auto-wraps a raw value into a dependency token unless it already is
+ * one.
+ */
+#define _os_atomic_auto_dependency(e) _Generic((e), \
+		os_atomic_dependency_t: (e), \
+		default: os_atomic_make_dependency(e))
 
 #else // __has_include(<os/atomic_private.h>)
 #include <stdatomic.h>

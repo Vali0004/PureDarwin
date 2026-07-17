@@ -645,6 +645,18 @@ _voucher_release(voucher_t voucher)
 	(void)voucher;
 }
 
+// Upstream only defines this in the VOUCHER_USE_MACH_VOUCHER=1 branch above
+// (a _voucher_release() variant that skips disposal, used by exactly one
+// call site in inline_internal.h's _dispatch_set_priority_and_voucher()).
+// Vouchers are already fully disabled in this fallback branch, so this is
+// a no-op like every other function here.
+DISPATCH_ALWAYS_INLINE
+static inline void
+_voucher_release_no_dispose(voucher_t voucher)
+{
+	(void)voucher;
+}
+
 DISPATCH_ALWAYS_INLINE
 static inline voucher_t
 _voucher_get(void)
