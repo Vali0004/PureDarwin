@@ -249,6 +249,8 @@ struct ext4node {
 	enum vtype        e_vtype;
 	LIST_ENTRY(ext4node) e_hash;    /* em_node_hash linkage */
 	int               e_alloc_wip;  /* vnode_create in progress; sleep on &e_vp */
+	int               e_unhashed;   /* already LIST_REMOVE'd from em_node_hash */
+	uint32_t          e_dbg_last_lblk; /* diagnostic: last logical block logged */
 };
 
 #define VTOE(vp)  ((struct ext4node *)vnode_fsnode(vp))
@@ -273,8 +275,9 @@ int  ext4_inode_append_extent(struct ext4mount *emp, struct ext4_inode *inode,
 int  ext4_inode_free_extents(struct ext4mount *emp, struct ext4_inode *inode);
 int  ext4_inode_truncate_extents(struct ext4mount *emp, struct ext4_inode *inode,
                uint64_t keep_blocks);
-int  ext4_bmap(struct ext4mount *emp, struct ext4_inode *inode,
+int  ext4_bmap(struct ext4mount *emp, ino_t ino, struct ext4_inode *inode,
                uint32_t lblk, uint64_t *pblk_out);
+int  ext4_ino_is_live(struct ext4mount *emp, ino_t ino);
 int  ext4_indirect_lookup(struct ext4mount *emp, uint32_t blk, uint32_t lblk,
                int level, uint64_t *pblk_out);
 int  ext4_blkread(struct ext4mount *emp, uint64_t pblk, buf_t *bpp);

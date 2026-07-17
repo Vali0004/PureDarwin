@@ -101,6 +101,12 @@ add_dependencies(libSystem_B_stub
     libsystem_kernel_static libplatform_static pthread_static
     libc_static libc_internal_static libmalloc_static
     corecrypto_static CrashReporterClient libresolv_static)
+# libdispatch_static (see ../libdispatch/CMakeLists.txt) is real, ongoing
+# work-in-progress - it configures/builds standalone (`ninja libdispatch_static`)
+# but isn't linked into libSystem.B.dylib yet (MIG protocol.h/protocolServer.h
+# codegen, work_interval API headers, and a couple of atomic-macro/memmove
+# declaration gaps still need resolving). Not part of the default link so
+# libSystem itself keeps building in the meantime.
 if(PUREDARWIN_USE_LD64_LLD)
     # ld64.lld resolves archive roots before its duplicate-dead-strip pass can
     # discard libsystem_kernel's _libc_funcptr dispatch wrappers. Let the real

@@ -1,10 +1,11 @@
 foreach(_puredarwin_libsystem_dir
     corecrypto
+    libsystem_kernel
     libc
     libplatform
     libmalloc
-    libsystem_kernel
     pthread
+    libdispatch
     libdyld
     stub
 )

@@ -1,0 +1,102 @@
+add_darwin_static_library(libdispatch_static)
+target_sources(libdispatch_static PRIVATE
+    src/allocator.c
+    src/apply.c
+    src/benchmark.c
+    src/data.c
+    src/init.c
+    src/introspection.c
+    src/io.c
+    src/mach.c
+    src/object.c
+    src/once.c
+    src/queue.c
+    src/semaphore.c
+    src/source.c
+    src/time.c
+    src/transform.c
+    src/voucher.c
+    src/workgroup.c
+    src/eventlink.c
+    src/shims.c
+    src/event/event.c
+    src/event/event_kevent.c
+    src/shims/lock.c
+    src/shims/yield.c
+    src/BlocksRuntime/data.c
+    src/BlocksRuntime/runtime.c
+)
+set_target_properties(libdispatch_static PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_compile_definitions(libdispatch_static PRIVATE
+    __PUREDARWIN__=1
+    DISPATCH_USE_INTERNAL_WORKQUEUE=0
+    HAVE_OBJC=0
+    USE_OBJC=0
+    # provider.h is DTrace-probe-point glue generated from provider.d at
+    # build time (dtrace -h) - we have no DTrace and don't generate it.
+    # TARGET_OS_OSX (needed elsewhere) would otherwise auto-enable this.
+    DISPATCH_USE_DTRACE=0
+    # voucher.c's VOUCHER_USE_MACH_VOUCHER=1 path needs real firehose
+    # activity-tracing internals (firehose_buffer_create et al, from a
+    # separate Apple "firehose" project not vendored here). Upstream already
+    # wrote a simpler, firehose-free fallback implementation for platforms
+    # without it - the #else branch (voucher.c:1758 onward) - route there
+    # instead of implementing firehose ourselves.
+    VOUCHER_USE_MACH_VOUCHER=0
+    # mach_get_times()'s userspace declaration in osfmk/mach/mach_time.h is
+    # gated on `#if !defined(KERNEL) && defined(PRIVATE)` - same convention
+    # pthread_static's CMakeLists already uses.
+    PRIVATE=1
+)
+target_include_directories(libdispatch_static PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/compat-include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BlocksRuntime
+    ${CMAKE_CURRENT_SOURCE_DIR}/private
+    # pthread/private.h, tsd_private.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/private
+    ${CMAKE_CURRENT_SOURCE_DIR}/../pthread/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/private_include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/mach
+    ${CMAKE_BINARY_DIR}/src/Libraries/libSystem/libsystem_kernel/public_include
+    # event_kevent.c wants BSD's sys/event.h, sys/queue.h.
+    ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/bsd
+    # mach_get_times() (mach/mach_time.h - libc/include's copy lacks it,
+    # only xnu's own osfmk one declares it) and libproc.h (proc_pidinfo).
+    ${CMAKE_SOURCE_DIR}/src/Kernel/xnu/osfmk
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_kernel/include
+)
+target_link_libraries(libdispatch_static PRIVATE
+    AvailabilityHeaders
+    architecture_headers
+    clang_bootstrap_headers
+    libc_public_headers
+    libc_private_headers
+    libplatform_headers
+    libplatform_private_headers
+    xnu_private_headers
+    xnu_headers)
+if(TARGET pthread_common_headers)
+    target_link_libraries(libdispatch_static PRIVATE pthread_common_headers pthread_common_private_headers)
+endif()
+target_compile_options(libdispatch_static PRIVATE
+    -isysroot ${PUREDARWIN_MACOSX_SDK}
+    -Wno-availability
+    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_CURRENT_SOURCE_DIR}/../libplatform/pd_bridgeos_compat.h>
+    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_SOURCE_DIR}/src/Libraries/dyld/dyld_sdk_compat.h>
+    # kdebug_trace() declaration (real implementation already exists and
+    # builds in libsystem_kernel/wrappers/kdebug_trace.c).
+    $<$<COMPILE_LANGUAGE:C>:-include${CMAKE_SOURCE_DIR}/src/Kernel/xnu/bsd/sys_private/kdebug_private.h>)
+
+# The MIG-generated mach headers (public_include) must exist first.
+add_dependencies(libdispatch_static libsystem_kernel_static)
+
+# MacTypes.h: the generated libc header tree (libc_public_headers, above)
+# doesn't carry it, but libkern/OSTypes.h (pulled in via dyld_sdk_compat.h's
+# -include -> libkern/OSAtomic.h) wants it. Appended in its own call, after
+# target_link_libraries above, so it lands after the generated tree on the
+# command line and only fills this one gap - libc/include's own sys/cdefs.h
+# must NOT win over the generated tree's
+target_include_directories(libdispatch_static PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libc/include)

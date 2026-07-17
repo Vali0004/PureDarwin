@@ -153,7 +153,7 @@ ext4_dir_lookup(struct ext4node *dep, const char *name, size_t namelen,
 		buf_t bp = NULL;
 		uint32_t p;
 
-		if (ext4_bmap(emp, &dep->e_raw, (uint32_t)(off / bs), &pblk))
+		if (ext4_bmap(emp, dep->e_ino, &dep->e_raw, (uint32_t)(off / bs), &pblk))
 			continue;
 		if (pblk == 0)
 			continue;
@@ -269,7 +269,7 @@ ext4_read_range(struct ext4node *ep, uint64_t foff, void *dst, size_t len)
 	if (boff + len > bs)
 		len = bs - boff;
 
-	error = ext4_bmap(emp, &ep->e_raw, lblk, &pblk);
+	error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, lblk, &pblk);
 	if (error)
 		return error;
 	if (pblk == 0) {
@@ -367,7 +367,7 @@ ext4_dir_add(struct ext4node *dep, const char *name, size_t namelen,
 		uint32_t p;
 		int error;
 
-		error = ext4_bmap(emp, &dep->e_raw, (uint32_t)(off / bs), &pblk);
+		error = ext4_bmap(emp, dep->e_ino, &dep->e_raw, (uint32_t)(off / bs), &pblk);
 		if (error)
 			return error;
 		if (pblk == 0)
@@ -456,7 +456,7 @@ ext4_dir_remove(struct ext4node *dep, const char *name, size_t namelen,
 		uint32_t p;
 		int error;
 
-		error = ext4_bmap(emp, &dep->e_raw, (uint32_t)(off / bs), &pblk);
+		error = ext4_bmap(emp, dep->e_ino, &dep->e_raw, (uint32_t)(off / bs), &pblk);
 		if (error)
 			return error;
 		if (pblk == 0)
@@ -502,7 +502,7 @@ ext4_dir_replace(struct ext4node *dep, const char *name, size_t namelen,
 		uint32_t p;
 		int error;
 
-		error = ext4_bmap(emp, &dep->e_raw, (uint32_t)(off / bs), &pblk);
+		error = ext4_bmap(emp, dep->e_ino, &dep->e_raw, (uint32_t)(off / bs), &pblk);
 		if (error)
 			return error;
 		if (pblk == 0)
@@ -545,7 +545,7 @@ ext4_dir_update_dotdot(struct ext4node *dep, ino_t parent)
 	uint32_t p;
 	int error;
 
-	error = ext4_bmap(emp, &dep->e_raw, 0, &pblk);
+	error = ext4_bmap(emp, dep->e_ino, &dep->e_raw, 0, &pblk);
 	if (error)
 		return error;
 	if (pblk == 0)
@@ -583,7 +583,7 @@ ext4_dir_is_empty(struct ext4node *dep)
 		uint32_t p;
 		int error;
 
-		error = ext4_bmap(emp, &dep->e_raw, (uint32_t)(off / bs), &pblk);
+		error = ext4_bmap(emp, dep->e_ino, &dep->e_raw, (uint32_t)(off / bs), &pblk);
 		if (error)
 			return error;
 		if (pblk == 0)
@@ -641,11 +641,24 @@ ext4_drop_inode(struct ext4node *ep)
 	 * this node's i_block (extent header magic -> 0), so it must not linger
 	 * in the inode hash: a later ext4_alloc_inode() that hands the same
 	 * number to a new file would otherwise get this stale vnode back from
-	 * ext4_vget() and every bmap on it would fault "bad extent magic 0x0".
-	 * vnode_recycle() drives it to reclaim, which unhooks it from the hash.
+	 * ext4_vget()'s hash-hit fast path (which trusts the cached e_raw
+	 * without re-reading disk) and every bmap on it would fault "bad
+	 * extent magic 0x0". vnode_recycle() eventually drives VNOP_RECLAIM,
+	 * which unhooks it from the hash too, but that's asynchronous and can
+	 * lose the race against an immediate create() reusing this same inode
+	 * number - so unhash synchronously here as well, guarded by
+	 * e_unhashed so VNOP_RECLAIM's later LIST_REMOVE is a no-op.
 	 */
-	if (ep->e_vp)
+	if (ep->e_vp) {
+		IOLock *hlock = (IOLock *)ep->e_mount->em_hash_lock;
+		IOLockLock(hlock);
+		if (!ep->e_unhashed) {
+			LIST_REMOVE(ep, e_hash);
+			ep->e_unhashed = 1;
+		}
+		IOLockUnlock(hlock);
 		vnode_recycle(ep->e_vp);
+	}
 	return 0;
 }
 
@@ -681,7 +694,18 @@ ext4_ensure_block(struct ext4node *ep, uint32_t lblk, uint64_t *pblk_out)
 	uint64_t pblk = 0;
 	int error;
 
-	error = ext4_bmap(emp, &ep->e_raw, lblk, &pblk);
+	if (lblk != ep->e_dbg_last_lblk) {
+		struct ext4_extent_header *dbg_eh =
+		    (struct ext4_extent_header *)ep->e_raw.i_block;
+		E4LOG("ensure_block ino=%llu lblk=%u (was %u) size=%llu "
+		    "magic=0x%x entries=%u",
+		    (unsigned long long)ep->e_ino, lblk, ep->e_dbg_last_lblk,
+		    (unsigned long long)ep->e_size, le16(dbg_eh->eh_magic),
+		    le16(dbg_eh->eh_entries));
+		ep->e_dbg_last_lblk = lblk;
+	}
+
+	error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, lblk, &pblk);
 	if (error)
 		return error;
 	if (pblk != 0) {
@@ -845,7 +869,7 @@ ext4_resize_file(struct ext4node *ep, uint64_t new_size)
 			buf_t bp = NULL;
 			uint32_t tail = (uint32_t)(new_size % bs);
 
-			error = ext4_bmap(emp, &ep->e_raw, (uint32_t)(new_blocks - 1), &pblk);
+			error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, (uint32_t)(new_blocks - 1), &pblk);
 			if (error)
 				return error;
 			if (pblk != 0) {
@@ -1154,6 +1178,20 @@ ext4_vnop_remove(struct vnop_remove_args *ap)
 	E4LOG("remove: stale vnode for '%.*s' (vp ino %llu, dir ino %llu)",
 	    (int)ap->a_cnp->cn_namelen, ap->a_cnp->cn_nameptr,
 	    (unsigned long long)ep->e_ino, (unsigned long long)removed);
+	/*
+	 * `removed` is whatever the directory entry actually pointed to,
+	 * which can diverge from the vnode VFS handed us (a lookup/unlink
+	 * race, or the name got recreated under us). It must NOT be freed
+	 * blindly: if it's still a live, open inode (e.g. an unrelated file
+	 * that happens to share this number in some other, still-unexplained
+	 * way), dropping its extents corrupts that file out from under
+	 * whoever has it open. Only free it if nothing has it open.
+	 */
+	if (ext4_ino_is_live(dep->e_mount, removed)) {
+		E4LOG("remove: refusing to free live ino %llu (dir said "
+		    "removed, but it's still open)", (unsigned long long)removed);
+		return 0;
+	}
 	return ext4_drop_inode_ino(dep->e_mount, removed);
 }
 
@@ -1188,6 +1226,11 @@ ext4_vnop_rmdir(struct vnop_rmdir_args *ap)
 	E4LOG("rmdir: stale vnode for '%.*s' (vp ino %llu, dir ino %llu)",
 	    (int)ap->a_cnp->cn_namelen, ap->a_cnp->cn_nameptr,
 	    (unsigned long long)ep->e_ino, (unsigned long long)removed);
+	if (ext4_ino_is_live(dep->e_mount, removed)) {
+		E4LOG("rmdir: refusing to free live ino %llu (dir said "
+		    "removed, but it's still open)", (unsigned long long)removed);
+		return 0;
+	}
 	return ext4_drop_inode_ino(dep->e_mount, removed);
 }
 
@@ -1449,7 +1492,7 @@ ext4_vnop_readdir(struct vnop_readdir_args *ap)
 		buf_t bp = NULL;
 		uint32_t p;
 
-		if (ext4_bmap(emp, &dep->e_raw, (uint32_t)(blkoff / bs), &pblk) ||
+		if (ext4_bmap(emp, dep->e_ino, &dep->e_raw, (uint32_t)(blkoff / bs), &pblk) ||
 		    pblk == 0) {
 			off = blkoff + bs;
 			continue;
@@ -1525,7 +1568,7 @@ ext4_vnop_readlink(struct vnop_readlink_args *ap)
 	{
 		uint64_t pblk = 0;
 		buf_t bp = NULL;
-		error = ext4_bmap(emp, &ep->e_raw, 0, &pblk);
+		error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, 0, &pblk);
 		if (error)
 			return error;
 		if (pblk == 0)
@@ -1677,7 +1720,7 @@ ext4_vnop_blockmap(struct vnop_blockmap_args *ap)
 
 	lblk = (uint32_t)(ap->a_foffset / bs);
 	boff = (uint32_t)(ap->a_foffset % bs);
-	error = ext4_bmap(emp, &ep->e_raw, lblk, &pblk);
+	error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, lblk, &pblk);
 	if (error)
 		return error;
 	if (pblk == 0) {
@@ -1694,7 +1737,7 @@ ext4_vnop_blockmap(struct vnop_blockmap_args *ap)
 		uint32_t next_lblk = lblk + 1 + (uint32_t)((run - (bs - boff)) / bs);
 		uint64_t expect = pblk + 1 + ((run - (bs - boff)) / bs);
 
-		error = ext4_bmap(emp, &ep->e_raw, next_lblk, &next_pblk);
+		error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, next_lblk, &next_pblk);
 		if (error || next_pblk != expect)
 			break;
 		run += bs;
@@ -1714,7 +1757,10 @@ ext4_vnop_reclaim(struct vnop_reclaim_args *ap)
 	if (ep) {
 		IOLock *hlock = (IOLock *)ep->e_mount->em_hash_lock;
 		IOLockLock(hlock);
-		LIST_REMOVE(ep, e_hash);
+		if (!ep->e_unhashed) {
+			LIST_REMOVE(ep, e_hash);
+			ep->e_unhashed = 1;
+		}
 		IOLockUnlock(hlock);
 	}
 	vnode_removefsref(vp);

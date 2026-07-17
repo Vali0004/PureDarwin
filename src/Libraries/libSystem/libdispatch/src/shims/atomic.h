@@ -79,6 +79,21 @@
 #define _os_rel_barrier_ordered                 memory_order_release
 #define _os_acq_barrier_ordered                 memory_order_acquire
 
+/*
+ * PureDarwin: our vendored os/atomic_private.h (xnu's, not libdispatch's own
+ * upstream one) doesn't define the _os_{rel,acq}_barrier_dependency /
+ * _os_atomic_mo_dependency_smp family this file's macros token-paste
+ * (os_atomic_thread_fence(dependency) etc. expand to _os_rel_barrier_##m
+ * with m=dependency) - same kind of version gap the "ordered" pseudo-order
+ * above already gets patched in for. "dependency" ordering only documents a
+ * data/address dependency, weaker than acquire - x86's memory model already
+ * provides it for free, so relaxed/acquire/release map is correct here
+ * regardless of target architecture.
+ */
+#define _os_rel_barrier_dependency              memory_order_release
+#define _os_acq_barrier_dependency              memory_order_acquire
+#define _os_atomic_mo_dependency_smp            memory_order_relaxed
+
 #else // __has_include(<os/atomic_private.h>)
 #include <stdatomic.h>
 

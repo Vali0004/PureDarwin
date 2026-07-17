@@ -35,6 +35,7 @@ target_sources(libresolv_static PRIVATE
     pd_res_compat.c
     pd_res_state.c
     pd_net_compat.c
+    pd_getaddrinfo.c
 )
 
 target_compile_definitions(libresolv_static PRIVATE

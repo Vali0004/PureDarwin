@@ -14,6 +14,7 @@
 , rootMB ? 640
 , apfsMB ? 128
 , testAudioFile ? null
+, imageFileName ? "puredarwin.img"
 }:
 
 assert lib.isDerivation baseSystem;
@@ -266,10 +267,6 @@ EOF
       ln -sf /bin/helloapp $staging/sbin/helloapp
     fi
 
-    # toybox (0BSD) replaces busybox (GPLv2) as the applet multi-call binary.
-    # toybox has no "ash" (only "sh"), and its "stty"/"reboot" applets are
-    # Linux-only (linux/tty.h, reboot(2) RB_* constants) so aren't built for
-    # this Darwin-ABI target - dropped rather than faked.
     for applet in \
       awk \
       basename \
@@ -314,7 +311,6 @@ EOF
       rmdir \
       sed \
       seq \
-      sh \
       sleep \
       sort \
       stat \
@@ -337,6 +333,7 @@ EOF
     do
       ln -s toybox "$staging/bin/$applet"
     done
+    ln -sf zsh "$staging/bin/sh"
 
     chmod 1777 \
       "$staging/tmp" \
@@ -389,7 +386,7 @@ EOF
   installPhase = ''
     runHook preInstall
     mkdir -p $out
-    cp puredarwin.img $out/puredarwin.img
+    cp puredarwin.img $out/${imageFileName}
     runHook postInstall
   '';
 

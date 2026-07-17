@@ -95,6 +95,7 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/wait3.c          # _wait3 (zsh job/process accounting)
     gen/pd_wait.c                # _wait forwarder (__weak_reference alias not emitted)
     compat-43/FreeBSD/killpg.c   # _killpg (zsh job control)
+    gen/FreeBSD/nice.c           # _nice (zsh BGNICE backgrounded-job priority)
     gen/pd_popen.c               # popen/pclose (BusyBox awk pipe redirection; fork+pipe based)
     gen/FreeBSD/pause.c          # _pause (init halt loop)
     string/FreeBSD/strrchr.c
@@ -132,7 +133,7 @@ target_sources(libc_static PRIVATE
     gen/pd_getgrent.c            # getgrnam/getgrgid/getgrouplist (/etc/group reader; no libinfo)
     gen/pd_netdb_stub.c          # gethostbyname/h_errno/hstrerror (no libinfo/libresolv yet)
     gen/pd_getservbyname.c       # getservbyname (/etc/services reader; no libinfo)
-    gen/pd_dispatch_once.c       # dispatch_once/dispatch_once_f (no libdispatch yet)
+    gen/pd_dispatch_once.c       # dispatch_once/dispatch_once_f (real libdispatch not linked yet - see libSystem/libdispatch/)
     libm/pd_libm_trig.c          # sin/cos/atan/atan2/asin/acos (from-scratch libm)
     libm/pd_libm_pow.c           # log/exp/pow/cbrt/hypot (from-scratch libm)
     gen/clock_gettime.c          # _clock_gettime / _clock_settime (BusyBox date -s)
@@ -466,6 +467,8 @@ target_sources(libc_internal_static PRIVATE
     locale/FreeBSD/mblen.c         # _mblen (Xlib setlocale/mb path)
     net/FreeBSD/inet_addr.c        # _inet_addr / _inet_aton (Xlib DISPLAY parsing)
     net/FreeBSD/recv.c             # _recv (Xlib socket transport)
+    net/FreeBSD/send.c             # _send (curl socket transport)
+    net/pd_in6_addr.c              # _in6addr_any / _in6addr_loopback (xterm Xtrans IPv6 transport)
     string/FreeBSD/wcscpy.c        # _wcscpy (collate.c's __collate_wcsdup)
     string/FreeBSD/wcsncpy.c       # _wcsncpy (collate.c's substitute/collating-symbol/equiv-value)
     gdtoa/FreeBSD/gdtoa-dmisc.c

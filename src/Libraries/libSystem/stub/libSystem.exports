@@ -52,6 +52,9 @@ _exit
 _fork
 _free
 _getpid
+_getpriority
+_setpriority
+_nice
 _getrusage
 _malloc
 _calloc
@@ -255,7 +258,11 @@ _getifaddrs
 _freeifaddrs
 _if_nametoindex
 _getnameinfo
+_getaddrinfo
+_freeaddrinfo
+_gai_strerror
 _inet_pton
+_inet_ntop
 _getppid
 _getpwnam
 _getrlimit
@@ -300,6 +307,10 @@ _realpath$DARWIN_EXTSN
 _rename
 _rmdir
 _sendto
+_send
+_recvfrom
+_in6addr_any
+_in6addr_loopback
 _setegid
 _seteuid
 _setgid

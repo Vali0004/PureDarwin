@@ -119,7 +119,11 @@
 #define HAVE_NORETURN_BUILTIN_TRAP 1
 
 /* Define if you have the Objective-C runtime */
-#define HAVE_OBJC 1
+/* PureDarwin: no real Objective-C runtime (no libobjc) - forced to 0 rather
+ * than the pre-baked upstream value of 1, so the *.m/HAVE_OBJC-gated pieces
+ * of libdispatch (data.m/object.m, ObjC autorelease elision, etc.) aren't
+ * compiled. See libdispatch/CMakeLists.txt for the rest of that story. */
+#define HAVE_OBJC 0
 
 /* Define to 1 if you have the `posix_fadvise' function. */
 #define HAVE_POSIX_FADVISE 0
@@ -134,7 +138,10 @@
 #define HAVE_PTHREAD_ATTR_SETCPUPERCENT_NP 1
 
 /* Define to 1 if you have the <pthread_machdep.h> header file. */
-#define HAVE_PTHREAD_MACHDEP_H 1
+/* PureDarwin: no pthread_machdep.h (private/internal, not vendored here) -
+ * the DISPATCH_USE_DIRECT_TSD path this gates falls back to os/tsd.h +
+ * pthread/private.h (both present) via __has_include when this is 0. */
+#define HAVE_PTHREAD_MACHDEP_H 0
 
 /* Define to 1 if you have the `pthread_main_np' function. */
 #define HAVE_PTHREAD_MAIN_NP 1

@@ -106,6 +106,9 @@
             "src/Userspace"
             "tools/mig"
           ];
+          coreFoundationSource = sourceWith "puredarwin-corefoundation-source" [
+            "src/Libraries/CoreFoundation"
+          ];
 
           mkPureDarwinBuild = args: pkgs.callPackage ./build.nix ({
             inherit darwinCrossToolchain nativeLd nativeUnifdef nativeMigcom iig;
@@ -434,14 +437,58 @@
               libXdmcp = pkgs.libxdmcp;
               libxcvt = xvfbLibxcvtBuild;
             };
+          xvfbLibXrenderBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXrender";
+              version = pkgs.libXrender.version;
+              src = pkgs.libXrender.src;
+              deps = [ pkgs.xorgproto xlibBuild ];
+            };
+          xvfbLibXfixesBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXfixes";
+              version = pkgs.libXfixes.version;
+              src = pkgs.libXfixes.src;
+              deps = [ pkgs.xorgproto xlibBuild ];
+            };
+          xvfbLibXiBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/xorg-cross-lib.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              pname = "puredarwin-libXi";
+              version = pkgs.libXi.version;
+              src = pkgs.libXi.src;
+              deps = [
+                pkgs.xorgproto
+                xlibBuild
+                xvfbLibXextBuild
+                xvfbLibXfixesBuild
+              ];
+              configureFlags = [
+                "--disable-malloc0returnsnull"
+              ];
+            };
           xeyesBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xeyes.nix {
               inherit darwinCrossToolchain nativeLd;
               libSystem = libSystemBuild;
+              xeyes = pkgs.xeyes;
               libX11 = xlibBuild;
               libxcb = xcbBuild;
               libXau = xvfbLibXauBuild;
               libXdmcp = xvfbLibXdmcpBuild;
+              libXext = xvfbLibXextBuild;
+              libXi = xvfbLibXiBuild;
+              libXrender = xvfbLibXrenderBuild;
+              libXfixes = xvfbLibXfixesBuild;
+              libXmu = xvfbLibXmuBuild;
+              libXt = xvfbLibXtBuild;
+              libICE = xvfbLibICEBuild;
+              libSM = xvfbLibSMBuild;
               inherit (pkgs) xorgproto;
             };
           ncursesBuild =
@@ -498,6 +545,13 @@
               openssl = opensslBuild;
               zlib = xvfbZlibBuild;
             };
+          fastfetchBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/fastfetch.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              fastfetch = pkgs.fastfetch;
+              corefoundation = coreFoundationBuild;
+            };
           xtermBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xterm.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -515,6 +569,13 @@
               libXpm = xvfbLibXpmBuild;
               libXaw = xvfbLibXawBuild;
               inherit (pkgs) xorgproto;
+            };
+          coreFoundationBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/corefoundation.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              inherit (pkgs) icu;
+              src = "${coreFoundationSource}/src/Libraries/CoreFoundation";
             };
           libSystemBuild = mkPureDarwinBuild {
             pname = "puredarwin-libsystem";
@@ -625,6 +686,7 @@
             file = fileBuild;
             openssl = opensslBuild;
             curl = curlBuild;
+            fastfetch = fastfetchBuild;
           };
 
           commonPackages = {
@@ -657,16 +719,26 @@
                 kexts = kextsBuild;
                 kcTools = kc-tools.packages.${system}.default;
               };
+              kcDebugBuild = pkgs.callPackage ./nix/pkgs/kc.nix {
+                kernel = kernelDebugBuild;
+                kexts = kextsBuild;
+                kcTools = kc-tools.packages.${system}.default;
+              };
               imageBuild = pkgs.callPackage ./image.nix {
                 baseSystem = splitBaseSystem;
                 extraPackages = lib.attrValues imageExtraPackageSet;
                 kc = kcBuild;
                 xnuLoader = xnu-loader.packages.${system}.default;
                 apfsprogs = pkgs.apfsprogs;
-                # PUREDARWIN_TEST_AUDIO=/abs/path/to/badapple.pcm nix run .#kvm
-                testAudioFile =
-                  let p = builtins.getEnv "PUREDARWIN_TEST_AUDIO";
-                  in if p != "" then /. + p else null;
+                testAudioFile = /home/vali/development/darwin/badapple.pcm;
+              };
+              imageDebugBuild = pkgs.callPackage ./image.nix {
+                baseSystem = splitBaseSystem;
+                extraPackages = lib.attrValues imageExtraPackageSet;
+                kc = kcDebugBuild;
+                xnuLoader = xnu-loader.packages.${system}.default;
+                apfsprogs = pkgs.apfsprogs;
+                imageFileName = "puredarwin-debug.img";
               };
               runVm = pkgs.writeShellApplication {
                 name = "puredarwin-vm";
@@ -781,7 +853,10 @@
               darwin-cross-toolchain = darwinCrossToolchain;
               native-ld = nativeLd;
               kc = kcBuild;
+              kc-debug = kcDebugBuild;
+              corefoundation = coreFoundationBuild;
               image = imageBuild;
+              image-debug = imageDebugBuild;
               xorg = xorgBuild;
               libxcvt = xvfbLibxcvtBuild;
               userland = userlandBuild;

@@ -317,8 +317,17 @@ tsc_init(void)
 			}
 		}
 
-		assert(N != 0);
-		assert(M != 1);
+		/*
+		 * CPUID leaf 0x15 (TSC/ART ratio) isn't populated under QEMU TCG
+		 * (software CPU emulation, no real hardware leaf 0x15 support) -
+		 * N and M come back 0 here, and the division below is a real
+		 * divide-by-zero trap regardless of whether assert() is compiled
+		 * in. Fall back to N/M = 1/1 (TSC == ART) rather than crashing.
+		 */
+		if (N == 0 || M == 0) {
+			N = 1;
+			M = 1;
+		}
 		tscFreq = refFreq * N / M;
 		busFreq = tscFreq;              /* bus is APIC frequency */
 

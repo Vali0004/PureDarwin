@@ -491,8 +491,6 @@ target_link_options(libsystem_kernel PRIVATE -umbrella System -all_load)
 
 target_link_options(libsystem_kernel PRIVATE -umbrella System -all_load)
 
-install(TARGETS libsystem_kernel DESTINATION usr/lib/system COMPONENT BaseSystem)
-
 # END DYNAMIC LIBRARY
 
 install(FILES wrappers/gethostuuid.h DESTINATION usr/include COMPONENT DeveloperTools)

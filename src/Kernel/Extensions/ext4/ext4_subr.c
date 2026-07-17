@@ -8,6 +8,36 @@
 #include <sys/malloc.h>
 #include <sys/errno.h>
 #include <string.h>
+#include <IOKit/IOLocks.h>
+
+/*
+ * True if `ino` has a live (open) ext4node in the in-core hash. The inode
+ * bitmap is the authoritative allocation record, but a read of a stale
+ * cached bitmap block can make an in-use inode look free (observed: Xorg's
+ * own log file's inode got handed back out to a short-lived /tmp file while
+ * still open, and freeing the second file's extents zeroed the first file's
+ * still-live extent header out from under it). Cross-checking the hash is a
+ * cheap belt-and-suspenders guard against ext4_alloc_inode() ever handing out
+ * a number that's still actively open, regardless of what the bitmap says.
+ */
+int
+ext4_ino_is_live(struct ext4mount *emp, ino_t ino)
+{
+	IOLock *hlock = (IOLock *)emp->em_hash_lock;
+	struct ext4_node_bucket *bucket = &emp->em_node_hash[EXT4_NODE_HASH(ino)];
+	struct ext4node *ep;
+	int live = 0;
+
+	IOLockLock(hlock);
+	LIST_FOREACH(ep, bucket, e_hash) {
+		if (ep->e_ino == ino) {
+			live = 1;
+			break;
+		}
+	}
+	IOLockUnlock(hlock);
+	return live;
+}
 
 enum vtype
 ext4_ft_to_vtype(uint8_t ft)
@@ -334,6 +364,8 @@ ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out)
 		for (i = 0; i < limit; i++) {
 			ino_t ino = (ino_t)((uint64_t)grp * emp->em_inodes_per_group + i + 1);
 			if (ino < first_ino || ext4_bitmap_test(map, i))
+				continue;
+			if (ext4_ino_is_live(emp, ino))
 				continue;
 			ext4_bitmap_set(map, i);
 			error = buf_bwrite(bp);
@@ -909,6 +941,17 @@ ext4_inode_free_extents(struct ext4mount *emp, struct ext4_inode *inode)
 
 	if ((le32(inode->i_flags) & EXT4_EXTENTS_FL) == 0)
 		return 0;
+	/*
+	 * magic == 0 means this inode's extents were already freed (this
+	 * function itself zeroes i_block on the way out, below). Callers can
+	 * legitimately reach here twice for the same inode - e.g.
+	 * ext4_vnop_remove()'s stale-vnode fallback racing the primary
+	 * ext4_drop_inode() path - so treat "already empty" as success
+	 * instead of EIO; only a genuinely non-zero, non-magic header is
+	 * real corruption.
+	 */
+	if (le16(eh->eh_magic) == 0)
+		return 0;
 	if (le16(eh->eh_magic) != EXT4_EXT_MAGIC)
 		return EIO;
 
@@ -1098,14 +1141,15 @@ ext4_write_inode(struct ext4mount *emp, ino_t ino, const struct ext4_inode *in)
 
 /* Walk an extent tree node to resolve a logical block. buf holds the node. */
 static int
-ext4_extent_lookup(struct ext4mount *emp, char *node, uint32_t lblk,
+ext4_extent_lookup(struct ext4mount *emp, ino_t ino, char *node, uint32_t lblk,
     uint64_t *pblk_out)
 {
 	struct ext4_extent_header *eh = (struct ext4_extent_header *)node;
 	uint16_t entries, depth, i;
 
 	if (le16(eh->eh_magic) != EXT4_EXT_MAGIC) {
-		E4LOG("bad extent magic 0x%x", le16(eh->eh_magic));
+		E4LOG("bad extent magic 0x%x ino=%llu lblk=%u",
+		    le16(eh->eh_magic), (unsigned long long)ino, lblk);
 		return EIO;
 	}
 	entries = le16(eh->eh_entries);
@@ -1146,14 +1190,27 @@ ext4_extent_lookup(struct ext4mount *emp, char *node, uint32_t lblk,
 		}
 		buf_t bp = NULL;
 		int error = ext4_blkread(emp, child, &bp);
-		if (error)
+		if (error) {
+			E4LOG("extent idx depth=%u lblk=%u -> child blk %llu: blkread error %d",
+			    depth, lblk, (unsigned long long)child, error);
 			return error;
+		}
 		/* copy node out so we can release the buffer before recursing */
 		char *copy = (char *)_MALLOC(emp->em_blocksize, M_TEMP, M_WAITOK);
 		if (!copy) { buf_brelse(bp); return ENOMEM; }
 		memcpy(copy, (char *)buf_dataptr(bp), emp->em_blocksize);
 		buf_brelse(bp);
-		error = ext4_extent_lookup(emp, copy, lblk, pblk_out);
+		{
+			struct ext4_extent_header *child_eh = (struct ext4_extent_header *)copy;
+			if (le16(child_eh->eh_magic) != EXT4_EXT_MAGIC) {
+				E4LOG("extent idx depth=%u lblk=%u -> child blk %llu: "
+				    "bad child magic 0x%x (entries[0].block=%u leaf=%llu)",
+				    depth, lblk, (unsigned long long)child,
+				    le16(child_eh->eh_magic), le32(ix[0].ei_block),
+				    (unsigned long long)child);
+			}
+		}
+		error = ext4_extent_lookup(emp, ino, copy, lblk, pblk_out);
 		_FREE(copy, M_TEMP);
 		return error;
 	}
@@ -1165,14 +1222,14 @@ ext4_extent_lookup(struct ext4mount *emp, char *node, uint32_t lblk,
  * (direct/indirect) inodes.
  */
 int
-ext4_bmap(struct ext4mount *emp, struct ext4_inode *inode, uint32_t lblk,
+ext4_bmap(struct ext4mount *emp, ino_t ino, struct ext4_inode *inode, uint32_t lblk,
     uint64_t *pblk_out)
 {
 	uint32_t flags = le32(inode->i_flags);
 
 	if (flags & EXT4_EXTENTS_FL) {
 		/* extent root lives inline in i_block[] (60 bytes) */
-		return ext4_extent_lookup(emp, (char *)inode->i_block, lblk,
+		return ext4_extent_lookup(emp, ino, (char *)inode->i_block, lblk,
 		    pblk_out);
 	}
 
