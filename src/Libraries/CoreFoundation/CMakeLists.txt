@@ -301,6 +301,7 @@ add_framework(CoreFoundation
                 Locale.subproj/CFLocale.c
                 Locale.subproj/CFLocaleIdentifier.c
                 Locale.subproj/CFLocaleKeys.c
+                Locale.subproj/CFLocale_PureDarwin_LegacyAliases.c
                 Locale.subproj/CFNumberFormatter.c
                 # NumberData
                 NumberDate.subproj/CFBigNumber.c
@@ -316,11 +317,11 @@ add_framework(CoreFoundation
                 Parsing.subproj/CFXMLParser.c
                 Parsing.subproj/CFXMLTree.c
                 # PlugIn
-                #PlugIn.subproj/CFBundle_Binary.c
+                PlugIn.subproj/CFBundle_Binary.c
                 PlugIn.subproj/CFBundle.c
                 PlugIn.subproj/CFBundle_DebugStrings.c
                 PlugIn.subproj/CFBundle_Executable.c
-                #PlugIn.subproj/CFBundle_Grok.c
+                PlugIn.subproj/CFBundle_Grok.c
                 PlugIn.subproj/CFBundle_InfoPlist.c
                 PlugIn.subproj/CFBundle_Locale.c
                 PlugIn.subproj/CFBundle_Main.c

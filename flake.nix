@@ -1,9 +1,9 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    iig-tools.url = "github:Vali0004/iig-tools";
-    kc-tools.url = "github:Vali0004/kc-tools";
-    xnu-loader.url = "github:Vali0004/xnu-loader";
+    iig-tools.url = "github:PureDarwin/iig-tools";
+    kc-tools.url = "github:PureDarwin/kc-tools";
+    xnu-loader.url = "github:PureDarwin/xnu-loader";
   };
 
   outputs = { self, nixpkgs, iig-tools, kc-tools, xnu-loader }:
@@ -108,6 +108,7 @@
           ];
           coreFoundationSource = sourceWith "puredarwin-corefoundation-source" [
             "src/Libraries/CoreFoundation"
+            "src/Libraries/libSystem/libc/pd-compat-include"
           ];
 
           mkPureDarwinBuild = args: pkgs.callPackage ./build.nix ({
@@ -576,6 +577,12 @@
               libSystem = libSystemBuild;
               inherit (pkgs) icu;
               src = "${coreFoundationSource}/src/Libraries/CoreFoundation";
+              # libSystem's own package output only ships dylibs + dyld's
+              # "guest" header tree (see build.nix's installLibSystem
+              # comment) - not a real usr/include, so CF's -isysroot never
+              # sees our hand-written pd-compat-include headers
+              # (mach-o/dyld_priv.h etc). Point straight at the source dir.
+              pdCompatInclude = "${coreFoundationSource}/src/Libraries/libSystem/libc/pd-compat-include";
             };
           libSystemBuild = mkPureDarwinBuild {
             pname = "puredarwin-libsystem";
@@ -687,6 +694,7 @@
             openssl = opensslBuild;
             curl = curlBuild;
             fastfetch = fastfetchBuild;
+            corefoundation = coreFoundationBuild;
           };
 
           commonPackages = {

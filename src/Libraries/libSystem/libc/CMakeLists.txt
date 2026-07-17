@@ -50,6 +50,16 @@ target_include_directories(libc_headers_gen_private INTERFACE
 # This is the only public header directory
 install(DIRECTORY ${libc_headers_dir}/usr/include DESTINATION usr COMPONENT DeveloperTools)
 
+# pd-compat-include holds headers we hand-wrote (real Apple's makeheaders.pl
+# script above never generates them, since they don't exist upstream) that
+# other consumers besides libc itself need too - CoreFoundation's
+# CFBundle_Grok.c/CFBundle_Binary.c include <mach-o/dyld_priv.h> for
+# dyld_image_path_containing_address. Install just that subset publicly
+# rather than the whole pd-compat-include tree, which also holds headers
+# meant to stay libc-internal (e.g. the reconstructed apfs_fsctl.h).
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/pd-compat-include/mach-o/dyld_priv.h
+        DESTINATION usr/include/mach-o COMPONENT DeveloperTools)
+
 # These are private
 install(DIRECTORY ${libc_headers_dir}/usr/local/include DESTINATION usr/local COMPONENT DeveloperInternal)
 install(DIRECTORY ${libc_headers_dir}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders DESTINATION System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders COMPONENT DeveloperInternal)

@@ -215,10 +215,13 @@ GPUEOF
     # CFDictionary/__CFConstantStringClassReference machinery the plain-C
     # *_apple.c IOKit-detection modules (cpu, battery, keyboard, mouse,
     # diskio, poweradapter, bootmgr, brightness, physicaldisk, gamepad, dns,
-    # displayserver, gpu, theme) need - force_load it so its symbols (which
-    # nothing here calls directly, only references) actually land in the
-    # binary rather than being dropped as an unreferenced archive member.
-    export LDFLAGS="-isysroot $DARWIN_SDK_ROOT -F$DARWIN_SDK_ROOT/System/Library/Frameworks -fuse-ld=${nativeLd}/bin/ld -nostdlib -Wl,-Z -L${libSystem}/usr/lib -Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib -Wl,-dylinker_install_name,/usr/lib/dyld -Wl,-platform_version,macos,11.0,11.5 -Wl,-undefined,dynamic_lookup -Wl,-force_load,${corefoundation}/lib/libCoreFoundation.a -lSystem"
+    # displayserver, gpu, theme) need. Linked as a real dylib now (matching
+    # real Darwin) rather than -force_load'd as a static archive:
+    # CFUniChar.c's __CFGetSectDataPtr looks for its own image by comparing
+    # against &_mh_dylib_header, a magic symbol the linker only ever
+    # synthesizes for an actual MH_DYLIB - statically merging CF into the
+    # executable meant that symbol never existed, breaking the link.
+    export LDFLAGS="-isysroot $DARWIN_SDK_ROOT -F$DARWIN_SDK_ROOT/System/Library/Frameworks -fuse-ld=${nativeLd}/bin/ld -nostdlib -Wl,-Z -L${libSystem}/usr/lib -L${corefoundation}/usr/lib -Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib -Wl,-dylinker_install_name,/usr/lib/dyld -Wl,-platform_version,macos,11.0,11.5 -Wl,-undefined,dynamic_lookup -lCoreFoundation -lSystem"
     export CFLAGS="-isysroot $DARWIN_SDK_ROOT -I${libSystem}/usr/include -I${corefoundation}/include -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
   '';
 

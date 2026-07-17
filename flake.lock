@@ -7,13 +7,13 @@
       "locked": {
         "lastModified": 1783895466,
         "narHash": "sha256-48qkeJ7KFT6GsZ2J2tA9tRfJhUbts+LefzcalGuocdc=",
-        "owner": "Vali0004",
+        "owner": "PureDarwin",
         "repo": "iig-tools",
         "rev": "d605d0797b164c0c9d41ad1222ae4a8e413a630d",
         "type": "github"
       },
       "original": {
-        "owner": "Vali0004",
+        "owner": "PureDarwin",
         "repo": "iig-tools",
         "type": "github"
       }
@@ -25,13 +25,13 @@
       "locked": {
         "lastModified": 1783895341,
         "narHash": "sha256-mF4nnyJrflFZoKkwvvyEoulqusWIrNDSzfrb7AjkXh0=",
-        "owner": "Vali0004",
+        "owner": "PureDarwin",
         "repo": "kc-tools",
         "rev": "688092d85b196cd523a3284fc380130b906c89d2",
         "type": "github"
       },
       "original": {
-        "owner": "Vali0004",
+        "owner": "PureDarwin",
         "repo": "kc-tools",
         "type": "github"
       }
@@ -114,14 +114,14 @@
       },
       "locked": {
         "lastModified": 1784085005,
-        "narHash": "sha256-oeRylCIUSG7+cxEucv/GDVtQTJV5kf3cEgpPkfGhmv8=",
-        "owner": "Vali0004",
+        "narHash": "sha256-Id2slu2veO6KbyIL7gz2t2M1Jf2uJG+Y11lRMezylsM=",
+        "owner": "PureDarwin",
         "repo": "xnu-loader",
-        "rev": "4c8a8d4349fd98a8124bee11dd7164dde1855e9e",
+        "rev": "6c2706bf397f82852eb3e3495890edecf7cb06ca",
         "type": "github"
       },
       "original": {
-        "owner": "Vali0004",
+        "owner": "PureDarwin",
         "repo": "xnu-loader",
         "type": "github"
       }

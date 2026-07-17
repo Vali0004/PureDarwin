@@ -15,6 +15,11 @@
 #include <grp.h>
 #include <sys/mount.h>
 #include <sys/statvfs.h>
+#include <dirent.h>
+#include <xlocale.h>
+#include <mach/vm_types.h>
+#include <mach-o/loader.h>
+#include <sys/qos.h>
 
 extern int __pd_sys_pause(void) __asm("___pause");
 extern pid_t __pd_sys_waitpid(pid_t pid, int *status, int options) __asm("___waitpid");
@@ -1565,4 +1570,497 @@ strptime(const char *s, const char *format, struct tm *tm)
         }
     }
     return (char *)s;
+}
+
+int
+pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void))
+{
+    (void)prepare; (void)parent; (void)child;
+    return 0;
+}
+
+/*
+ * issetugid(): real Apple semantics report whether the process is running
+ * with elevated privilege from a setuid/setgid exec (libc/CF/etc use it to
+ * decide whether to trust environment variables). PureDarwin doesn't run
+ * setuid binaries, so this is never true here - always report "no".
+ */
+int
+issetugid(void)
+{
+    return 0;
+}
+
+typedef unsigned int sysdir_search_path_enumeration_state;
+
+sysdir_search_path_enumeration_state
+sysdir_start_search_path_enumeration(int dir, int domainMask)
+{
+    (void)dir; (void)domainMask;
+    return 0;
+}
+
+sysdir_search_path_enumeration_state
+sysdir_get_next_search_path_enumeration(sysdir_search_path_enumeration_state state, char *path)
+{
+    (void)state; (void)path;
+    return 0;
+}
+
+vm_size_t vm_page_size = 4096;
+
+int
+OSAtomicCompareAndSwapPtrBarrier(void *oldValue, void *newValue, void * volatile *theValue)
+{
+    return __sync_bool_compare_and_swap(theValue, oldValue, newValue);
+}
+
+/*
+ * _os_log_create: os_log_create(subsystem, category) is a macro
+ * (os/log.h) expanding to _os_log_create(&__dso_handle, subsystem,
+ * category) - the real ABI symbol callers actually link against. os_log
+ * itself needs a real logging daemon (logd) this OS doesn't have; return a
+ * distinct non-NULL handle so callers that just check "did creation
+ * succeed" work, and route actual logging through os_log_type_enabled
+ * always reporting "disabled" (real Apple's own default-safe fallback
+ * shape) rather than implementing a full os_log pipeline.
+ */
+void *
+_os_log_create(void *dso, const char *subsystem, const char *category)
+{
+    (void)dso; (void)subsystem; (void)category;
+    static int dummy_log_handle;
+    return &dummy_log_handle;
+}
+
+typedef unsigned int __pd_mvr_kern_return_t;
+__pd_mvr_kern_return_t
+mach_vm_region(unsigned int target_task, unsigned long long *address,
+    unsigned long long *size, unsigned int flavor,
+    int *info, unsigned int *infoCnt, unsigned int *object_name)
+{
+    (void)target_task; (void)address; (void)size; (void)flavor;
+    (void)info; (void)infoCnt; (void)object_name;
+    return 5; /* KERN_FAILURE */
+}
+
+int
+pthread_getugid_np(uid_t *uid, gid_t *gid)
+{
+    if (uid) *uid = getuid();
+    if (gid) *gid = getgid();
+    return 0;
+}
+
+int
+fprintf_l(FILE *stream, locale_t loc, const char *format, ...)
+{
+    (void)loc;
+    va_list ap;
+    va_start(ap, format);
+    int ret = vfprintf(stream, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+extern int readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result);
+extern int __pd_readdir_r_inode64(DIR *dirp, struct dirent *entry, struct dirent **result) __asm("_readdir_r$INODE64");
+int
+__pd_readdir_r_inode64(DIR *dirp, struct dirent *entry, struct dirent **result)
+{
+    return readdir_r(dirp, entry, result);
+}
+
+/*
+ * asl(3) client API: fully __API_DEPRECATED in favor of os_log even on
+ * real macOS (see asl.h) - CF only calls it as a last-resort logging
+ * fallback. No asl daemon exists here either way, so this is a genuine
+ * no-op client: asl_open/asl_new return a distinct non-NULL handle (so
+ * callers don't treat creation itself as a failure), every other call
+ * quietly succeeds without producing any actual log output.
+ */
+typedef struct __pd_asl_object_s *pd_asl_object_t;
+static int pd_asl_dummy_object;
+
+pd_asl_object_t
+asl_open(const char *ident, const char *facility, uint32_t opts)
+{
+    (void)ident; (void)facility; (void)opts;
+    return (pd_asl_object_t)&pd_asl_dummy_object;
+}
+
+pd_asl_object_t
+asl_new(uint32_t type)
+{
+    (void)type;
+    return (pd_asl_object_t)&pd_asl_dummy_object;
+}
+
+int
+asl_set(pd_asl_object_t obj, const char *key, const char *value)
+{
+    (void)obj; (void)key; (void)value;
+    return 0;
+}
+
+int
+asl_send(pd_asl_object_t obj, pd_asl_object_t msg)
+{
+    (void)obj; (void)msg;
+    return 0;
+}
+
+void
+asl_free(pd_asl_object_t obj)
+{
+    (void)obj;
+}
+
+void
+asl_close(pd_asl_object_t obj)
+{
+    (void)obj;
+}
+
+/*
+ * Legacy OSAtomic ops (libkern/OSAtomic.h, deprecated since 10.12 in favor
+ * of <stdatomic.h> but still linked by CF and others). Real implementations
+ * via the same compiler intrinsics <stdatomic.h> itself would use.
+ */
+int32_t
+OSAtomicIncrement32(volatile int32_t *theValue)
+{
+    return __sync_add_and_fetch(theValue, 1);
+}
+
+int32_t
+OSAtomicDecrement32(volatile int32_t *theValue)
+{
+    return __sync_sub_and_fetch(theValue, 1);
+}
+
+int
+OSAtomicCompareAndSwap32Barrier(int32_t oldValue, int32_t newValue, volatile int32_t *theValue)
+{
+    return __sync_bool_compare_and_swap(theValue, oldValue, newValue);
+}
+
+void
+OSMemoryBarrier(void)
+{
+    __sync_synchronize();
+}
+
+/*
+ * OSSpinLock: fully removed from the real SDK headers by 10.12 (superseded
+ * by os_unfair_lock), but still linked here - implement both it and
+ * os_unfair_lock with the same simple CAS spin loop. Not "unfair" in the
+ * scheduler-hint sense real os_unfair_lock is, but correct as a mutual
+ * exclusion primitive, which is all callers actually depend on.
+ */
+typedef volatile int32_t OSSpinLock;
+
+void
+OSSpinLockLock(OSSpinLock *lock)
+{
+    while (!__sync_bool_compare_and_swap(lock, 0, 1)) {
+        /* spin */
+    }
+}
+
+void
+OSSpinLockUnlock(OSSpinLock *lock)
+{
+    __sync_lock_release(lock);
+}
+
+typedef struct { volatile int32_t locked; } pd_os_unfair_lock_s;
+
+void
+os_unfair_lock_lock(pd_os_unfair_lock_s *lock)
+{
+    while (!__sync_bool_compare_and_swap(&lock->locked, 0, 1)) {
+        /* spin */
+    }
+}
+
+void
+os_unfair_lock_unlock(pd_os_unfair_lock_s *lock)
+{
+    __sync_lock_release(&lock->locked);
+}
+
+/*
+ * os_log_type_enabled/_os_log_debug_impl/_os_log_error_impl: companions to
+ * _os_log_create above. Every os_log_* call site is guarded by
+ * `if (os_log_type_enabled(log, type))` before calling the _impl function,
+ * so always reporting "disabled" means the _impl functions are linked
+ * (satisfying the symbol reference) but never actually invoked at runtime.
+ */
+int
+os_log_type_enabled(void *oslog, unsigned int type)
+{
+    (void)oslog; (void)type;
+    return 0;
+}
+
+void
+_os_log_debug_impl(void *dso, void *log, unsigned int type, const char *format, uint8_t *buf, uint32_t size)
+{
+    (void)dso; (void)log; (void)type; (void)format; (void)buf; (void)size;
+}
+
+void
+_os_log_error_impl(void *dso, void *log, unsigned int type, const char *format, uint8_t *buf, uint32_t size)
+{
+    (void)dso; (void)log; (void)type; (void)format; (void)buf; (void)size;
+}
+
+/*
+ * flsl: find-last-set-bit, POSIX-ish BSD extension (bit position of the
+ * highest set bit, 1-based, 0 for input 0). Real implementation via the
+ * same clz-based technique glibc's own equivalents use.
+ */
+int
+flsl(long mask)
+{
+    return mask == 0 ? 0 : (int)(sizeof(long) * 8 - (unsigned)__builtin_clzl((unsigned long)mask));
+}
+
+/*
+ * *_l (locale-variant) wrappers: no real per-thread locale support here
+ * (every locale_t is effectively "C"/"POSIX"), so these just ignore the
+ * locale_t argument and call the ordinary, already-real implementation.
+ */
+unsigned long
+strtoul_l(const char *nptr, char **endptr, int base, locale_t loc)
+{
+    (void)loc;
+    return strtoul(nptr, endptr, base);
+}
+
+long
+strtol_l(const char *nptr, char **endptr, int base, locale_t loc)
+{
+    (void)loc;
+    return strtol(nptr, endptr, base);
+}
+
+long long
+strtoll_l(const char *nptr, char **endptr, int base, locale_t loc)
+{
+    (void)loc;
+    return strtoll(nptr, endptr, base);
+}
+
+unsigned long long
+strtoull_l(const char *nptr, char **endptr, int base, locale_t loc)
+{
+    (void)loc;
+    return strtoull(nptr, endptr, base);
+}
+
+double
+strtod_l(const char *nptr, char **endptr, locale_t loc)
+{
+    (void)loc;
+    return strtod(nptr, endptr);
+}
+
+int
+strncasecmp_l(const char *s1, const char *s2, size_t n, locale_t loc)
+{
+    (void)loc;
+    return strncasecmp(s1, s2, n);
+}
+
+int
+snprintf_l(char *str, size_t size, locale_t loc, const char *format, ...)
+{
+    (void)loc;
+    va_list ap;
+    va_start(ap, format);
+    int ret = vsnprintf(str, size, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+/*
+ * uuid_generate_random/uuid_generate_time: real implementations, backed by
+ * arc4random (already real elsewhere in this tree) rather than actually
+ * implementing the RFC 4122 time-based variant for _time - a random UUID
+ * is a safe, always-valid substitute (still unique, just not derived from
+ * a clock/node-id the way the real v1 algorithm would).
+ */
+extern void arc4random_buf(void *buf, size_t nbytes);
+
+static void
+pd_uuid_generate_v4(unsigned char out[16])
+{
+    arc4random_buf(out, 16);
+    out[6] = (out[6] & 0x0F) | 0x40; /* version 4 */
+    out[8] = (out[8] & 0x3F) | 0x80; /* variant 10xx */
+}
+
+void
+uuid_generate_random(unsigned char out[16])
+{
+    pd_uuid_generate_v4(out);
+}
+
+void
+uuid_generate_time(unsigned char out[16])
+{
+    pd_uuid_generate_v4(out);
+}
+
+/*
+ * getsectbynamefromheader_64: real mach-o section lookup by segment/section
+ * name, used by CF's own __CFGetSectDataPtr for locating its Unicode data
+ * sections. Real implementation - just walks the load commands.
+ */
+const struct section_64 *
+getsectbynamefromheader_64(const struct mach_header_64 *mhp, const char *segname, const char *sectname)
+{
+    const struct load_command *lc = (const struct load_command *)((const char *)mhp + sizeof(struct mach_header_64));
+    for (uint32_t i = 0; i < mhp->ncmds; i++) {
+        if (lc->cmd == 0x19 /* LC_SEGMENT_64 */) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            if (strncmp(sg->segname, segname, 16) == 0) {
+                const struct section_64 *sect = (const struct section_64 *)((const char *)sg + sizeof(struct segment_command_64));
+                for (uint32_t j = 0; j < sg->nsects; j++) {
+                    if (strncmp(sect[j].sectname, sectname, 16) == 0)
+                        return &sect[j];
+                }
+            }
+        }
+        lc = (const struct load_command *)((const char *)lc + lc->cmdsize);
+    }
+    return NULL;
+}
+
+unsigned int
+mk_timer_create(void)
+{
+    return 1; /* dummy, non-MACH_PORT_NULL port name */
+}
+
+int
+mk_timer_destroy(unsigned int name)
+{
+    (void)name;
+    return 0;
+}
+
+int
+mk_timer_arm(unsigned int name, uint64_t expire_time)
+{
+    (void)name; (void)expire_time;
+    return 0;
+}
+
+int
+mk_timer_cancel(unsigned int name, uint64_t *result_time)
+{
+    (void)name;
+    if (result_time) *result_time = 0;
+    return 0;
+}
+
+int
+task_threads(unsigned int task, unsigned int **thread_list, unsigned int *thread_count)
+{
+    (void)task;
+    if (thread_list) *thread_list = NULL;
+    if (thread_count) *thread_count = 0;
+    return 5; /* KERN_FAILURE */
+}
+
+int
+thread_resume(unsigned int thread)
+{
+    (void)thread;
+    return 5; /* KERN_FAILURE */
+}
+
+int
+thread_suspend(unsigned int thread)
+{
+    (void)thread;
+    return 5; /* KERN_FAILURE */
+}
+
+qos_class_t
+qos_class_self(void)
+{
+    return QOS_CLASS_UNSPECIFIED;
+}
+
+/*
+ * modf/scalbn: real libm functions, not yet in the from-scratch libm here.
+ * Minimal, correct implementations (not fast, but not stubs either).
+ */
+double
+modf(double value, double *iptr)
+{
+    /* Truncate toward zero via a double -> int64_t -> double round trip
+     * (avoids __builtin_floor(), which degrades to a real libm floor()
+     * call we don't have under -nostdlib) - correct for any value that
+     * fits in an int64_t, which covers every practical caller. */
+    double ival = (double)(int64_t)value;
+    if (iptr) *iptr = ival;
+    return value - ival;
+}
+
+double
+scalbn(double x, int n)
+{
+    /* x * 2^n via direct manipulation of the IEEE 754 exponent field -
+     * __builtin_exp2() degrades to a real libm exp2() call we don't have
+     * under -nostdlib, so avoid depending on any float library routine. */
+    while (n > 1023) { x *= 0x1p1023; n -= 1023; }
+    while (n < -1022) { x *= 0x1p-1022; n += 1022; }
+    union { double d; uint64_t u; } scale;
+    scale.u = (uint64_t)(n + 1023) << 52;
+    return x * scale.d;
+}
+
+/*
+ * os_log_create: CF calls this directly (not through the os_log_create ->
+ * _os_log_create macro redirect real Apple's os/log.h defines - CF must be
+ * built against a copy of that header without the redirect, or without
+ * OS_LOG_TARGET_HAS_10_12_FEATURES). Same stub behavior as _os_log_create
+ * above, under the plain (non-underscore) name CF's own object files
+ * actually reference.
+ */
+void *
+os_log_create(const char *subsystem, const char *category)
+{
+    (void)subsystem; (void)category;
+    static int dummy_log_handle;
+    return &dummy_log_handle;
+}
+
+/*
+ * __udivti3: compiler-rt's 128-bit unsigned division, needed whenever code
+ * divides an unsigned __int128 (CFBigNumber's 128-bit arithmetic here) on a
+ * target without native 128-bit division. No prebuilt libclang_rt.builtins
+ * for this cross target, so implement the well-known compiler-rt algorithm
+ * directly: binary long division, one bit at a time. Not fast, but CF only
+ * needs this for occasional big-number formatting, not a hot path.
+ */
+unsigned __int128
+__udivti3(unsigned __int128 a, unsigned __int128 b)
+{
+    if (b == 0) return 0; /* real compiler-rt traps; we don't have one to trap into */
+    unsigned __int128 quotient = 0;
+    unsigned __int128 remainder = 0;
+    for (int i = 127; i >= 0; i--) {
+        remainder = (remainder << 1) | ((a >> i) & 1);
+        if (remainder >= b) {
+            remainder -= b;
+            quotient |= ((unsigned __int128)1 << i);
+        }
+    }
+    return quotient;
 }

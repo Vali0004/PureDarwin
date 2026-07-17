@@ -4,3 +4,14 @@ target_sources(host_libmacho PRIVATE
 )
 set_property(TARGET host_libmacho PROPERTY OUTPUT_NAME macho)
 target_include_directories(host_libmacho PRIVATE ../include ../include/foreign)
+
+# Real x86_64-apple-darwin build of the same source, for self-hosted cctools
+# tools that run on PureDarwin itself (as opposed to host_libmacho above,
+# which is a Linux-native library used only to drive our own cross-builds).
+if(PUREDARWIN_ENABLE_SELFHOST_CCTOOLS)
+    add_darwin_static_library(libmacho_static)
+    target_sources(libmacho_static PRIVATE arch.c)
+    set_property(TARGET libmacho_static PROPERTY OUTPUT_NAME macho)
+    target_include_directories(libmacho_static PRIVATE ../include ../include/foreign)
+    target_compile_options(libmacho_static PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
+endif()

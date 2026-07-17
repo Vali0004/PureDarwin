@@ -63,6 +63,11 @@ option(PUREDARWIN_ENABLE_KERNEL "Configure PureDarwin kernel targets" ON)
 option(PUREDARWIN_ENABLE_LIBRARIES "Configure PureDarwin library targets" ON)
 option(PUREDARWIN_ENABLE_USERSPACE "Configure PureDarwin userspace targets" ON)
 option(PUREDARWIN_ENABLE_TOOLS "Configure PureDarwin tool targets" ON)
+# Real x86_64-apple-darwin cross-compiled cctools (ld64, nm, lipo, etc.),
+# meant to eventually run ON PureDarwin itself (self-hosting), as opposed to
+# the existing host_* cctools targets which are Linux-native tools used only
+# to drive our own cross-builds. Off by default: early work-in-progress.
+option(PUREDARWIN_ENABLE_SELFHOST_CCTOOLS "Configure self-hosted (Darwin-target) cctools" OFF)
 
 include(ExternalProject)
 include(cmake/asm.cmake)

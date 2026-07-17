@@ -21,6 +21,7 @@ target_sources(libdyld PRIVATE
     # handler. Real, not-stubbed implementation via dyld's public image-
     # enumeration API (see the file's own header comment).
     pd_dladdr.c
+    pd_mach_o_arch.c
     pd_libdyld_exports.c
     # Block_copy/Block_release: atexit_b()'s block-based atexit variant (same
     # translation unit as atexit()) needs the ObjC-block runtime support funcs.

@@ -163,6 +163,27 @@ dladdr(const void *addr, Dl_info *info)
 }
 
 /*
+ * dyld_image_path_containing_address (mach-o/dyld_priv.h): CoreFoundation's
+ * CFBundle_Binary.c uses this to figure out which loaded image a function
+ * pointer came from. Same image-enumeration walk as dladdr() above, just
+ * returning the path directly instead of filling a Dl_info.
+ */
+const char *
+dyld_image_path_containing_address(const void *addr)
+{
+	uint32_t count = _dyld_image_count();
+	for (uint32_t i = 0; i < count; i++) {
+		const struct mach_header *mh = _dyld_get_image_header(i);
+		if (mh == NULL)
+			continue;
+		intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+		if (addr_in_image(mh, slide, addr, NULL))
+			return _dyld_get_image_name(i);
+	}
+	return NULL;
+}
+
+/*
  * _dyld_get_image_slide (mach-o/dyld_priv.h): same image-enumeration walk,
  * matching by mach_header pointer identity instead of a contained address.
  * libmalloc's vm.c/magazine_malloc.c (mvm_aslr_enabled) call this on their own

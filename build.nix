@@ -47,6 +47,7 @@
 , prebuiltLibSystem ? null
 , xnuKernelConfig ? "RELEASE"
 , xorgDriverIncludes ? null
+, extraCmakeFlags ? [ ]
 }:
 
 let
@@ -162,7 +163,8 @@ EOF
       -DPUREDARWIN_XNU_KERNEL_CONFIG=${lib.escapeShellArg xnuKernelConfig} \
       -DPUREDARWIN_TCC_SOURCE=${tinycc.src} \
       ${lib.optionalString (xorgDriverIncludes != null) "-DPUREDARWIN_XORG_INCLUDE_DIRS=${lib.escapeShellArg (lib.concatStringsSep ";" xorgDriverIncludes)}"} \
-      ${lib.optionalString (prebuiltLibSystem != null) "-DPUREDARWIN_PREBUILT_LIBSYSTEM_ROOT=${prebuiltLibSystem}"}
+      ${lib.optionalString (prebuiltLibSystem != null) "-DPUREDARWIN_PREBUILT_LIBSYSTEM_ROOT=${prebuiltLibSystem}"} \
+      ${lib.concatStringsSep " \\\n      " extraCmakeFlags}
     runHook postConfigure
   '';
 
