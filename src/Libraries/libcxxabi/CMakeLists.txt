@@ -205,3 +205,48 @@ add_library(libunwind_static STATIC IMPORTED GLOBAL)
 set_target_properties(libunwind_static PROPERTIES
     IMPORTED_LOCATION "${_uw_archive}")
 add_dependencies(libunwind_static libunwind_static_build)
+
+# The subset of real libc++ (not just libc++abi's ABI layer) that ICU's C++
+# code actually calls: std::mutex/condition_variable/call_once and the
+# std::system_error support they need to report pthread failures. Everything
+# else in libc++ (containers, iostream, etc) stays unwired - add more source
+# files here if/when something else needs them.
+set(_cxx_srcs
+    mutex
+    mutex_destructor
+    condition_variable
+    condition_variable_destructor
+    system_error
+    string
+    stdexcept
+)
+
+set(_cxx_objs "")
+foreach(s ${_cxx_srcs})
+    set(_obj "${CMAKE_CURRENT_BINARY_DIR}/cxx_${s}.o")
+    add_custom_command(
+        OUTPUT "${_obj}"
+        COMMAND "${_real_clang}" ${_abi_flags} -D_LIBCPP_BUILDING_LIBRARY
+                -c "${_libcxx}/src/${s}.cpp" -o "${_obj}"
+        DEPENDS "${_libcxx}/src/${s}.cpp"
+                "${_config}/__config_site" "${_config}/__assertion_handler"
+        COMMENT "Building libc++ ${s}.cpp (raw clang, vendored LLVM headers)"
+        VERBATIM
+    )
+    list(APPEND _cxx_objs "${_obj}")
+endforeach()
+
+set(_cxx_archive "${CMAKE_CURRENT_BINARY_DIR}/libcxx_static.a")
+add_custom_command(
+    OUTPUT "${_cxx_archive}"
+    COMMAND "${CMAKE_AR}" crs "${_cxx_archive}" ${_cxx_objs}
+    DEPENDS ${_cxx_objs}
+    COMMENT "Archiving libcxx_static.a"
+    VERBATIM
+)
+add_custom_target(libcxx_static_build DEPENDS "${_cxx_archive}")
+
+add_library(libcxx_static STATIC IMPORTED GLOBAL)
+set_target_properties(libcxx_static PROPERTIES
+    IMPORTED_LOCATION "${_cxx_archive}")
+add_dependencies(libcxx_static libcxx_static_build)

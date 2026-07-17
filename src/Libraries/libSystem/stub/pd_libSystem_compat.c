@@ -2064,3 +2064,24 @@ __udivti3(unsigned __int128 a, unsigned __int128 b)
     }
     return quotient;
 }
+
+/*
+ * __cxa_demangle: only reachable from libcxxabi's own
+ * demangling_terminate_handler (cxa_default_handlers.cpp), which prints a
+ * prettified type name for an uncaught-exception diagnostic before
+ * aborting - not on any real functional path. A full Itanium demangler is
+ * a large, self-contained component on its own (thousands of lines in
+ * llvm's demangle/); __cxa_demangle's contract explicitly allows returning
+ * NULL with a negative *status for "demangling failed", which is what
+ * every caller (including that terminate handler) already falls back
+ * correctly from by printing the raw mangled name instead.
+ */
+char *
+__cxa_demangle(const char *mangled_name, char *output_buffer, size_t *length, int *status)
+{
+    (void)mangled_name;
+    (void)output_buffer;
+    (void)length;
+    if (status) *status = -2; /* invalid mangled name / demangling not supported */
+    return NULL;
+}

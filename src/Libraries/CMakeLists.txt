@@ -4,9 +4,9 @@ foreach(_puredarwin_library_dir
     CrashReporterClient
     CommonCrypto
     clang_bootstrap
+    libcxxabi
     libSystem
     libresolv
-    libcxxabi
     dyld
     IOKit
     PDGOP

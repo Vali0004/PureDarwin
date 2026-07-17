@@ -80,6 +80,10 @@ if(TARGET libunwind_static)
     add_dependencies(libSystem_B_stub libunwind_static_build)
     target_link_libraries(libSystem_B_stub PRIVATE $<TARGET_FILE:libunwind_static>)
 endif()
+if(TARGET libcxx_static)
+    add_dependencies(libSystem_B_stub libcxx_static_build)
+    target_link_libraries(libSystem_B_stub PRIVATE $<TARGET_FILE:libcxx_static>)
+endif()
 target_link_options(libSystem_B_stub PRIVATE
     ${_libsystem_u_flags}
     # -dead_strip (as dyld's own link uses): resolve the unavoidable duplicate

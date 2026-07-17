@@ -571,6 +571,12 @@
               libXaw = xvfbLibXawBuild;
               inherit (pkgs) xorgproto;
             };
+          icuCoreBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/icucore.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              icuSrc = pkgs.icu.src;
+            };
           coreFoundationBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/corefoundation.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -695,6 +701,7 @@
             curl = curlBuild;
             fastfetch = fastfetchBuild;
             corefoundation = coreFoundationBuild;
+            icucore = icuCoreBuild;
           };
 
           commonPackages = {
@@ -863,6 +870,7 @@
               kc = kcBuild;
               kc-debug = kcDebugBuild;
               corefoundation = coreFoundationBuild;
+              icucore = icuCoreBuild;
               image = imageBuild;
               image-debug = imageDebugBuild;
               xorg = xorgBuild;

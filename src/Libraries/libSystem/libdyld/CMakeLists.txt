@@ -79,7 +79,13 @@ target_link_options(libdyld PRIVATE
     -compatibility_version 1.0.0
     -current_version 1292.100.5
     -Wl,-dead_strip
-    -Wl,-fixup_chains)
+    -Wl,-fixup_chains
+    # -dead_strip drops these two otherwise - nothing inside libdyld itself
+    # calls them, they're only ever called from outside (libunwind, via
+    # libSystem_B_stub's own -Wl,-u/-reexport_library of this dylib), so
+    # dead-code stripping sees them as unreferenced roots and removes them.
+    -Wl,-u,__dyld_find_unwind_sections
+    -Wl,-u,__dyld_register_func_for_remove_image)
 if(CMAKE_HOST_APPLE)
     set(_libdyld_apple_ld_stub_dir ${CMAKE_CURRENT_BINARY_DIR}/apple-ld-stubs)
     set(_libdyld_apple_ld_pthread_stub ${_libdyld_apple_ld_stub_dir}/libsystem_pthread.tbd)

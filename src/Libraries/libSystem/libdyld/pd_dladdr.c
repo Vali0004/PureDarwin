@@ -18,6 +18,7 @@
 #include <string.h>
 #include <mach-o/dyld.h>
 #include <mach-o/dyld_images.h>
+#include <mach-o/dyld_priv.h>
 #include <mach-o/loader.h>
 #include <dlfcn.h>
 
@@ -199,6 +200,88 @@ _dyld_get_image_slide(const struct mach_header *mh)
 			return _dyld_get_image_vmaddr_slide(i);
 	}
 	return 0;
+}
+
+/*
+ * _dyld_find_unwind_sections (mach-o/dyld_priv.h): libunwind's
+ * UnwindCursor::setInfoBasedOnIPRegister() calls this to find the __TEXT
+ * segment's __unwind_info (compact unwind) and __eh_frame (DWARF CFI)
+ * sections for whichever image contains a given PC. Same image-enumeration
+ * walk as dladdr() above, plus a section-name scan within that image's
+ * __TEXT segment once found.
+ */
+static void
+find_section_in_text(const struct mach_header *mh, intptr_t slide,
+    const char *sectname, const void **out_addr, uintptr_t *out_len)
+{
+	bool is64 = (mh->magic == MH_MAGIC_64 || mh->magic == MH_CIGAM_64);
+	const uint8_t *cmd = (const uint8_t *)mh + (is64 ? sizeof(struct mach_header_64) : sizeof(struct mach_header));
+	uint32_t ncmds = mh->ncmds;
+
+	*out_addr = NULL;
+	*out_len = 0;
+	for (uint32_t i = 0; i < ncmds; i++) {
+		const struct load_command *lc = (const struct load_command *)cmd;
+		if (is64 && lc->cmd == LC_SEGMENT_64) {
+			const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+			if (strcmp(sg->segname, "__TEXT") == 0) {
+				const struct section_64 *sec = (const struct section_64 *)(sg + 1);
+				for (uint32_t s = 0; s < sg->nsects; s++, sec++) {
+					if (strcmp(sec->sectname, sectname) == 0) {
+						*out_addr = (const void *)((uintptr_t)sec->addr + slide);
+						*out_len = sec->size;
+						return;
+					}
+				}
+			}
+		} else if (!is64 && lc->cmd == LC_SEGMENT) {
+			const struct segment_command *sg = (const struct segment_command *)lc;
+			if (strcmp(sg->segname, "__TEXT") == 0) {
+				const struct section *sec = (const struct section *)(sg + 1);
+				for (uint32_t s = 0; s < sg->nsects; s++, sec++) {
+					if (strcmp(sec->sectname, sectname) == 0) {
+						*out_addr = (const void *)((uintptr_t)sec->addr + slide);
+						*out_len = sec->size;
+						return;
+					}
+				}
+			}
+		}
+		cmd += lc->cmdsize;
+	}
+}
+
+bool
+_dyld_find_unwind_sections(void *addr, struct dyld_unwind_sections *info)
+{
+	uint32_t count = _dyld_image_count();
+	for (uint32_t i = 0; i < count; i++) {
+		const struct mach_header *mh = _dyld_get_image_header(i);
+		if (mh == NULL)
+			continue;
+		intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+		if (!addr_in_image(mh, slide, addr, NULL))
+			continue;
+		info->mh = mh;
+		find_section_in_text(mh, slide, "__eh_frame", &info->dwarf_section, &info->dwarf_section_length);
+		find_section_in_text(mh, slide, "__unwind_info", &info->compact_unwind_section, &info->compact_unwind_section_length);
+		return true;
+	}
+	return false;
+}
+
+/*
+ * _dyld_register_func_for_remove_image: libunwind's DwarfFDECache uses this
+ * to drop its cache entries when an image is unloaded. Nothing in this
+ * build ever actually unloads an image (no real dlclose that removes a
+ * loaded Mach-O), so there is never a removal event to deliver - correctly
+ * inert, not a lie, since the callback genuinely would never fire on real
+ * Darwin either unless something called dlclose() down to a zero refcount.
+ */
+void
+_dyld_register_func_for_remove_image(void (*func)(const struct mach_header *mh, intptr_t vmaddr_slide))
+{
+	(void)func;
 }
 
 /*
