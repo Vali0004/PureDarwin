@@ -102,7 +102,7 @@ if(PUREDARWIN_ENABLE_SELFHOST_CCTOOLS)
         write64.c
         writeout.c
     )
-    set_property(TARGET libstuff_static PROPERTY OUTPUT_NAME stuff)
+    set_property(TARGET libstuff_static PROPERTY OUTPUT_NAME stuff_selfhost)
     target_compile_definitions(libstuff_static PRIVATE
         __DARWIN_UNIX03
         PROGRAM_PREFIX=\"\"
@@ -112,4 +112,12 @@ if(PUREDARWIN_ENABLE_SELFHOST_CCTOOLS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../include/foreign
     )
     target_compile_options(libstuff_static PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
+    # add_darwin_static_library() adds -nostdinc, but several sources here
+    # (ofile.c etc.) reach the real SDK headers via the foreign/ shim's
+    # #include_next <stdio.h> etc. - strip it so that chain resolves.
+    get_target_property(_selfhost_libstuff_opts libstuff_static COMPILE_OPTIONS)
+    if(_selfhost_libstuff_opts)
+        list(REMOVE_ITEM _selfhost_libstuff_opts -nostdinc)
+        set_target_properties(libstuff_static PROPERTIES COMPILE_OPTIONS "${_selfhost_libstuff_opts}")
+    endif()
 endif()

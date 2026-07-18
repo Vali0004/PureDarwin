@@ -19,6 +19,7 @@
 #define PD_PI_4   0.78539816339744830962
 #define PD_2PI    6.28318530717958647693
 #define PD_LN2    0.69314718055994530942
+#define PD_LN10   2.30258509299404568402
 
 /* IEEE754 double decomposition without depending on frexp/ldexp being linked. */
 static inline double

@@ -42,6 +42,18 @@ log(double x)
 	return pd_log(x);
 }
 
+double
+log2(double x)
+{
+	return pd_log(x) / PD_LN2;
+}
+
+double
+log10(double x)
+{
+	return pd_log(x) / PD_LN10;
+}
+
 /*
  * exp(x) via range reduction x = k*ln2 + r, |r| <= ln2/2, then a Taylor
  * series for exp(r) (fast since r is small), scaled back by 2^k.

@@ -682,6 +682,8 @@ _fesetenv
 _hypot
 _hypotf
 _log
+_log2
+_log10
 _lround
 _lroundf
 _nan

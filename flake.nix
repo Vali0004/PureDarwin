@@ -107,6 +107,15 @@
             "src/Userspace"
             "tools/mig"
           ];
+          cctoolsSource = sourceWith "puredarwin-cctools-source" [
+            "src/Kernel/xnu/osfmk"
+            "src/Libraries/IOKit"
+            "src/Libraries/PDGOP"
+            "src/Libraries/libSystem/libmalloc/compat-include"
+            "src/Libraries/libSystem/libsystem_kernel/mach"
+            "src/Userspace"
+            "tools"
+          ];
           coreFoundationSource = sourceWith "puredarwin-corefoundation-source" [
             "src/Libraries/CoreFoundation"
             "src/Libraries/libSystem/libc/pd-compat-include"
@@ -151,6 +160,20 @@
             installUserland = true;
             installKernel = false;
             prebuiltLibSystem = libSystemBuild;
+          };
+          cctoolsBuild = mkPureDarwinBuild {
+            pname = "puredarwin-cctools";
+            src = cctoolsSource;
+            buildTargets = [ "lipo_selfhost" "size_selfhost" "strings_selfhost" "checksyms_selfhost" ];
+            enableProjects = false;
+            enableKernel = false;
+            enableLibraries = false;
+            enableUserspace = false;
+            enableTools = true;
+            installUserland = true;
+            installKernel = false;
+            prebuiltLibSystem = libSystemBuild;
+            extraCmakeFlags = [ "-DPUREDARWIN_ENABLE_SELFHOST_CCTOOLS=ON" ];
           };
           xvfbPixmanBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xvfb-pixman.nix {
@@ -980,6 +1003,8 @@
             cp -a ${userlandBuild}/. "$out/"
             chmod -R u+w "$out"
             cp -a ${tccBuild}/. "$out/"
+            chmod -R u+w "$out"
+            cp -a ${cctoolsBuild}/. "$out/"
           ''
           + lib.optionalString (!isDarwin) ''
             chmod -R u+w "$out"
@@ -1048,6 +1073,7 @@
           commonPackages = {
             userland = userlandBuild;
             tcc = tccBuild;
+            cctools = cctoolsBuild;
             libsystem = libSystemBuild;
             libSystem = libSystemBuild;
             libapfsrw = libapfsrwBuild;

@@ -45,37 +45,3 @@ target_link_libraries(host_ranlib PRIVATE host_libmacho host_libstuff)
 target_include_directories(host_ranlib PRIVATE ../include ../include/foreign ../libstuff)
 target_compile_definitions(host_ranlib PRIVATE -D__DARWIN_UNIX03 -DRANLIB)
 
-# Real x86_64-apple-darwin builds of the same tools, meant to eventually run
-# ON PureDarwin itself. Starting with the subset that needs nothing beyond
-# libSystem and libmacho_static/libstuff_static (no xar, no crypto, no C++):
-# lipo, size, strings, checksyms. nm.c needs <xar/xar.h> and the rest of misc
-# needs codesigning/crypto or C++ support we don't have cross-compiled yet -
-# see docs/XNU_PATCHES.md-style notes once this grows further.
-if(PUREDARWIN_ENABLE_SELFHOST_CCTOOLS)
-    macro(cctools_selfhost_executable name)
-        add_darwin_executable(${name} MACOSX_VERSION_MIN 11.0)
-        get_target_property(_selfhost_opts ${name} COMPILE_OPTIONS)
-        if(_selfhost_opts)
-            list(REMOVE_ITEM _selfhost_opts -nostdinc)
-            set_target_properties(${name} PROPERTIES COMPILE_OPTIONS "${_selfhost_opts}")
-        endif()
-        target_sources(${name} PRIVATE ${name}.c)
-        target_include_directories(${name} PRIVATE ../include ../include/foreign ../libstuff)
-        target_compile_definitions(${name} PRIVATE -D__DARWIN_UNIX03)
-        target_compile_options(${name} PRIVATE -isysroot ${PUREDARWIN_MACOSX_SDK})
-        target_link_options(${name} PRIVATE
-            -nostdlib
-            -Wl,-L,$<TARGET_FILE_DIR:libSystem_B_stub>
-            -Wl,-dylinker_install_name,/usr/lib/dyld
-            -Wl,-platform_version,macos,11.0,11.5
-            -lSystem)
-        target_link_libraries(${name} PRIVATE libmacho_static libstuff_static)
-        add_dependencies(${name} libSystem_B_stub dyld)
-        install(TARGETS ${name} DESTINATION usr/bin COMPONENT BaseSystem)
-    endmacro()
-
-    cctools_selfhost_executable(lipo)
-    cctools_selfhost_executable(size)
-    cctools_selfhost_executable(strings)
-    cctools_selfhost_executable(checksyms)
-endif()
