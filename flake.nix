@@ -20,6 +20,14 @@
           };
 
           isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+          # fbDOOM (GPL, opt-in - see src/Userspace/fbdoom/CMakeLists.txt) is
+          # an external checkout, not a flake input: point PUREDARWIN_FBDOOM_SOURCE_ENV
+          # at it (requires --impure). Mirrors the SDK tarball's requireFile
+          # pattern - never hardcode a personal machine path into this file.
+          fbdoomExternalSrcEnv = builtins.getEnv "PUREDARWIN_FBDOOM_SOURCE_ENV";
+          fbdoomExternalSrc =
+            if fbdoomExternalSrcEnv == "" then null
+            else builtins.path { path = /. + fbdoomExternalSrcEnv; name = "fbdoom-external-src"; };
           iig = iig-tools.packages.${system}.default or (
             (pkgs.callPackage iig-tools { }).overrideAttrs (old: {
               meta = (old.meta or { }) // {
@@ -104,6 +112,27 @@
             "src/Libraries/PDGOP"
             "src/Libraries/libSystem/libmalloc/compat-include"
             "src/Libraries/libSystem/libsystem_kernel/mach"
+            "src/Userspace"
+            "tools/mig"
+          ];
+          fbdoomSource = sourceWith "puredarwin-fbdoom-source" [
+            "src/Kernel/xnu/osfmk"
+            "src/Kernel/xnu/libkern/libkern"
+            "src/Kernel/xnu/libkern/os"
+            "src/Kernel/xnu/bsd/i386"
+            "src/Kernel/xnu/bsd/bsm"
+            "src/Kernel/xnu/bsd/machine"
+            "src/Kernel/xnu/bsd/net"
+            "src/Kernel/xnu/bsd/netinet"
+            "src/Kernel/xnu/bsd/netinet6"
+            "src/Kernel/xnu/bsd/pthread"
+            "src/Kernel/xnu/bsd/sys"
+            "src/Kernel/xnu/bsd/sys_private"
+            "src/Kernel/xnu/bsd/uuid"
+            "src/Kernel/xnu/bsd/kern/makesyscalls.sh"
+            "src/Kernel/xnu/bsd/kern/syscalls.master"
+            "src/Libraries"
+            "src/Libraries/libSystem/libmalloc/compat-include"
             "src/Userspace"
             "tools/mig"
           ];
@@ -815,6 +844,12 @@
               nano = pkgs.nano;
               ncurses = ncursesBuild;
             };
+          bmakeBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/bmake.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              bmake = pkgs.bmake;
+            };
           zshBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/zsh.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -942,6 +977,26 @@
             installKernel = false;
             installLibSystem = true;
           };
+          fbdoomBuild = (mkPureDarwinBuild {
+            pname = "puredarwin-fbdoom";
+            src = fbdoomSource;
+            buildTargets = [ "fbdoom" ];
+            enableProjects = false;
+            enableKernel = false;
+            installUserland = false;
+            installKernel = false;
+            extraCmakeFlags = [
+              "-DPUREDARWIN_ENABLE_FBDOOM=ON"
+              "-DPUREDARWIN_FBDOOM_SOURCE=${fbdoomExternalSrc}"
+            ];
+          }).overrideAttrs (old: {
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/usr/bin
+              cp build-nix/src/Userspace/fbdoom/fbdoom $out/usr/bin/fbdoom
+              runHook postInstall
+            '';
+          });
           kernelBuild = mkPureDarwinBuild {
             pname = "puredarwin-kernel";
             src = kernelSource;
@@ -1016,6 +1071,8 @@
           ''
           + lib.optionalString (!isDarwin) ''
             chmod -R u+w "$out"
+            cp -a ${bmakeBuild}/. "$out/"
+            chmod -R u+w "$out"
             cp -a ${xvfbBuild}/. "$out/"
             chmod -R u+w "$out"
             cp -a ${xeyesBuild}/. "$out/"
@@ -1038,6 +1095,7 @@
             fonts = xvfbFontsBuild;
             libiconv = libiconvBuild;
             nano = nanoBuild;
+            bmake = bmakeBuild;
             zsh = zshBuild;
             toybox = toyboxBuild;
             file = fileBuild;
@@ -1095,6 +1153,7 @@
             basesystem = fullBuild;
             basesystem-split = splitBaseSystem;
             default = fullBuild;
+            fbdoom = fbdoomBuild;
           } // imageExtraPackageSet // lib.optionalAttrs (!isDarwin) {
             libX11 = xlibBuild;
             libxcb = xcbBuild;
