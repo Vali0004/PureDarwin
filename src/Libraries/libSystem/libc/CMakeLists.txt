@@ -103,6 +103,11 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/waitpid.c        # _waitpid (init reaps/respawns children)
     gen/FreeBSD/wait.c           # __wait (BusyBox tar --seamless-compression child reaping)
     gen/FreeBSD/wait3.c          # _wait3 (zsh job/process accounting)
+    gen/oldsyslog.c              # openlog/closelog/syslog (curl)
+    gen/FreeBSD/wordexp.c        # wordexp/wordfree (fastfetch shell-style expansion)
+    gen/NetBSD/utmpx.c           # setutxent/getutxent/endutxent (fastfetch users detection)
+    gen/utmpx-darwin.c          # __utx_magic__/_utmpx32_64 (utmpx.c internals)
+    sys/posix_spawn.c           # posix_spawnp (fastfetch/popen/wordexp)
     gen/pd_wait.c                # _wait forwarder (__weak_reference alias not emitted)
     compat-43/FreeBSD/killpg.c   # _killpg (zsh job control)
     gen/FreeBSD/nice.c           # _nice (zsh BGNICE backgrounded-job priority)
@@ -258,6 +263,7 @@ target_include_directories(libc_static PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat     # namespace.h / un-namespace.h
     ${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD   # local.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gen/FreeBSD     # telldir.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/gen              # utmpx-darwin.h
     ${CMAKE_CURRENT_SOURCE_DIR}/locale          # xlocale_private.h
     ${CMAKE_CURRENT_SOURCE_DIR}/locale/FreeBSD   # setlocale.h + rune internals
     ${CMAKE_CURRENT_SOURCE_DIR}/stdtime/FreeBSD   # timelocal.h (locale chain)

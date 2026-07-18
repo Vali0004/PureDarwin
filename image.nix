@@ -10,11 +10,16 @@
 , mtools
 , e2fsprogs
 , apfsprogs
+, cacert
 , espMB ? 64
 , rootMB ? 640
 , apfsMB ? 128
 , testAudioFile ? null
 , imageFileName ? "puredarwin.img"
+  # xnu-loader reads this off the ESP at \EFI\BOOT\boot-args.txt
+  # it falls back if it cannot find a boot-args.txt, so not strictly needed here
+  # but generally nice to have so we can override things easily now
+, bootArgs ? "-v debug=0x219 -nogzalloc_mode keepsyms=1 serial=3 gopconsole=1"
 }:
 
 assert lib.isDerivation baseSystem;
@@ -58,6 +63,8 @@ stdenv.mkDerivation {
     mmd -i esp.img ::/EFI ::/EFI/BOOT
     mcopy -o -i esp.img ${xnuLoader}/img/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
     mcopy -o -i esp.img ${kc}/kernel                          ::/EFI/BOOT/kernel
+    printf '%s' ${lib.escapeShellArg bootArgs} > boot-args.txt
+    mcopy -o -i esp.img boot-args.txt                          ::/EFI/BOOT/boot-args.txt
     dd if=esp.img of=$img bs=512 seek=$esp_start count=$esp_size conv=notrunc status=none
 
     staging="$PWD/root-staging"
@@ -179,6 +186,10 @@ EOF
     cat > $staging/etc/init/rc.boot <<'EOF'
 #!/bin/sh
 
+if test -x /bin/hostname; then
+    /bin/hostname puredarwin
+fi
+
 if test -x /bin/netsetup; then
     /bin/netsetup
 fi
@@ -210,6 +221,39 @@ EOF
     ${lib.optionalString (testAudioFile != null) ''
       cp ${testAudioFile} $staging/badapple.pcm
     ''}
+
+    # Real Darwin's system-identity plist, read directly by lots of code
+    # (CoreFoundation's system-version APIs, etc) rather than through
+    # sw_vers - sw_vers itself (src/Userspace/sw_vers/sw_vers.c) still just
+    # uses its own compiled-in PRODUCT_NAME/PRODUCT_VERSION constants
+    # ("PureDarwin"/"11.3"), matched here so both report the same thing.
+    # curl (curl.nix) is built with --with-ca-bundle=/etc/ssl/cert.pem;
+    # stage a real CA bundle there so TLS verification actually has
+    # something to check against.
+    mkdir -p $staging/etc/ssl
+    cp ${cacert}/etc/ssl/certs/ca-bundle.crt $staging/etc/ssl/cert.pem
+    chmod 644 $staging/etc/ssl/cert.pem
+
+    mkdir -p $staging/System/Library/CoreServices
+    cat > $staging/System/Library/CoreServices/SystemVersion.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ProductBuildVersion</key>
+	<string>20D91</string>
+	<key>ProductCopyright</key>
+	<string>1983-2021 PureDarwin. All rights reserved.</string>
+	<key>ProductName</key>
+	<string>PureDarwin</string>
+	<key>ProductUserVisibleVersion</key>
+	<string>11.3</string>
+	<key>ProductVersion</key>
+	<string>11.3</string>
+</dict>
+</plist>
+EOF
+    chmod 644 $staging/System/Library/CoreServices/SystemVersion.plist
 
     # Xorg config selecting the PureDarwin GOP framebuffer driver. No input
     # autodetection (no udev/hal on PD); the driver reads its geometry live
@@ -262,10 +306,6 @@ Section "ServerLayout"
 EndSection
 EOF
     chmod 644 $staging/etc/X11/xorg.conf
-
-    if [ -x $staging/bin/helloapp ] && [ ! -e $staging/sbin/helloapp ]; then
-      ln -sf /bin/helloapp $staging/sbin/helloapp
-    fi
 
     for applet in \
       awk \

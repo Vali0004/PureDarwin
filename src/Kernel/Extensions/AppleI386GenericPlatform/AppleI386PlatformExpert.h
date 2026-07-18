@@ -53,6 +53,8 @@ public:
 	virtual IOReturn callPlatformFunction(const OSSymbol *functionName, bool waitForFunction, void *param1, void *param2, void *param3, void *param4) APPLE_KEXT_OVERRIDE;
 	virtual bool getModelName(char *name, int maxLengh) APPLE_KEXT_OVERRIDE;
 	virtual bool getMachineName(char *name, int maxLength) APPLE_KEXT_OVERRIDE;
+	virtual long getGMTTimeOfDay(void) APPLE_KEXT_OVERRIDE;
+	virtual void setGMTTimeOfDay(long secs) APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* ! _IOKIT_APPLEI386PLATFORM_H */

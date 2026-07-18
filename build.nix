@@ -29,7 +29,7 @@
 , tinycc
 , src ? ./.
 , pname ? "puredarwin-nix-toolchain"
-, buildTargets ? [ "helloapp" "launchd" ]
+, buildTargets ? [ "launchd" ]
 , enableProjects ? true
 , enableKernel ? true
 , enableLibraries ? true
@@ -235,6 +235,14 @@ EOF
     fi
     if [ -e build-nix/src/Libraries/libSystem/libsystem_kernel/syscalls.a ]; then
       cp build-nix/src/Libraries/libSystem/libsystem_kernel/syscalls.a $out/usr/lib/system/
+    fi
+    # Real CF-shaped IOKitLib object code (IOServiceGetMatchingService,
+    # IORegistryEntryCreateCFProperty, etc - see src/Libraries/IOKit/
+    # IOKitLibCF.c) - object-only here since it's compiled without CF's
+    # real headers; nix/pkgs/iokit.nix does the final dylib link against
+    # real CoreFoundation.
+    if [ -e build-nix/src/Libraries/IOKit/libIOKitCF.a ]; then
+      cp build-nix/src/Libraries/IOKit/libIOKitCF.a $out/usr/lib/system/
     fi
     cp build-nix/src/Libraries/dyld/dyld $out/usr/lib/
     # Ship the C headers so in-guest compilers (tcc) can build against the

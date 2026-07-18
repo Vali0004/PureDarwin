@@ -405,3 +405,155 @@ void AppleI386PlatformExpert::releaseSystemInterrupt(IOService *client, UInt32 v
 
 	IOLockUnlock(ResourceLock);
 }
+
+#define CMOS_ADDR_PORT  0x70
+#define CMOS_DATA_PORT  0x71
+
+#define RTC_SECONDS     0x00
+#define RTC_MINUTES     0x02
+#define RTC_HOURS       0x04
+#define RTC_DAY_OF_MONTH 0x07
+#define RTC_MONTH       0x08
+#define RTC_YEAR        0x09
+#define RTC_STATUS_A    0x0A
+#define RTC_STATUS_B    0x0B
+
+#define RTC_STATUS_A_UPDATE_IN_PROGRESS 0x80
+
+#define RTC_STATUS_B_24_HOUR    0x02
+#define RTC_STATUS_B_BINARY     0x04
+
+static uint8_t
+rtcRead(uint8_t reg)
+{
+	outb(CMOS_ADDR_PORT, reg);
+	return inb(CMOS_DATA_PORT);
+}
+
+static void
+rtcWrite(uint8_t reg, uint8_t value)
+{
+	outb(CMOS_ADDR_PORT, reg);
+	outb(CMOS_DATA_PORT, value);
+}
+
+#define BCD_TO_BIN(val) (((val) & 0x0F) + ((val) >> 4) * 10)
+#define BIN_TO_BCD(val) ((((val) / 10) << 4) | ((val) % 10))
+
+static bool
+isLeapYear(int year)
+{
+	return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+/*
+ * Days-since-epoch civil-calendar conversion (proleptic Gregorian, matches
+ * the algorithm POSIX gmtime/timegm use) -- self-contained since kernel code
+ * can't call libc's mktime/timegm.
+ */
+static long
+daysFromEpoch(int year, int month, int day)
+{
+	static const int cumulativeDays[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+	long days = (year - 1970) * 365 + cumulativeDays[month - 1] + (day - 1);
+
+	for (int y = 1970; y < year; y++) {
+		if (isLeapYear(y)) days++;
+	}
+	if (month > 2 && isLeapYear(year)) days++;
+
+	return days;
+}
+
+long
+AppleI386PlatformExpert::getGMTTimeOfDay(void)
+{
+	uint8_t sec, min, hour, day, month, year, statusB;
+
+	/* Skip an in-progress update rather than reading a torn value. */
+	while (rtcRead(RTC_STATUS_A) & RTC_STATUS_A_UPDATE_IN_PROGRESS) {
+		;
+	}
+
+	sec = rtcRead(RTC_SECONDS);
+	min = rtcRead(RTC_MINUTES);
+	hour = rtcRead(RTC_HOURS);
+	day = rtcRead(RTC_DAY_OF_MONTH);
+	month = rtcRead(RTC_MONTH);
+	year = rtcRead(RTC_YEAR);
+	statusB = rtcRead(RTC_STATUS_B);
+
+	if (!(statusB & RTC_STATUS_B_BINARY)) {
+		sec = BCD_TO_BIN(sec);
+		min = BCD_TO_BIN(min);
+		hour = BCD_TO_BIN(hour & 0x7F);
+		day = BCD_TO_BIN(day);
+		month = BCD_TO_BIN(month);
+		year = BCD_TO_BIN(year);
+	}
+	if (!(statusB & RTC_STATUS_B_24_HOUR) && (hour & 0x80)) {
+		hour = ((hour & 0x7F) % 12) + 12;
+	}
+
+	/* CMOS only stores a 2-digit year; assume 2000-2099, same as every
+	 * other PC RTC driver (real Darwin's AppleRTC has the same
+	 * assumption baked in for the same hardware). */
+	int fullYear = 2000 + year;
+
+	long days = daysFromEpoch(fullYear, month, day);
+	return days * 86400 + hour * 3600 + min * 60 + sec;
+}
+
+void
+AppleI386PlatformExpert::setGMTTimeOfDay(long secs)
+{
+	long days = secs / 86400;
+	long remainder = secs % 86400;
+	if (remainder < 0) {
+		remainder += 86400;
+		days--;
+	}
+
+	int hour = (int)(remainder / 3600);
+	int min = (int)((remainder % 3600) / 60);
+	int sec = (int)(remainder % 60);
+
+	int year = 1970;
+	for (;;) {
+		int daysInYear = isLeapYear(year) ? 366 : 365;
+		if (days < daysInYear) break;
+		days -= daysInYear;
+		year++;
+	}
+
+	static const int monthLengths[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+	int month = 0;
+	while (true) {
+		int len = monthLengths[month];
+		if (month == 1 && isLeapYear(year)) len = 29;
+		if (days < len) break;
+		days -= len;
+		month++;
+	}
+	int day = (int)days + 1;
+
+	uint8_t statusB = rtcRead(RTC_STATUS_B);
+	bool binary = statusB & RTC_STATUS_B_BINARY;
+
+	uint8_t bSec = binary ? (uint8_t)sec : BIN_TO_BCD(sec);
+	uint8_t bMin = binary ? (uint8_t)min : BIN_TO_BCD(min);
+	uint8_t bHour = binary ? (uint8_t)hour : BIN_TO_BCD(hour);
+	uint8_t bDay = binary ? (uint8_t)day : BIN_TO_BCD(day);
+	uint8_t bMonth = binary ? (uint8_t)(month + 1) : BIN_TO_BCD(month + 1);
+	uint8_t bYear = binary ? (uint8_t)(year - 2000) : BIN_TO_BCD(year - 2000);
+
+	/* Halt updates while writing so we don't race the RTC's own tick. */
+	rtcWrite(RTC_STATUS_B, statusB | 0x80);
+	rtcWrite(RTC_SECONDS, bSec);
+	rtcWrite(RTC_MINUTES, bMin);
+	rtcWrite(RTC_HOURS, bHour);
+	rtcWrite(RTC_DAY_OF_MONTH, bDay);
+	rtcWrite(RTC_MONTH, bMonth);
+	rtcWrite(RTC_YEAR, bYear);
+	rtcWrite(RTC_STATUS_B, statusB);
+}

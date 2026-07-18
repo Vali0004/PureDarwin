@@ -625,10 +625,8 @@ void PDE1000::pollReceive()
             fRxPacketBuf[idx]->complete();
             fRxPackets++;
             if (fRxLogBudget) {
-                IOLog("PDE1000: RX desc=%u len=%u status=0x%02x errors=0x%02x "
-                      "rdh=%u rdt=%u\n",
-                    idx, len, desc->status, desc->errors, regRead(REG_RDH), regRead(REG_RDT));
-                logEtherFrame("RX", fRxPackets, fRxPacketBuf[idx]->getBytesNoCopy(), len);
+                //IOLog("PDE1000: RX desc=%u len=%u status=0x%02x errors=0x%02x rdh=%u rdt=%u\n", idx, len, desc->status, desc->errors, regRead(REG_RDH), regRead(REG_RDT));
+                //logEtherFrame("RX", fRxPackets, fRxPacketBuf[idx]->getBytesNoCopy(), len);
                 fRxLogBudget--;
             }
             mbuf_t m = allocatePacket(len);
@@ -641,8 +639,7 @@ void PDE1000::pollReceive()
             }
             fRxPacketBuf[idx]->prepare();
         } else if (fRxLogBudget) {
-            IOLog("PDE1000: RX desc=%u invalid len=%u status=0x%02x errors=0x%02x\n",
-                idx, len, desc->status, desc->errors);
+            //IOLog("PDE1000: RX desc=%u invalid len=%u status=0x%02x errors=0x%02x\n", idx, len, desc->status, desc->errors);
             fRxLogBudget--;
         }
 
@@ -685,9 +682,8 @@ UInt32 PDE1000::outputPacket(mbuf_t m, void *param)
     desc->status = 0;
     fTxPackets++;
     if (fTxLogBudget) {
-        IOLog("PDE1000: TX desc=%u len=%lu tdh=%u tdt=%u\n",
-            idx, (unsigned long)pktLen, regRead(REG_TDH), regRead(REG_TDT));
-        logEtherFrame("TX", fTxPackets, fTxPacketBuf[idx]->getBytesNoCopy(), pktLen);
+        //IOLog("PDE1000: TX desc=%u len=%lu tdh=%u tdt=%u\n", idx, (unsigned long)pktLen, regRead(REG_TDH), regRead(REG_TDT));
+        //logEtherFrame("TX", fTxPackets, fTxPacketBuf[idx]->getBytesNoCopy(), pktLen);
         fTxLogBudget--;
     }
 

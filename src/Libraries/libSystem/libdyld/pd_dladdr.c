@@ -338,3 +338,49 @@ NSVersionOfLinkTimeLibrary(const char *libraryName)
 	}
 	return -1;
 }
+
+/*
+ * _NSGetExecutablePath (mach-o/dyld.h): real dyld tracks the main
+ * executable's own path as the reason it always has one to hand back here -
+ * that's exactly image index 0 in the same image-enumeration API this file
+ * already implements above, so just reuse it instead of re-deriving the
+ * path from argv[0]/$PATH search.
+ */
+int
+_NSGetExecutablePath(char *buf, uint32_t *bufsize)
+{
+	const char *path = _dyld_get_image_name(0);
+	size_t len;
+
+	if (path == NULL) {
+		*bufsize = 0;
+		return -1;
+	}
+
+	len = strlen(path) + 1;
+	if (len > *bufsize) {
+		*bufsize = (uint32_t)len;
+		return -1;
+	}
+
+	memcpy(buf, path, len);
+	return 0;
+}
+
+/*
+ * __isPlatformVersionAtLeast is emitted by clang for @available()/
+ * API_AVAILABLE checks; on real Darwin it's implemented in dyld3::APIs.cpp
+ * against the process's recorded platform/SDK version. We don't track SDK
+ * versions per-binary, and PureDarwin only ever targets one platform/version
+ * (macOS 11.0, set at link time via -platform_version) - so every
+ * @available() check compiled against our SDK is trivially true.
+ */
+bool
+__isPlatformVersionAtLeast(uint32_t platform, uint32_t major, uint32_t minor, uint32_t subminor)
+{
+	(void) platform;
+	(void) major;
+	(void) minor;
+	(void) subminor;
+	return true;
+}

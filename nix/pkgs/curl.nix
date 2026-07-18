@@ -60,6 +60,7 @@ stdenv.mkDerivation {
       --enable-static \
       --with-openssl=${openssl} \
       --with-zlib=${zlib} \
+      --with-ca-bundle=/etc/ssl/cert.pem \
       --without-nghttp2 \
       --without-nghttp3 \
       --without-libpsl \

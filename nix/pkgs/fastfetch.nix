@@ -9,6 +9,7 @@
 , ninja
 , pkg-config
 , corefoundation
+, iokit
 }:
 
 let
@@ -73,39 +74,78 @@ stdenv.mkDerivation {
   ];
 
   preConfigure = ''
-    # PureDarwin ships none of macOS's media/UI frameworks (AVFoundation,
-    # Cocoa, CoreMedia, ...) - fastfetch's upstream CMakeLists direct-links
-    # them unconditionally on APPLE. A first attempt weak-linked them
-    # (-weak_framework), but Cocoa is an umbrella framework whose own .tbd
-    # re-exports AppKit/Foundation, and that re-export chain still pulls
-    # AppKit in as a hard, non-weak LC_LOAD_DYLIB regardless of how Cocoa
-    # itself was linked - so weak-linking only the top-level name doesn't
-    # help. None of these frameworks will ever exist here, so don't emit
-    # load commands for them at all; -undefined,dynamic_lookup (passed
-    # below) already defers *symbol* resolution generically, which is all
-    # any of fastfetch's Apple-only detection modules actually need.
-    # Every *_apple.m/.c detection module that talks to a real macOS UI/media
-    # framework (AVFoundation, CoreWLAN, IOBluetooth, AppKit, CoreText,
-    # MediaRemote, ...) references Objective-C classes and string constants
-    # directly - those are eager (non-lazy) symbols, so -undefined,dynamic_lookup
-    # doesn't save us the way it does for plain function calls. Rather than
-    # fix these one crash at a time, swap each one for the *_nosupport.c
-    # stub fastfetch already ships for platforms without that feature - CPU/
-    # memory/OS/board/etc. modules stay on their real *_apple.c/.m sources
-    # since those only use IOKit/sysctl, which do work here.
-    # theme_apple.c is plain C (CFSTR only, no @"..."/NSArray/NSString) -
-    # it was swapped by an earlier heuristic pass before actually checking
-    # its content; now that PureDarwin has a real CoreFoundation (see
-    # corefoundation.nix), it can use its real implementation like the other
-    # CFSTR-only C modules (cpu/battery/keyboard/mouse/etc.) already do.
-    for base in camera wifi bluetooth bluetoothradio cursor font media wallpaper wm wmtheme physicalmemory; do
+    for base in camera wifi bluetooth bluetoothradio cursor font media wallpaper wm wmtheme physicalmemory brightness poweradapter; do
       sed -i "s#src/detection/$base/''${base}_apple\.[mc]#src/detection/$base/''${base}_nosupport.c#" CMakeLists.txt
     done
 
-    # terminalfont_apple.m has no upstream _nosupport.c fallback, and it's
-    # the last caller of common/apple/osascript.m (NSAppleScript) now that
-    # wallpaper is stubbed - write a minimal no-op replacement matching its
-    # one exported signature so nothing pulls NSAppleScript in at all.
+    # sound.h declares ffDetectSound(FFSoundOptions*, FFlist*) in this
+    # fastfetch version; upstream's sound_nosupport.c is stale/mismatched
+    # against that signature, so write a matching stub instead of using it.
+    cat > src/detection/sound/sound_nosupport.c <<'SNDEOF'
+#include "sound.h"
+
+const char* ffDetectSound(FF_A_UNUSED FFSoundOptions* options, FF_A_UNUSED FFlist* devices)
+{
+    return "Not supported on this platform";
+}
+SNDEOF
+    sed -i 's#src/detection/sound/sound_apple\.[mc]#src/detection/sound/sound_nosupport.c#' CMakeLists.txt
+
+    cat > src/detection/opengl/opengl_apple.c <<'GLEOF'
+#include "opengl.h"
+
+const char* ffDetectOpenGL(FFOpenGLOptions* options, FFOpenGLResult* result)
+{
+    (void) options;
+    (void) result;
+    return "OpenGL is not supported here";
+}
+GLEOF
+
+    sed -i '/PRIVATE "-framework OpenGL"/d' CMakeLists.txt
+
+    sed -i 's#src/detection/dns/dns_apple\.c#src/detection/dns/dns_linux.c#' CMakeLists.txt
+
+    # displayserver_apple.c is entirely built around private CoreGraphics/
+    # WindowServer calls (CGWindowServerCreateServerPort etc) - a whole
+    # separate framework subsystem PureDarwin doesn't have (same category as
+    # OpenGL/CG display APIs flagged separately). No upstream _nosupport.c
+    # for this module either; write one matching its one entry point.
+    cat > src/detection/displayserver/displayserver_nosupport.c <<'DSEOF'
+#include "displayserver.h"
+
+void ffConnectDisplayServerImpl(FFDisplayServerResult* ds)
+{
+    (void) ds;
+}
+DSEOF
+    sed -i 's#src/detection/displayserver/displayserver_apple\.c#src/detection/displayserver/displayserver_nosupport.c#' CMakeLists.txt
+
+    # opencl.c auto-enables real OpenCL.framework usage on its own, hardcoded
+    # "#if !defined(FF_HAVE_OPENCL) && defined(__APPLE__) &&
+    # defined(MAC_OS_X_VERSION_10_15)" at the top of the file - this
+    # completely bypasses the ENABLE_OPENCL=OFF cmake flag on any Apple
+    # target with a deployment min >= 10.15 (ours is 11.0)
+    cat > src/detection/opencl/opencl.c <<'CLEOF'
+#include "opencl.h"
+
+FFOpenCLResult* ffDetectOpenCL(void) {
+    static FFOpenCLResult result;
+    static bool initialized;
+
+    if (!initialized) {
+        initialized = true;
+        ffStrbufInit(&result.version);
+        ffStrbufInit(&result.name);
+        ffStrbufInit(&result.vendor);
+        ffListInit(&result.gpus);
+        result.error = "fastfetch was compiled without OpenCL support";
+    }
+
+    return &result;
+}
+CLEOF
+
     cat > src/detection/terminalfont/terminalfont_nosupport.c <<'TFEOF'
 #include "terminalfont.h"
 #include "detection/terminalshell/terminalshell.h"
@@ -120,12 +160,6 @@ TFEOF
     sed -i 's#src/detection/terminalfont/terminalfont_apple\.m#src/detection/terminalfont/terminalfont_nosupport.c#' CMakeLists.txt
     sed -i '/src\/common\/apple\/osascript\.m/d' CMakeLists.txt
 
-    # common/apple/version.m (unconditionally compiled) reads a .app bundle's
-    # Info.plist via NSDictionary/Foundation to get its display name/version.
-    # Its only remaining caller (now that wm_apple.m is stubbed) is
-    # terminalshell.c, which already handles a false return by just skipping
-    # the enrichment - replace it with a plain stub instead of pulling in
-    # Foundation for a single optional nicety.
     cat > src/common/apple/version.m <<'VEREOF'
 #include "common/apple/version.h"
 
@@ -159,12 +193,6 @@ void ffDetectOSImpl(FFOSResult* os)
 OSEOF
     sed -i 's#src/detection/os/os_apple\.m#src/detection/os/os_nosupport.c#' CMakeLists.txt
 
-    # gpu_apple.c (208 lines, IOKit-based) is the real GPU detection and
-    # already defines ffDetectGPUImpl itself - gpu_apple.m is just two small
-    # helpers it calls (Metal.framework device enumeration, KextManager
-    # driver-version lookup) that pull in NSArray/NSDictionary. Swapping the
-    # whole thing to gpu_nosupport.c would collide (duplicate ffDetectGPUImpl)
-    # and throw away the real detection - stub just the two helpers instead.
     cat > src/detection/gpu/gpu_apple.m <<'GPUEOF'
 #include "gpu.h"
 
@@ -199,29 +227,7 @@ GPUEOF
     export DARWIN_SDK_ROOT="$PWD/sdk/MacOSX11.3.sdk"
     export PATH="${darwinCrossToolchain}/bin:$PATH"
     export NIX_DARWIN_TOOLCHAIN_DIR="${darwinCrossToolchain}/bin"
-
-    # Same stub-dylib/-nostdlib pattern as every other cross-built port:
-    # link against our real static libSystem.exports archive, not the
-    # SDK's stub dylibs.
-    # This project's native ld doesn't do ld64's automatic -syslibroot-based
-    # framework search the way real ld64 does with just -isysroot; pass the
-    # SDK's Frameworks dir explicitly so "-framework AVFoundation" etc.
-    # resolve against the SDK's .tbd stubs (present for all the frameworks
-    # fastfetch links; real symbol resolution still comes from
-    # -undefined,dynamic_lookup since none of these frameworks have a real
-    # implementation in PD).
-    # CoreFoundation (corefoundation.nix, cross-built from PureDarwin's own
-    # src/Libraries/CoreFoundation) provides the real CFSTR/CFString/
-    # CFDictionary/__CFConstantStringClassReference machinery the plain-C
-    # *_apple.c IOKit-detection modules (cpu, battery, keyboard, mouse,
-    # diskio, poweradapter, bootmgr, brightness, physicaldisk, gamepad, dns,
-    # displayserver, gpu, theme) need. Linked as a real dylib now (matching
-    # real Darwin) rather than -force_load'd as a static archive:
-    # CFUniChar.c's __CFGetSectDataPtr looks for its own image by comparing
-    # against &_mh_dylib_header, a magic symbol the linker only ever
-    # synthesizes for an actual MH_DYLIB - statically merging CF into the
-    # executable meant that symbol never existed, breaking the link.
-    export LDFLAGS="-isysroot $DARWIN_SDK_ROOT -F$DARWIN_SDK_ROOT/System/Library/Frameworks -fuse-ld=${nativeLd}/bin/ld -nostdlib -Wl,-Z -L${libSystem}/usr/lib -L${corefoundation}/usr/lib -Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib -Wl,-dylinker_install_name,/usr/lib/dyld -Wl,-platform_version,macos,11.0,11.5 -Wl,-undefined,dynamic_lookup -lCoreFoundation -lSystem"
+    export LDFLAGS="-isysroot $DARWIN_SDK_ROOT -F$DARWIN_SDK_ROOT/System/Library/Frameworks -fuse-ld=${nativeLd}/bin/ld -nostdlib -Wl,-Z -L${libSystem}/usr/lib -L${corefoundation}/usr/lib -L${iokit}/usr/lib -Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib -Wl,-dylinker_install_name,/usr/lib/dyld -Wl,-platform_version,macos,11.0,11.5 -Wl,-undefined,dynamic_lookup -lIOKitCF -lCoreFoundation -lSystem"
     export CFLAGS="-isysroot $DARWIN_SDK_ROOT -I${libSystem}/usr/include -I${corefoundation}/include -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
   '';
 

@@ -118,7 +118,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "helloapp" "launchd" "sw_vers" "ps" "mkfile" "sync" "fbtri" "malloctest" "sockettest" "netsetup" "ping" "pcmplay" "startx" "iokittest" "ioreg" "mousemon" "msdosfstest" "mount" "umount" ]
+            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "netsetup" "ping" "pcmplay" "startx" "iokittest" "ioreg" "mousemon" "mount" "umount" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
             enableProjects = false;
             enableKernel = false;
@@ -319,10 +319,6 @@
                 xlibBuild
                 xvfbLibXextBuild
                 xvfbLibXtBuild
-                # libXmu's CvtStdSel.c pulls in Xt's ShellP.h -> Shell.h ->
-                # <X11/SM/SMlib.h>, so libSM (and its libICE dep) headers must
-                # be on the include path even though libXmu doesn't link them
-                # directly.
                 xvfbLibSMBuild
                 xvfbLibICEBuild
               ];
@@ -552,6 +548,7 @@
               libSystem = libSystemBuild;
               fastfetch = pkgs.fastfetch;
               corefoundation = coreFoundationBuild;
+              iokit = iokitBuild;
             };
           xtermBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xterm.nix {
@@ -590,10 +587,16 @@
               # (mach-o/dyld_priv.h etc). Point straight at the source dir.
               pdCompatInclude = "${coreFoundationSource}/src/Libraries/libSystem/libc/pd-compat-include";
             };
+          iokitBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/iokit.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              corefoundation = coreFoundationBuild;
+            };
           libSystemBuild = mkPureDarwinBuild {
             pname = "puredarwin-libsystem";
             src = libSystemSource;
-            buildTargets = [ "libSystem_B_stub" "dyld" "libsystem_kernel_static" "libdispatch_static" ];
+            buildTargets = [ "libSystem_B_stub" "dyld" "libsystem_kernel_static" "libdispatch_static" "IOKitCF" ];
             enableUserspace = false;
             enableKernel = false;
             installUserland = false;
@@ -652,7 +655,7 @@
           fullBuild = mkPureDarwinBuild {
             pname = "puredarwin";
             src = ./.;
-            buildTargets = [ "helloapp" "launchd" "fbtri" "xnu" "kexts" "libsystem_kernel" "pcmplay" ];
+            buildTargets = [ "launchd" "xnu" "kexts" "libsystem_kernel" "pcmplay" ];
             installUserland = false;
             installKernel = false;
             installBaseSystem = true;
@@ -702,6 +705,7 @@
             fastfetch = fastfetchBuild;
             corefoundation = coreFoundationBuild;
             icucore = icuCoreBuild;
+            iokit = iokitBuild;
           };
 
           commonPackages = {
@@ -745,7 +749,7 @@
                 kc = kcBuild;
                 xnuLoader = xnu-loader.packages.${system}.default;
                 apfsprogs = pkgs.apfsprogs;
-                #gtestAudioFile = /home/vali/development/darwin/badapple.pcm;
+                testAudioFile = /home/vali/development/darwin/badapple.pcm;
               };
               imageDebugBuild = pkgs.callPackage ./image.nix {
                 baseSystem = splitBaseSystem;
@@ -871,6 +875,7 @@
               kc-debug = kcDebugBuild;
               corefoundation = coreFoundationBuild;
               icucore = icuCoreBuild;
+              iokit = iokitBuild;
               image = imageBuild;
               image-debug = imageDebugBuild;
               xorg = xorgBuild;

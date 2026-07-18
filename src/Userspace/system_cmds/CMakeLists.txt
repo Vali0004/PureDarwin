@@ -26,3 +26,4 @@ endfunction()
 
 add_system_cmd(mkfile mkfile.c)
 add_system_cmd(sync sync.c)
+add_system_cmd(sysctl sysctl.c)

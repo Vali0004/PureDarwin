@@ -359,6 +359,23 @@ __pd_fopen_extsn(const char *path, const char *mode)
     return fopen(path, mode);
 }
 
+extern void __pd_syslog_extsn(int priority, const char *format, ...) __asm("_syslog$DARWIN_EXTSN");
+extern void vsyslog(int priority, const char *format, va_list ap);
+
+void
+__pd_syslog_extsn(int priority, const char *format, ...)
+{
+    /* curl was compiled against the real SDK's syslog.h, which renames the
+     * declaration to this mangled name via __DARWIN_ALIAS - our own
+     * gen/oldsyslog.c syslog() is the plain (unrenamed) symbol, so just
+     * forward. va_list can't cross a varargs call boundary portably, so
+     * reimplement via vsyslog instead of calling syslog(priority, format...). */
+    va_list ap;
+    va_start(ap, format);
+    vsyslog(priority, format, ap);
+    va_end(ap);
+}
+
 size_t
 fwrite(const void *ptr, size_t size, size_t count, FILE *stream)
 {

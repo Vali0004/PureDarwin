@@ -84,6 +84,9 @@ if(TARGET libcxx_static)
     add_dependencies(libSystem_B_stub libcxx_static_build)
     target_link_libraries(libSystem_B_stub PRIVATE $<TARGET_FILE:libcxx_static>)
 endif()
+if(TARGET commoncrypto_static)
+    target_link_libraries(libSystem_B_stub PRIVATE $<TARGET_FILE:commoncrypto_static>)
+endif()
 target_link_options(libSystem_B_stub PRIVATE
     ${_libsystem_u_flags}
     # -dead_strip (as dyld's own link uses): resolve the unavoidable duplicate
