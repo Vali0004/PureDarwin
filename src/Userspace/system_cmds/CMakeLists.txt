@@ -33,3 +33,9 @@ add_system_cmd(dmesg dmesg.c)
 add_system_cmd(purge purge.c)
 add_system_cmd(cpuctl cpuctl.c)
 add_system_cmd(mean mean.c)
+
+# reboot/halt/poweroff/shutdown: same source, keyed on argv[0]; launchd
+# (pid 1) handles SIGUSR1=reboot / SIGTERM=poweroff (see pd_shutdown.c).
+foreach(_pd_ctl reboot halt poweroff shutdown)
+    add_system_cmd(${_pd_ctl} pd_shutdown.c)
+endforeach()

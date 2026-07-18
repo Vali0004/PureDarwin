@@ -122,6 +122,66 @@ target_sources(libc_static PRIVATE
     secure/stpncpy_chk.c         # ___stpncpy_chk
     gen/FreeBSD/glob.c           # _glob$INODE64 / _globfree
     gen/FreeBSD/siglist.c        # _sys_siglist / _sys_signame
+    gen/confstr.c                # _confstr (shell_cmds getopt et al)
+    secure/strlcat_chk.c         # ___strlcat_chk
+    # wide-char stdio (text_cmds/shell_cmds: tr/cut/fold/echo/... all do
+    # putwchar/getwchar-based I/O). vfwprintf.c brings wprintf/fwprintf.
+    stdio/FreeBSD/putwchar.c
+    stdio/FreeBSD/putwc.c
+    stdio/FreeBSD/fputwc.c
+    stdio/FreeBSD/fputws.c
+    stdio/FreeBSD/getwchar.c
+    stdio/FreeBSD/getwc.c
+    stdio/FreeBSD/fgetwc.c
+    stdio/FreeBSD/fgetws.c
+    stdio/FreeBSD/fgetwln.c
+    stdio/FreeBSD/ungetwc.c
+    stdio/FreeBSD/fwide.c
+    stdio/FreeBSD/wprintf.c
+    libm/pd_libm_floor.c         # floor/ceil/trunc/round (from-scratch libm)
+    gen/get_compat.c             # _compat_mode (uname/ps COMMAND_MODE checks)
+    gen/FreeBSD/setmode.c        # _setmode/_getmode (uudecode -m, chmod-style modes)
+    string/FreeBSD/wcscoll.c     # _wcscoll (comm)
+    string/FreeBSD/wcschr.c      # _wcschr
+    string/FreeBSD/wcsdup.c      # _wcsdup
+    string/FreeBSD/wmemmove.c    # _wmemmove (fold)
+    locale/FreeBSD/mbsrtowcs.c   # _mbsrtowcs
+    locale/FreeBSD/nextwctype.c  # _nextwctype (tr [:class:] iteration)
+    stdlib/FreeBSD/merge.c       # _mergesort (tr)
+    nls/FreeBSD/msgcat.c         # _catopen/_catgets/_catclose (uniq NLS)
+    stdio/FreeBSD/freopen.c      # _freopen (expand/fold/uuencode stdin rebind)
+    # BSD libc db (dbopen w/ hash+btree+recno backends): tsort uses DB_HASH;
+    # future pwd_mkdb/dev_mkdb/cap_mkdb consumers use hash too.
+    db/db/FreeBSD/db.c
+    db/hash/FreeBSD/hash.c
+    db/hash/FreeBSD/hash_bigkey.c
+    db/hash/FreeBSD/hash_buf.c
+    db/hash/FreeBSD/hash_func.c
+    db/hash/FreeBSD/hash_log2.c
+    db/hash/FreeBSD/hash_page.c
+    db/hash/FreeBSD/ndbm.c
+    db/btree/FreeBSD/bt_close.c
+    db/btree/FreeBSD/bt_conv.c
+    db/btree/FreeBSD/bt_debug.c
+    db/btree/FreeBSD/bt_delete.c
+    db/btree/FreeBSD/bt_get.c
+    db/btree/FreeBSD/bt_open.c
+    db/btree/FreeBSD/bt_overflow.c
+    db/btree/FreeBSD/bt_page.c
+    db/btree/FreeBSD/bt_put.c
+    db/btree/FreeBSD/bt_search.c
+    db/btree/FreeBSD/bt_seq.c
+    db/btree/FreeBSD/bt_split.c
+    db/btree/FreeBSD/bt_utils.c
+    db/recno/FreeBSD/rec_close.c
+    db/recno/FreeBSD/rec_delete.c
+    db/recno/FreeBSD/rec_get.c
+    db/recno/FreeBSD/rec_open.c
+    db/recno/FreeBSD/rec_put.c
+    db/recno/FreeBSD/rec_search.c
+    db/recno/FreeBSD/rec_seq.c
+    db/recno/FreeBSD/rec_utils.c
+    db/mpool/FreeBSD/mpool.c
     gen/devname.c                # _devname / _devname_r
     gen/uname.c                  # _uname (BusyBox uname; sysctl-backed)
     gen/FreeBSD/exec.c           # _execvp / _execv / _execlp (BusyBox spawn)
@@ -230,7 +290,7 @@ target_sources(libc_static PRIVATE
     #    uses darwin/pd_arc4random.c instead, a real getentropy()-backed impl).
     #  - stdio/FreeBSD/mktemp.c (_mkstemp) needs BSD-internal TRUE/FALSE/bool
     # printf/fprintf/snprintf and the locale/rune chain are NOT deferred anymore
-    # -- resolved for real in libc_internal_static below (findfp.c/vfprintf.c/
+    # - resolved for real in libc_internal_static below (findfp.c/vfprintf.c/
     # xlocale.c/table.c/gdtoa/... the whole "internal libc" stdio+locale
     # sub-project this comment used to point at).
 )
@@ -295,7 +355,33 @@ target_include_directories(libc_static PRIVATE
 set_source_files_properties(stdlib/FreeBSD/exit.c stdlib/FreeBSD/atexit.c
     stdlib/FreeBSD/abort.c gen/FreeBSD/assert.c gen/FreeBSD/signal.c gen/FreeBSD/sleep.c
     gen/FreeBSD/usleep.c gen/FreeBSD/getprogname.c gen/FreeBSD/termios.c
-    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h")
+    stdio/FreeBSD/putwchar.c stdio/FreeBSD/putwc.c stdio/FreeBSD/fputwc.c
+    stdio/FreeBSD/fputws.c stdio/FreeBSD/getwchar.c stdio/FreeBSD/getwc.c
+    stdio/FreeBSD/fgetwc.c stdio/FreeBSD/fgetws.c stdio/FreeBSD/fgetwln.c
+    stdio/FreeBSD/ungetwc.c stdio/FreeBSD/fwide.c stdio/FreeBSD/wprintf.c
+    stdio/FreeBSD/vfwprintf.c
+    stdio/FreeBSD/freopen.c gen/FreeBSD/setmode.c
+    db/db/FreeBSD/db.c db/hash/FreeBSD/hash.c db/hash/FreeBSD/hash_bigkey.c
+    db/hash/FreeBSD/hash_buf.c db/hash/FreeBSD/hash_func.c
+    db/hash/FreeBSD/hash_log2.c db/hash/FreeBSD/hash_page.c
+    db/hash/FreeBSD/ndbm.c db/btree/FreeBSD/bt_close.c
+    db/btree/FreeBSD/bt_conv.c db/btree/FreeBSD/bt_debug.c
+    db/btree/FreeBSD/bt_delete.c db/btree/FreeBSD/bt_get.c
+    db/btree/FreeBSD/bt_open.c db/btree/FreeBSD/bt_overflow.c
+    db/btree/FreeBSD/bt_page.c db/btree/FreeBSD/bt_put.c
+    db/btree/FreeBSD/bt_search.c db/btree/FreeBSD/bt_seq.c
+    db/btree/FreeBSD/bt_split.c db/btree/FreeBSD/bt_utils.c
+    db/recno/FreeBSD/rec_close.c db/recno/FreeBSD/rec_delete.c
+    db/recno/FreeBSD/rec_get.c db/recno/FreeBSD/rec_open.c
+    db/recno/FreeBSD/rec_put.c db/recno/FreeBSD/rec_search.c
+    db/recno/FreeBSD/rec_seq.c db/recno/FreeBSD/rec_utils.c
+    db/mpool/FreeBSD/mpool.c
+    PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -D__DBINTERFACE_PRIVATE=1")
+# wcscoll needs the collate internals (__collate_lookup_which etc.), gated
+# behind __LIBC__ in collate.h - same as fnmatch.c above.
+set_source_files_properties(
+    string/FreeBSD/wcscoll.c
+    PROPERTIES COMPILE_FLAGS "-D__LIBC__=1")
 set_source_files_properties(sys/OpenBSD/stack_protector.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -fno-stack-protector")
 
@@ -369,6 +455,7 @@ target_sources(libc_internal_static PRIVATE
     stdio/FreeBSD/fclose.c        # fclose (fwalk's flush-and-close path referenced by findfp.c)
     stdio/FreeBSD/perror.c        # _perror (init error reporting)
     stdio/FreeBSD/vfprintf.c      # __vfprintf (the real BSD engine; xprintf variant is #if 0'd out)
+    stdio/FreeBSD/vfwprintf.c     # __vfwprintf (wide engine; needs gdtoa.h like vfprintf)
     stdio/FreeBSD/fprintf.c       # _fprintf
     stdio/FreeBSD/printf.c        # _printf
     stdio/FreeBSD/vsnprintf.c     # _vsnprintf (snprintf's engine)
@@ -479,6 +566,11 @@ target_sources(libc_internal_static PRIVATE
     string/FreeBSD/wcslen.c        # _wcslen
     locale/FreeBSD/mbstowcs.c      # _mbstowcs (vis.c's makeextralist)
     locale/FreeBSD/mbtowc.c        # _mbtowc (vis.c's istrsenvisx)
+    locale/FreeBSD/mbrlen.c        # _mbrlen/_mbrlen_l (vfwprintf's __mbsconv)
+    locale/FreeBSD/btowc.c         # _btowc/_btowc_l (vfwprintf)
+    stdio/FreeBSD/fgetln.c         # _fgetln + __slbexpand (fgetwln)
+    stdio/FreeBSD/fwprintf.c       # _fwprintf
+    stdio/FreeBSD/vwprintf.c       # _vwprintf
     locale/FreeBSD/wctomb.c        # _wctomb
     locale/FreeBSD/mblen.c         # _mblen (Xlib setlocale/mb path)
     net/FreeBSD/inet_addr.c        # _inet_addr / _inet_aton (Xlib DISPLAY parsing)

@@ -309,31 +309,22 @@ EOF
 
     for applet in \
       awk \
-      basename \
-      cat \
       chmod \
       clear \
       cmp \
       cp \
-      cut \
       date \
       dd \
       df \
       diff \
-      dirname \
       du \
-      echo \
       env \
       expr \
-      false \
       find \
       grep \
       gunzip \
       gzip \
-      head \
-      hostname \
       id \
-      kill \
       ln \
       ls \
       mkdir \
@@ -343,33 +334,22 @@ EOF
       netcat \
       patch \
       printf \
-      pwd \
       readlink \
       realpath \
       reset \
       rm \
       rmdir \
       sed \
-      seq \
-      sleep \
       sort \
       stat \
-      tail \
       tar \
-      test \
       touch \
-      tr \
-      true \
       truncate \
       tty \
-      uname \
-      uniq \
       vi \
-      wc \
       which \
       whoami \
-      xargs \
-      yes
+      xargs
     do
       ln -s toybox "$staging/bin/$applet"
     done

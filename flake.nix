@@ -118,7 +118,11 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" ]
+            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "reboot" "halt" "poweroff" "shutdown" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" ]
+              # shell_cmds (+ tsort/uuencode/uudecode) - real BSD userland, displacing toybox applets
+              ++ [ "basename" "dirname" "echo" "false" "getopt" "hostname" "jot" "kill" "logname" "mktemp" "nice" "nohup" "printenv" "pwd" "renice" "seq" "shlock" "sleep" "tee" "test_cmd" "true" "tsort" "uname" "yes" "uuencode" "uudecode" ]
+              # text_cmds
+              ++ [ "banner" "cat" "colrm" "comm" "cut" "expand" "fold" "head" "lam" "look" "nl" "paste" "rev" "split" "tail" "tr" "unexpand" "uniq" "wc" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
             enableProjects = false;
             enableKernel = false;
