@@ -48,6 +48,41 @@ stdenv.mkDerivation {
     substituteInPlace sshd.c \
       --replace-fail 'if (geteuid() == 0 && setgroups(0, NULL) == -1)' 'if (0)' \
       --replace-fail 'if (setgroups(0, NULL) < 0)' 'if (0)'
+
+    # Bring-up fallback: some images still fail getpwuid(0) early in OpenSSH.
+    # Keep the fallback local to the client tools and only synthesize root.
+    substituteInPlace ssh.c \
+      --replace-fail 'if (!pw) {
+		logit("No user exists for uid %lu", (u_long)getuid());
+		exit(255);
+	}' 'if (!pw && getuid() == 0) {
+		static struct passwd root_pw;
+		root_pw.pw_name = "root";
+		root_pw.pw_passwd = "*";
+		root_pw.pw_uid = 0;
+		root_pw.pw_gid = 0;
+		root_pw.pw_dir = "/var/root";
+		root_pw.pw_shell = "/bin/sh";
+		pw = &root_pw;
+	}
+	if (!pw) {
+		logit("No user exists for uid %lu", (u_long)getuid());
+		exit(255);
+	}'
+    substituteInPlace ssh-keygen.c \
+      --replace-fail 'if (!pw)
+		fatal("No user exists for uid %lu", (u_long)getuid());' 'if (!pw && getuid() == 0) {
+		static struct passwd root_pw;
+		root_pw.pw_name = "root";
+		root_pw.pw_passwd = "*";
+		root_pw.pw_uid = 0;
+		root_pw.pw_gid = 0;
+		root_pw.pw_dir = "/var/root";
+		root_pw.pw_shell = "/bin/sh";
+		pw = &root_pw;
+	}
+	if (!pw)
+		fatal("No user exists for uid %lu", (u_long)getuid());'
   '';
 
   configurePhase = ''
@@ -123,9 +158,12 @@ stdenv.mkDerivation {
     ./configure \
       --host=x86_64-apple-darwin20.4 \
       --build=$(cc -dumpmachine) \
-      --prefix=$out \
-      --sysconfdir=$out/etc/ssh \
-      --with-privsep-path=$out/var/empty \
+      --prefix=/usr \
+      --bindir=/bin \
+      --sbindir=/sbin \
+      --libexecdir=/libexec \
+      --sysconfdir=/etc/ssh \
+      --with-privsep-path=/var/empty \
       --with-ssl-dir=${openssl} \
       --with-zlib=${zlib} \
       --without-openssl-header-check \
@@ -159,7 +197,7 @@ stdenv.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    make install-nokeys STRIP_OPT=
+    make install-nokeys DESTDIR=$out STRIP_OPT=
     runHook postInstall
   '';
 

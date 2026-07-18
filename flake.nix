@@ -121,7 +121,7 @@
             src = userlandSource;
             buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "reboot" "halt" "poweroff" "shutdown" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" "ext4tool" ]
               # shell_cmds (+ tsort/uuencode/uudecode) - real BSD userland, displacing toybox applets
-              ++ [ "basename" "dirname" "echo" "false" "getopt" "hostname" "jot" "kill" "logname" "mktemp" "nice" "nohup" "passwd" "printenv" "pwd" "renice" "seq" "shlock" "sleep" "tee" "test_cmd" "true" "tsort" "uname" "yes" "uuencode" "uudecode" ]
+              ++ [ "basename" "chown" "dirname" "echo" "false" "getopt" "hostname" "jot" "kill" "logname" "mktemp" "nice" "nohup" "passwd" "printenv" "pwd" "renice" "seq" "shlock" "sleep" "tee" "test_cmd" "true" "tsort" "uname" "yes" "uuencode" "uudecode" ]
               # text_cmds
               ++ [ "banner" "cat" "colrm" "comm" "cut" "expand" "fold" "head" "lam" "look" "nl" "paste" "rev" "split" "tail" "tr" "unexpand" "uniq" "wc" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
@@ -1227,7 +1227,7 @@
                     -drive if=none,id=system,file="$image",format=raw,cache=writeback"$image_readonly_opt" \
                     -device ide-hd,bus=sata.0,drive=system \
                     -device e1000-82545em,netdev=net0 \
-                    -netdev user,id=net0 \
+                    -netdev user,id=net0,hostfwd=tcp::2222-:22 \
                     -device qemu-xhci,id=xhci \
                     -device usb-kbd,bus=xhci.0 \
                     -device usb-mouse,bus=xhci.0 \

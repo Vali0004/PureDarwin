@@ -31,6 +31,7 @@ function(add_shell_cmd name)
 endfunction()
 
 add_shell_cmd(basename basename.c)
+add_shell_cmd(chown chown.c)
 add_shell_cmd(dirname dirname.c)
 add_shell_cmd(echo echo.c)
 add_shell_cmd(false false.c)

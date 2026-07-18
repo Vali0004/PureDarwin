@@ -161,11 +161,13 @@ ${if rootFsType == "hfs" then ''
     cat > $staging/etc/passwd <<'EOF'
 root:*:0:0:System Administrator:/var/root:/bin/sh
 daemon:*:1:1:System Services:/var/root:/usr/bin/false
+sshd:*:74:74:Privilege-separated SSH:/var/empty:/usr/bin/false
 nobody:*:-2:-2:Unprivileged User:/var/empty:/usr/bin/false
 EOF
     cat > $staging/etc/group <<'EOF'
 wheel:*:0:root
 daemon:*:1:root
+sshd:*:74:
 nogroup:*:-1:
 nobody:*:-2:
 staff:*:20:root
@@ -419,6 +421,7 @@ EOF
       "$staging/tmp/.X11-unix"
 
     chmod 700  $staging/var/root
+    chmod 755  $staging/var/empty
 
     echo "Image X11 executables:"
     for executable in Xvfb Xorg xeyes xterm i3 i3bar i3-msg startx; do
@@ -494,6 +497,11 @@ ${lib.optionalString (rootFsType == "ext4") ''
       -O ^orphan_file \
       -L darwin-ext4 \
       -d $staging \
+      root.img >/dev/null
+    debugfs -w \
+      -R "set_inode_field /var/empty uid 0" \
+      -R "set_inode_field /var/empty gid 0" \
+      -R "set_inode_field /var/empty mode 040755" \
       root.img >/dev/null
 
     dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
