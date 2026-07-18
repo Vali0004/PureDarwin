@@ -220,14 +220,37 @@ set(_cxx_srcs
     system_error
     string
     stdexcept
+    charconv
+    vector
+    algorithm
+    new
+    hash
 )
 
 set(_cxx_objs "")
 foreach(s ${_cxx_srcs})
     set(_obj "${CMAKE_CURRENT_BINARY_DIR}/cxx_${s}.o")
+    set(_cxx_extra "")
+    if(s STREQUAL "string")
+        # We don't build a wide-character libc (no real swprintf/wcstod/etc
+        # wired up), and nothing in our curated libcxx_static consumers uses
+        # std::wstring. string.cpp's explicit basic_string<wchar_t>
+        # instantiation and to_wstring() overloads are guarded behind this
+        # macro (a small, clearly-marked local patch - see string.cpp) so
+        # they don't drag in unimplemented wide-printf symbols.
+        set(_cxx_extra -DPD_LIBCXX_NARROW_STRING_ONLY)
+    endif()
+    if(s STREQUAL "new")
+        # operator new/delete themselves already come from libcxxabi's
+        # stdlib_new_delete.cpp (in _abi_srcs above); this define skips
+        # new.cpp's copies (would otherwise be duplicate symbols) and leaves
+        # just the std::nothrow object + __throw_bad_alloc, which is all we
+        # actually need this file for.
+        set(_cxx_extra -D_LIBCPP_DISABLE_NEW_DELETE_DEFINITIONS)
+    endif()
     add_custom_command(
         OUTPUT "${_obj}"
-        COMMAND "${_real_clang}" ${_abi_flags} -D_LIBCPP_BUILDING_LIBRARY
+        COMMAND "${_real_clang}" ${_abi_flags} -D_LIBCPP_BUILDING_LIBRARY ${_cxx_extra}
                 -c "${_libcxx}/src/${s}.cpp" -o "${_obj}"
         DEPENDS "${_libcxx}/src/${s}.cpp"
                 "${_config}/__config_site" "${_config}/__assertion_handler"

@@ -21,7 +21,9 @@ _LIBCPP_BEGIN_NAMESPACE_STD
 template class _LIBCPP_CLASS_TEMPLATE_INSTANTIATION_VIS __basic_string_common<true>;
 
 template class _LIBCPP_CLASS_TEMPLATE_INSTANTIATION_VIS basic_string<char>;
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 template class _LIBCPP_CLASS_TEMPLATE_INSTANTIATION_VIS basic_string<wchar_t>;
+#endif
 
 template
     string
@@ -253,11 +255,13 @@ stoi(const string& str, size_t* idx, int base)
     return as_integer<int>( "stoi", str, idx, base );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 int
 stoi(const wstring& str, size_t* idx, int base)
 {
     return as_integer<int>( "stoi", str, idx, base );
 }
+#endif
 
 long
 stol(const string& str, size_t* idx, int base)
@@ -265,11 +269,13 @@ stol(const string& str, size_t* idx, int base)
     return as_integer<long>( "stol", str, idx, base );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 long
 stol(const wstring& str, size_t* idx, int base)
 {
     return as_integer<long>( "stol", str, idx, base );
 }
+#endif
 
 unsigned long
 stoul(const string& str, size_t* idx, int base)
@@ -277,11 +283,13 @@ stoul(const string& str, size_t* idx, int base)
     return as_integer<unsigned long>( "stoul", str, idx, base );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 unsigned long
 stoul(const wstring& str, size_t* idx, int base)
 {
     return as_integer<unsigned long>( "stoul", str, idx, base );
 }
+#endif
 
 long long
 stoll(const string& str, size_t* idx, int base)
@@ -289,11 +297,13 @@ stoll(const string& str, size_t* idx, int base)
     return as_integer<long long>( "stoll", str, idx, base );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 long long
 stoll(const wstring& str, size_t* idx, int base)
 {
     return as_integer<long long>( "stoll", str, idx, base );
 }
+#endif
 
 unsigned long long
 stoull(const string& str, size_t* idx, int base)
@@ -301,11 +311,13 @@ stoull(const string& str, size_t* idx, int base)
     return as_integer<unsigned long long>( "stoull", str, idx, base );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 unsigned long long
 stoull(const wstring& str, size_t* idx, int base)
 {
     return as_integer<unsigned long long>( "stoull", str, idx, base );
 }
+#endif
 
 float
 stof(const string& str, size_t* idx)
@@ -313,11 +325,13 @@ stof(const string& str, size_t* idx)
     return as_float<float>( "stof", str, idx );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 float
 stof(const wstring& str, size_t* idx)
 {
     return as_float<float>( "stof", str, idx );
 }
+#endif
 
 double
 stod(const string& str, size_t* idx)
@@ -325,11 +339,13 @@ stod(const string& str, size_t* idx)
     return as_float<double>( "stod", str, idx );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 double
 stod(const wstring& str, size_t* idx)
 {
     return as_float<double>( "stod", str, idx );
 }
+#endif
 
 long double
 stold(const string& str, size_t* idx)
@@ -337,11 +353,13 @@ stold(const string& str, size_t* idx)
     return as_float<long double>( "stold", str, idx );
 }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 long double
 stold(const wstring& str, size_t* idx)
 {
     return as_float<long double>( "stold", str, idx );
 }
+#endif
 
 // to_string
 
@@ -392,6 +410,7 @@ struct initial_string<string>
     }
 };
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 template <>
 struct initial_string<wstring>
 {
@@ -416,6 +435,7 @@ get_swprintf()
     return static_cast<int (__cdecl*)(wchar_t* __restrict, size_t, const wchar_t*__restrict, ...)>(_snwprintf);
 #endif
 }
+#endif // PD_LIBCXX_NARROW_STRING_ONLY
 
 template <typename S, typename V>
 S i_to_string(const V v)
@@ -439,20 +459,24 @@ string  to_string (unsigned val)           { return i_to_string< string>(val); }
 string  to_string (unsigned long val)      { return i_to_string< string>(val); }
 string  to_string (unsigned long long val) { return i_to_string< string>(val); }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 wstring to_wstring(int val)                { return i_to_string<wstring>(val); }
 wstring to_wstring(long val)               { return i_to_string<wstring>(val); }
 wstring to_wstring(long long val)          { return i_to_string<wstring>(val); }
 wstring to_wstring(unsigned val)           { return i_to_string<wstring>(val); }
 wstring to_wstring(unsigned long val)      { return i_to_string<wstring>(val); }
 wstring to_wstring(unsigned long long val) { return i_to_string<wstring>(val); }
+#endif
 
 
 string  to_string (float val)       { return as_string(snprintf,       initial_string< string>()(),   "%f", val); }
 string  to_string (double val)      { return as_string(snprintf,       initial_string< string>()(),   "%f", val); }
 string  to_string (long double val) { return as_string(snprintf,       initial_string< string>()(),  "%Lf", val); }
 
+#ifndef PD_LIBCXX_NARROW_STRING_ONLY
 wstring to_wstring(float val)       { return as_string(get_swprintf(), initial_string<wstring>()(),  L"%f", val); }
 wstring to_wstring(double val)      { return as_string(get_swprintf(), initial_string<wstring>()(),  L"%f", val); }
 wstring to_wstring(long double val) { return as_string(get_swprintf(), initial_string<wstring>()(), L"%Lf", val); }
+#endif
 
 _LIBCPP_END_NAMESPACE_STD

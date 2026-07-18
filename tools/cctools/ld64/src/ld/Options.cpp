@@ -2206,12 +2206,12 @@ std::string Options::getVersionString32(uint32_t ver) const
 	unsigned microVersion = ver & 0xFF;
 	unsigned minorVersion = (ver >> 8) & 0xFF;
 	unsigned majorVersion = (ver >> 16) & 0xFF;
-	std::stringstream versionString;
+	char buf[64];
 	if ( microVersion == 0 )
-		versionString << majorVersion << "." << minorVersion;
+		snprintf(buf, sizeof(buf), "%u.%u", majorVersion, minorVersion);
 	else
-		versionString << majorVersion << "." << minorVersion << "." << microVersion;
-	return versionString.str();
+		snprintf(buf, sizeof(buf), "%u.%u.%u", majorVersion, minorVersion, microVersion);
+	return buf;
 }
 
 std::string Options::getVersionString64(uint64_t ver) const
@@ -2221,9 +2221,11 @@ std::string Options::getVersionString64(uint64_t ver) const
 	uint64_t c = (ver >> 20) & 0x3FF;
 	uint64_t d = (ver >> 10) & 0x3FF;
 	uint64_t e = ver & 0x3FF;
-	std::stringstream versionString;
-	versionString << a << "." << b << "." << c << "." << d << "." << e;
-	return versionString.str();
+	char buf[96];
+	snprintf(buf, sizeof(buf), "%llu.%llu.%llu.%llu.%llu",
+		(unsigned long long)a, (unsigned long long)b, (unsigned long long)c,
+		(unsigned long long)d, (unsigned long long)e);
+	return buf;
 }
 
 // Convert X.Y[.Z] to 32-bit value xxxxyyzz

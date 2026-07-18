@@ -22,6 +22,7 @@ target_link_libraries(host_commoncrypto_static PRIVATE
 )
 
 target_sources(host_commoncrypto_static PRIVATE
+    libcn/pd_cc_digest_bridge.c
     libcn/adler32.c
     libcn/crc8.c
     libcn/crc8-icode.c

@@ -113,6 +113,11 @@
             "src/Libraries/PDGOP"
             "src/Libraries/libSystem/libmalloc/compat-include"
             "src/Libraries/libSystem/libsystem_kernel/mach"
+            "src/Libraries/libcxx/include"
+            "src/Libraries/libSystem/corecrypto/include"
+            "src/Libraries/CommonCrypto/include"
+            "src/Libraries/CommonCrypto/libcn/pd_cc_digest_bridge.c"
+            "src/Libraries/libSystem/libc/stdlib/FreeBSD/reallocf.c"
             "src/Userspace"
             "tools"
           ];
@@ -164,7 +169,7 @@
           cctoolsBuild = mkPureDarwinBuild {
             pname = "puredarwin-cctools";
             src = cctoolsSource;
-            buildTargets = [ "lipo_selfhost" "size_selfhost" "strings_selfhost" "checksyms_selfhost" ];
+            buildTargets = [ "lipo_selfhost" "size_selfhost" "strings_selfhost" "checksyms_selfhost" "iig_selfhost" "ld64_selfhost" ];
             enableProjects = false;
             enableKernel = false;
             enableLibraries = false;
@@ -173,7 +178,10 @@
             installUserland = true;
             installKernel = false;
             prebuiltLibSystem = libSystemBuild;
-            extraCmakeFlags = [ "-DPUREDARWIN_ENABLE_SELFHOST_CCTOOLS=ON" ];
+            extraCmakeFlags = [
+              "-DPUREDARWIN_ENABLE_SELFHOST_CCTOOLS=ON"
+              "-DPUREDARWIN_IIG_SOURCE=${iig-tools}"
+            ];
           };
           xvfbPixmanBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xvfb-pixman.nix {
@@ -1136,7 +1144,7 @@
                 kc = kcBuild;
                 xnuLoader = xnu-loader.packages.${system}.default;
                 apfsprogs = pkgs.apfsprogs;
-                testAudioFile = /home/vali/development/darwin/badapple.pcm;
+                testAudioFile = /home/vali/development/darwin/stillalive.pcm;
               };
               imageHfsBuild = pkgs.callPackage ./image.nix {
                 baseSystem = splitBaseSystem;

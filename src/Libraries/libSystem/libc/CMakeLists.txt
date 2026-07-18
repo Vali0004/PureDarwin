@@ -122,6 +122,8 @@ target_sources(libc_static PRIVATE
     secure/stpncpy_chk.c         # ___stpncpy_chk
     stdlib/FreeBSD/div.c         # _div (ICU)
     stdlib/FreeBSD/random.c      # real random(3) family (replaces xorshift stubs)
+    stdlib/FreeBSD/reallocf.c    # _reallocf (ld64 self-host)
+    gen/FreeBSD/mkpath_np.c      # _mkpath_np/mkpath_np (ld64 self-host; real Apple Libc source, was only excluded in cctools' copy assuming real macOS already has it)
     gen/FreeBSD/getmntinfo.c     # real getmntinfo over getfsstat (df)
     stdio/FreeBSD/tmpfile.c      # _tmpfile (i3/pango)
     stdio/FreeBSD/open_memstream.c # _open_memstream (zsh)
