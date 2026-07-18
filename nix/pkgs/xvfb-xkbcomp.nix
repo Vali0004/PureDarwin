@@ -54,7 +54,7 @@ strip = '${darwinCrossToolchain}/bin/x86_64-apple-darwin20.4-strip'
 pkgconfig = '${pkg-config}/bin/pkg-config'
 
 [built-in options]
-c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-I${libSystem}/usr/include']
+c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-fno-stack-protector', '-I${libSystem}/usr/include']
 # libX11.pc's real transitive dep (libxcb) sits under "Libs.private:", which
 # meson's default (non-static) pkgconfig lookup skips -- same as libXfont2's
 # freetype/fontenc/zlib issue in xvfb.nix. Append the archive directly.

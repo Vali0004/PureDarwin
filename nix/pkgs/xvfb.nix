@@ -88,7 +88,7 @@ pkgconfig = '${pkg-config}/bin/pkg-config'
 # include/meson.build never sets it and XID/Mask/Atom stay 8-byte unsigned
 # long -- the server then walks 32-bit protocol value lists with 8-byte
 # reads (BadValue on any CWEventMask, garbage Atoms, ...). Define it by hand.
-c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-D_XSERVER64=1', '-I${libSystem}/usr/include']
+c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-fno-stack-protector', '-D_XSERVER64=1', '-I${libSystem}/usr/include']
 # xfont2.pc only lists -lXfont2 under "Libs:"; its real transitive statics
 # (freetype2/fontenc/zlib) sit under "Libs.private:", which meson's default
 # (non-static) pkgconfig dependency() lookup doesn't pull in. Rather than

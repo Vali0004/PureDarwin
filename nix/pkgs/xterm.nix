@@ -87,7 +87,7 @@ stdenv.mkDerivation {
     # -DNO_XPOLL_H: xorgproto's <X11/Xpoll.h> hardcodes the glibc fd_set member
     # name (__fds_bits) in its XFD_COPYSET; Darwin's fd_set uses fds_bits. Skip
     # Xpoll.h so xterm falls back to its own XFD_COPYSET, which uses fds_bits.
-    export CFLAGS="-isysroot $DARWIN_SDK_ROOT -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DNO_XPOLL_H"
+    export CFLAGS="-isysroot $DARWIN_SDK_ROOT -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector -DNO_XPOLL_H"
     # Darwin's struct utmpx has ut_tv, not the classic BSD ut_time xterm's utmp
     # path writes. PureDarwin has no utmp login database anyway - disable it so
     # the incompatible block is never compiled.

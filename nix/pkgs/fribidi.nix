@@ -4,11 +4,10 @@
 , meson
 , ninja
 , pkg-config
-, python3
 , darwinCrossToolchain
 , nativeLd
 , libSystem
-, pixman
+, fribidi
 }:
 
 let
@@ -23,12 +22,12 @@ let
   };
 in
 stdenv.mkDerivation {
-  pname = "puredarwin-pixman";
-  version = pixman.version or "0";
+  pname = "puredarwin-fribidi";
+  version = fribidi.version;
 
-  src = pixman.src;
+  src = fribidi.src;
 
-  nativeBuildInputs = [ meson ninja pkg-config python3 ];
+  nativeBuildInputs = [ meson ninja pkg-config ];
 
   configurePhase = ''
     runHook preConfigure
@@ -45,8 +44,11 @@ strip = '${darwinCrossToolchain}/bin/x86_64-apple-darwin20.4-strip'
 pkg-config = '${pkg-config}/bin/pkg-config'
 
 [built-in options]
-c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-fno-stack-protector', '-I${libSystem}/usr/include']
-c_link_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-fuse-ld=${nativeLd}/bin/ld', '-nostdlib', '-L${libSystem}/usr/lib', '-Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib', '-Wl,-dylinker_install_name,/usr/lib/dyld', '-Wl,-platform_version,macos,11.0,11.5', '-lSystem']
+c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-mmacosx-version-min=11.0', '-Qunused-arguments', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-fno-stack-protector', '-I${libSystem}/usr/include']
+c_link_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-mmacosx-version-min=11.0', '-fuse-ld=${nativeLd}/bin/ld', '-nostdlib', '-L${libSystem}/usr/lib', '-Wl,-dylib_file,/usr/lib/system/libdyld.dylib:${libSystem}/usr/lib/system/libdyld.dylib', '-Wl,-dylinker_install_name,/usr/lib/dyld', '-Wl,-platform_version,macos,11.0,11.5', '-lSystem']
+
+[properties]
+needs_exe_wrapper = true
 
 [host_machine]
 system = 'darwin'
@@ -59,12 +61,11 @@ EOF
       --cross-file puredarwin-cross.ini \
       --prefix=$out \
       --libdir=lib \
-      --buildtype=debug \
+      --buildtype=release \
       -Ddefault_library=static \
-      -Dtests=disabled \
-      -Ddemos=disabled \
-      -Dgtk=disabled \
-      -Dlibpng=disabled
+      -Ddocs=false \
+      -Dbin=false \
+      -Dtests=false
 
     runHook postConfigure
   '';

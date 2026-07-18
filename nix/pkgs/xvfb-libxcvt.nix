@@ -45,7 +45,7 @@ strip = '${darwinCrossToolchain}/bin/x86_64-apple-darwin20.4-strip'
 pkg-config = '${pkg-config}/bin/pkg-config'
 
 [built-in options]
-c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-I${libSystem}/usr/include']
+c_args = ['-isysroot', '$DARWIN_SDK_ROOT', '-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=0', '-fno-stack-protector', '-I${libSystem}/usr/include']
 # Static-only lib: no -dylinker_install_name / -dylib_file here. Those are
 # executable/dyld-path flags; on a shared build ld64 would stamp the bogus
 # /usr/lib/dyld as this dylib's LC_ID_DYLIB, which then poisons anything that
