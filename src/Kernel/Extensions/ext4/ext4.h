@@ -1,11 +1,15 @@
 /*
- * ext4.h - read-only ext2/3/4 on-disk format + in-core structures
+ * ext4.h - ext2/3/4 on-disk format + in-core structures
  *
- * Minimal read-only ext4 driver for PureDarwin/XNU.  Supports the common
- * ext4 layout produced by:
- *   mkfs.ext4 -O ^has_journal,^64bit,^metadata_csum -b 4096
- * i.e. 32-bit block numbers, extent-based inodes, no journal replay needed
- * (read only), classic block-group layout.
+ * Read-write ext4 driver for PureDarwin/XNU. Handles extent-based inodes,
+ * 32- and 64-bit block numbers, and now maintains metadata checksums
+ * (metadata_csum / uninit_bg) and initializes uninitialized block/inode
+ * groups on demand (see ext4_csum.c), so filesystems from a stock
+ * `mkfs.ext4` (all features default-on except the journal) can be mounted
+ * read-write without leaving the on-disk metadata inconsistent.
+ *
+ * The one hard requirement is no journal (^has_journal): there is no journal
+ * replay, so the fs must not need recovery.
  */
 #ifndef _EXT4_H_
 #define _EXT4_H_
@@ -44,6 +48,16 @@
 #define EXT4_FEATURE_INCOMPAT_FILETYPE  0x0002
 #define EXT4_FEATURE_INCOMPAT_64BIT     0x0080
 #define EXT4_FEATURE_INCOMPAT_EXTENTS   0x0040
+#define EXT4_FEATURE_INCOMPAT_CSUM_SEED 0x2000  /* seed stored in s_checksum_seed */
+
+/* s_feature_ro_compat bits we care about */
+#define EXT4_FEATURE_RO_COMPAT_GDT_CSUM      0x0010 /* uninit_bg: crc16 gd csums */
+#define EXT4_FEATURE_RO_COMPAT_METADATA_CSUM 0x0400 /* crc32c metadata checksums */
+
+/* bg_flags */
+#define EXT4_BG_INODE_UNINIT    0x0001  /* inode bitmap not initialized on disk */
+#define EXT4_BG_BLOCK_UNINIT    0x0002  /* block bitmap not initialized on disk */
+#define EXT4_BG_INODE_ZEROED    0x0004  /* inode table zeroed */
 
 /* i_flags */
 #define EXT4_EXTENTS_FL         0x00080000  /* inode uses extents */
@@ -106,7 +120,9 @@ struct ext4_super_block {
 	uint32_t s_free_blocks_count_hi;
 	uint16_t s_min_extra_isize;
 	uint16_t s_want_extra_isize;
-	uint32_t s_flags;
+	uint32_t s_flags;               /* 0x160 */
+	uint8_t  s_pad_to_csum_seed[268]; /* 0x164 .. 0x270 (fields we don't use) */
+	uint32_t s_checksum_seed;       /* 0x270: crc32c(~0,uuid) seed if csum_seed */
 	/* ... rest ignored ... */
 } __attribute__((packed));
 
@@ -197,6 +213,17 @@ struct ext4_dir_entry_2 {
 	char     name[];        /* name_len bytes */
 } __attribute__((packed));
 
+struct ext4_dir_entry_tail {
+	uint32_t det_reserved_zero1;
+	uint16_t det_rec_len;
+	uint8_t  det_reserved_zero2;
+	uint8_t  det_reserved_ft;
+	uint32_t det_checksum;
+} __attribute__((packed));
+
+#define EXT4_DIR_ENTRY_TAIL_SIZE 12
+#define EXT4_FT_DIR_CSUM        0xDE
+
 /* file_type values */
 #define EXT4_FT_UNKNOWN  0
 #define EXT4_FT_REG_FILE 1
@@ -232,10 +259,18 @@ struct ext4mount {
 	uint32_t         em_groups_count;
 	uint32_t         em_desc_size;  /* group descriptor size (32 or 64) */
 	uint32_t         em_feature_incompat;
+	uint32_t         em_feature_ro_compat;
+	uint32_t         em_reserved_gdt_blocks;
+	uint32_t         em_gdt_blocks;   /* blocks the GDT itself occupies */
+	uint32_t         em_itable_blocks;/* inode-table blocks per group */
+	uint32_t         em_csum_seed;    /* crc32c seed for metadata_csum */
+	int              em_has_metadata_csum; /* crc32c metadata checksums */
+	int              em_has_gdt_csum;      /* uninit_bg crc16 gd checksums */
 	uint64_t         em_blocks_count;
 	uint64_t         em_inodes_count;
 	struct ext4_super_block em_sb;  /* cached copy */
 	void            *em_hash_lock;  /* IOLock* guarding the ext4node hash */
+	void            *em_alloc_lock;
 	LIST_HEAD(ext4_node_bucket, ext4node) em_node_hash[EXT4_NODE_HASH_SIZE];
 };
 
@@ -250,6 +285,7 @@ struct ext4node {
 	LIST_ENTRY(ext4node) e_hash;    /* em_node_hash linkage */
 	int               e_alloc_wip;  /* vnode_create in progress; sleep on &e_vp */
 	int               e_unhashed;   /* already LIST_REMOVE'd from em_node_hash */
+	int               e_pending_free; /* unlinked while still open; free at reclaim */
 	uint32_t          e_dbg_last_lblk; /* diagnostic: last logical block logged */
 };
 
@@ -281,8 +317,39 @@ int  ext4_ino_is_live(struct ext4mount *emp, ino_t ino);
 int  ext4_indirect_lookup(struct ext4mount *emp, uint32_t blk, uint32_t lblk,
                int level, uint64_t *pblk_out);
 int  ext4_blkread(struct ext4mount *emp, uint64_t pblk, buf_t *bpp);
+uint64_t ext4_gd_block_bitmap(struct ext4mount *emp, const struct ext4_group_desc *gd);
+uint64_t ext4_gd_inode_bitmap(struct ext4mount *emp, const struct ext4_group_desc *gd);
+int  ext4_bitmap_test(const uint8_t *map, uint32_t bit);
+void ext4_bitmap_set(uint8_t *map, uint32_t bit);
 enum vtype ext4_ft_to_vtype(uint8_t ft);
 enum vtype ext4_mode_to_vtype(uint16_t mode);
+
+/* ext4_csum.c - metadata checksums (metadata_csum / uninit_bg) */
+uint32_t ext4_crc32c(uint32_t crc, const void *buf, size_t len);
+void ext4_csum_init(struct ext4mount *emp);   /* compute seed + feature flags */
+void ext4_group_desc_csum_set(struct ext4mount *emp, uint32_t grp,
+               struct ext4_group_desc *gd);
+int  ext4_group_desc_csum_verify(struct ext4mount *emp, uint32_t grp,
+               const struct ext4_group_desc *gd);
+void ext4_block_bitmap_csum_set(struct ext4mount *emp, struct ext4_group_desc *gd,
+               const void *bitmap);
+void ext4_inode_bitmap_csum_set(struct ext4mount *emp, struct ext4_group_desc *gd,
+               const void *bitmap);
+void ext4_inode_csum_set(struct ext4mount *emp, ino_t ino, void *raw_full);
+int  ext4_inode_csum_verify(struct ext4mount *emp, ino_t ino,
+               const void *raw_full);
+void ext4_superblock_csum_set(struct ext4mount *emp, void *sb_buf);
+int  ext4_dir_block_has_tail(struct ext4mount *emp, const void *block);
+void ext4_dir_block_init_tail(struct ext4mount *emp, void *block);
+void ext4_dir_block_csum_set(struct ext4mount *emp, ino_t ino,
+               const struct ext4_inode *inode, void *block);
+int  ext4_group_has_super(struct ext4mount *emp, uint32_t grp);
+/* Synthesize an uninitialized block group's bitmap. Returns 0 and fills
+ * `map`/`*free_out` on success, or nonzero if the computed free count
+ * disagrees with the descriptor (caller must then not trust it). */
+int  ext4_init_block_bitmap(struct ext4mount *emp, uint32_t grp,
+               const struct ext4_group_desc *gd, uint8_t *map,
+               uint32_t *free_out);
 
 /* ext4_vnops.c */
 extern int (**ext4_vnodeop_p)(void *);

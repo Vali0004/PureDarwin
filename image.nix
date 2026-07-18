@@ -383,8 +383,12 @@ EOF
 
     truncate -s $((root_size * 512)) root.img
 
-    # ext4.kext is R/W and handles 64-bit block numbers + metadata
-    # checksums now; only the journal (and orphan_file) stay off.
+    # ext4.kext now maintains metadata_csum checksums and initializes
+    # uninitialized (uninit_bg) block/inode groups on demand, and handles
+    # 64-bit descriptors (see src/Kernel/Extensions/ext4/ext4_csum.c), so we
+    # format with the stock mke2fs feature defaults. The one feature the
+    # driver still can't do is journal replay, so keep ^has_journal; also
+    # keep ^orphan_file (no orphan-file recovery support).
     mke2fs -q -F -t ext4 \
       -b 4096 \
       -O ^has_journal,^orphan_file \

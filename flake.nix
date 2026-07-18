@@ -118,7 +118,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "reboot" "halt" "poweroff" "shutdown" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" ]
+            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "reboot" "halt" "poweroff" "shutdown" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" "ext4tool" ]
               # shell_cmds (+ tsort/uuencode/uudecode) - real BSD userland, displacing toybox applets
               ++ [ "basename" "dirname" "echo" "false" "getopt" "hostname" "jot" "kill" "logname" "mktemp" "nice" "nohup" "printenv" "pwd" "renice" "seq" "shlock" "sleep" "tee" "test_cmd" "true" "tsort" "uname" "yes" "uuencode" "uudecode" ]
               # text_cmds
@@ -398,6 +398,11 @@
               chmod -R u+w "$out/usr/share/X11"
               cp -a ${pkgs.xkeyboard_config}/share/xkeyboard-config-2 "$out/usr/share/xkeyboard-config-2"
               chmod -R u+w "$out/usr/share/xkeyboard-config-2"
+              if [ -L "$out/usr/share/X11/xkb" ]; then
+                rm "$out/usr/share/X11/xkb"
+                cp -a "$out/usr/share/xkeyboard-config-2" "$out/usr/share/X11/xkb"
+                chmod -R u+w "$out/usr/share/X11/xkb"
+              fi
             '';
           xvfbBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xvfb.nix {

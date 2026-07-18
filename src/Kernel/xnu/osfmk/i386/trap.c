@@ -1121,6 +1121,39 @@ user_trap(
 		printf("PD-DIAG: user #GP -> SIGSEGV: rip=0x%llx err=0x%x rsp=0x%llx (non-canonical deref?)\n",
 		    (unsigned long long)rip, err,
 		    (unsigned long long)(is_saved_state64(saved_state) ? saved_state64(saved_state)->isf.rsp : 0));
+		if (is_saved_state64(saved_state)) {
+			uint64_t ursp = saved_state64(saved_state)->isf.rsp;
+			uint8_t insn[16];
+			int ok = 1;
+			for (int i = 0; i < 16; i++) {
+				if (copyin((user_addr_t)(rip + (uint64_t)i), (char *)&insn[i], 1) != 0) {
+					ok = 0;
+					break;
+				}
+			}
+			if (ok) {
+				printf("PD-DIAG: insn bytes at rip:");
+				for (int i = 0; i < 16; i++) {
+					printf(" %02x", insn[i]);
+				}
+				printf("\n");
+			} else {
+				printf("PD-DIAG: insn bytes at rip: <unreadable>\n");
+			}
+			printf("PD-DIAG: rsp=0x%llx user-stack code addrs:", (unsigned long long)ursp);
+			int shown = 0;
+			for (int i = 0; i < 2048 && shown < 24; i++) {
+				uint64_t w = 0;
+				if (copyin((user_addr_t)(ursp + (uint64_t)i * 8), (char *)&w, 8) != 0) {
+					continue;
+				}
+				if (w > 0x100000000ULL && w < 0x800000000000ULL) {
+					printf(" 0x%llx", (unsigned long long)w);
+					shown++;
+				}
+			}
+			printf("\n");
+		}
 		exc = EXC_BAD_ACCESS;
 		code = EXC_I386_GPFLT;
 		subcode = err;

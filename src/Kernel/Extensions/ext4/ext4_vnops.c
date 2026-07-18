@@ -57,6 +57,27 @@ restart:
 			uint32_t vid = vnode_vid(vp);
 			IOLockUnlock(hlock);
 			if (vnode_getwithvid(vp, vid) == 0) {
+				struct ext4_inode fresh;
+				enum vtype fresh_type;
+				uint64_t fresh_size;
+
+				/*
+				 * Keep hot cached vnodes honest. Metadata corruption in the
+				 * in-core inode image is far more damaging than the extra
+				 * inode-table read here: one bad cached mode made
+				 * /usr/bin/xkbcomp intermittently look like a character
+				 * device even though the on-disk inode was still sane.
+				 */
+				if (ext4_read_inode(emp, ino, &fresh) == 0) {
+					fresh_type = ext4_mode_to_vtype(le16(fresh.i_mode));
+					if (fresh_type != VNON) {
+						fresh_size = le32(fresh.i_size_lo) |
+						    ((uint64_t)le32(fresh.i_size_high) << 32);
+						ep->e_raw = fresh;
+						ep->e_size = fresh_size;
+						ep->e_vtype = fresh_type;
+					}
+				}
 				*vpp = vp;
 				return 0;
 			}
@@ -85,6 +106,12 @@ restart:
 
 	vtype = ext4_mode_to_vtype(le16(raw.i_mode));
 	size  = le32(raw.i_size_lo) | ((uint64_t)le32(raw.i_size_high) << 32);
+	if (vtype == VNON) {
+		E4LOG("inode %llu has invalid mode 0%o",
+		    (unsigned long long)ino, le16(raw.i_mode));
+		error = EIO;
+		goto fail;
+	}
 	ep->e_raw   = raw;
 	ep->e_size  = size;
 	ep->e_vtype = vtype;
@@ -333,6 +360,14 @@ ext4_dir_rec_len(uint8_t namelen)
 	return (uint16_t)((8 + namelen + 3) & ~3);
 }
 
+static uint32_t
+ext4_dir_data_limit(struct ext4mount *emp, const void *block)
+{
+	if (ext4_dir_block_has_tail(emp, block))
+		return emp->em_blocksize - EXT4_DIR_ENTRY_TAIL_SIZE;
+	return emp->em_blocksize;
+}
+
 static uint8_t
 ext4_vtype_to_ft(enum vtype type)
 {
@@ -376,13 +411,16 @@ ext4_dir_add(struct ext4node *dep, const char *name, size_t namelen,
 		if (error)
 			return error;
 
-		for (p = 0; p < bs; ) {
+		for (p = 0; p < ext4_dir_data_limit(emp,
+		    (const void *)buf_dataptr(bp)); ) {
 			struct ext4_dir_entry_2 *de =
 			    (struct ext4_dir_entry_2 *)((char *)buf_dataptr(bp) + p);
 			uint16_t reclen = le16(de->rec_len);
 			uint16_t used;
 
-			if (reclen < 8 || p + reclen > bs)
+			if (reclen < 8 ||
+			    p + reclen > ext4_dir_data_limit(emp,
+			    (const void *)buf_dataptr(bp)))
 				break;
 			used = de->inode == 0 ? 8 : ext4_dir_rec_len(de->name_len);
 			if (de->inode == 0 && reclen >= need) {
@@ -400,6 +438,8 @@ ext4_dir_add(struct ext4node *dep, const char *name, size_t namelen,
 				nde->name_len = (uint8_t)namelen;
 				nde->file_type = ext4_vtype_to_ft(type);
 				memcpy(nde->name, name, namelen);
+				ext4_dir_block_csum_set(emp, dep->e_ino,
+				    &dep->e_raw, (void *)buf_dataptr(bp));
 				return buf_bwrite(bp);
 			}
 			p += reclen;
@@ -423,10 +463,14 @@ ext4_dir_add(struct ext4node *dep, const char *name, size_t namelen,
 		memset((void *)buf_dataptr(bp), 0, bs);
 		de = (struct ext4_dir_entry_2 *)buf_dataptr(bp);
 		de->inode = le32((uint32_t)ino);
-		de->rec_len = le16((uint16_t)bs);
+		de->rec_len = le16((uint16_t)(emp->em_has_metadata_csum ?
+		    bs - EXT4_DIR_ENTRY_TAIL_SIZE : bs));
 		de->name_len = (uint8_t)namelen;
 		de->file_type = ext4_vtype_to_ft(type);
 		memcpy(de->name, name, namelen);
+		ext4_dir_block_init_tail(emp, (void *)buf_dataptr(bp));
+		ext4_dir_block_csum_set(emp, dep->e_ino, &dep->e_raw,
+		    (void *)buf_dataptr(bp));
 		error = buf_bwrite(bp);
 		if (error)
 			return error;
@@ -465,12 +509,15 @@ ext4_dir_remove(struct ext4node *dep, const char *name, size_t namelen,
 		if (error)
 			return error;
 
-		for (p = 0; p < bs; ) {
+		for (p = 0; p < ext4_dir_data_limit(emp,
+		    (const void *)buf_dataptr(bp)); ) {
 			struct ext4_dir_entry_2 *de =
 			    (struct ext4_dir_entry_2 *)((char *)buf_dataptr(bp) + p);
 			uint16_t reclen = le16(de->rec_len);
 
-			if (reclen < 8 || p + reclen > bs)
+			if (reclen < 8 ||
+			    p + reclen > ext4_dir_data_limit(emp,
+			    (const void *)buf_dataptr(bp)))
 				break;
 			if (de->inode != 0 && de->name_len == namelen &&
 			    memcmp(de->name, name, namelen) == 0) {
@@ -479,6 +526,8 @@ ext4_dir_remove(struct ext4node *dep, const char *name, size_t namelen,
 				if (ft_out)
 					*ft_out = de->file_type;
 				de->inode = 0;
+				ext4_dir_block_csum_set(emp, dep->e_ino,
+				    &dep->e_raw, (void *)buf_dataptr(bp));
 				return buf_bwrite(bp);
 			}
 			p += reclen;
@@ -511,12 +560,15 @@ ext4_dir_replace(struct ext4node *dep, const char *name, size_t namelen,
 		if (error)
 			return error;
 
-		for (p = 0; p < bs; ) {
+		for (p = 0; p < ext4_dir_data_limit(emp,
+		    (const void *)buf_dataptr(bp)); ) {
 			struct ext4_dir_entry_2 *de =
 			    (struct ext4_dir_entry_2 *)((char *)buf_dataptr(bp) + p);
 			uint16_t reclen = le16(de->rec_len);
 
-			if (reclen < 8 || p + reclen > bs)
+			if (reclen < 8 ||
+			    p + reclen > ext4_dir_data_limit(emp,
+			    (const void *)buf_dataptr(bp)))
 				break;
 			if (de->inode != 0 && de->name_len == namelen &&
 			    memcmp(de->name, name, namelen) == 0) {
@@ -526,6 +578,8 @@ ext4_dir_replace(struct ext4node *dep, const char *name, size_t namelen,
 					*old_ft = de->file_type;
 				de->inode = le32((uint32_t)ino);
 				de->file_type = ext4_vtype_to_ft(type);
+				ext4_dir_block_csum_set(emp, dep->e_ino,
+				    &dep->e_raw, (void *)buf_dataptr(bp));
 				return buf_bwrite(bp);
 			}
 			p += reclen;
@@ -553,15 +607,20 @@ ext4_dir_update_dotdot(struct ext4node *dep, ino_t parent)
 	error = ext4_blkread(emp, pblk, &bp);
 	if (error)
 		return error;
-	for (p = 0; p < emp->em_blocksize; ) {
+	for (p = 0; p < ext4_dir_data_limit(emp,
+	    (const void *)buf_dataptr(bp)); ) {
 		uint16_t reclen;
 		de = (struct ext4_dir_entry_2 *)((char *)buf_dataptr(bp) + p);
 		reclen = le16(de->rec_len);
-		if (reclen < 8 || p + reclen > emp->em_blocksize)
+		if (reclen < 8 ||
+		    p + reclen > ext4_dir_data_limit(emp,
+		    (const void *)buf_dataptr(bp)))
 			break;
 		if (de->inode != 0 && de->name_len == 2 &&
 		    de->name[0] == '.' && de->name[1] == '.') {
 			de->inode = le32((uint32_t)parent);
+			ext4_dir_block_csum_set(emp, dep->e_ino, &dep->e_raw,
+			    (void *)buf_dataptr(bp));
 			return buf_bwrite(bp);
 		}
 		p += reclen;
@@ -620,8 +679,14 @@ ext4_touch_inode(struct ext4_inode *ri)
 	ri->i_mtime = le32((uint32_t)tv.tv_sec);
 }
 
+/*
+ * Actually tear down an unlinked inode: free its extents/blocks and its
+ * inode-bitmap entry, and unhash the in-memory node so a subsequent
+ * ext4_alloc_inode() reusing this number can't hand back this stale,
+ * zeroed-i_block ext4node via ext4_vget()'s hash-hit fast path.
+ */
 static int
-ext4_drop_inode(struct ext4node *ep)
+ext4_finish_free_inode(struct ext4node *ep)
 {
 	int error;
 
@@ -636,19 +701,6 @@ ext4_drop_inode(struct ext4node *ep)
 	error = ext4_free_inode(ep->e_mount, ep->e_ino, ep->e_vtype);
 	if (error)
 		return error;
-	/*
-	 * The inode number is now free for reuse. free_extents() just zeroed
-	 * this node's i_block (extent header magic -> 0), so it must not linger
-	 * in the inode hash: a later ext4_alloc_inode() that hands the same
-	 * number to a new file would otherwise get this stale vnode back from
-	 * ext4_vget()'s hash-hit fast path (which trusts the cached e_raw
-	 * without re-reading disk) and every bmap on it would fault "bad
-	 * extent magic 0x0". vnode_recycle() eventually drives VNOP_RECLAIM,
-	 * which unhooks it from the hash too, but that's asynchronous and can
-	 * lose the race against an immediate create() reusing this same inode
-	 * number - so unhash synchronously here as well, guarded by
-	 * e_unhashed so VNOP_RECLAIM's later LIST_REMOVE is a no-op.
-	 */
 	if (ep->e_vp) {
 		IOLock *hlock = (IOLock *)ep->e_mount->em_hash_lock;
 		IOLockLock(hlock);
@@ -657,8 +709,41 @@ ext4_drop_inode(struct ext4node *ep)
 			ep->e_unhashed = 1;
 		}
 		IOLockUnlock(hlock);
-		vnode_recycle(ep->e_vp);
 	}
+	return 0;
+}
+
+static int
+ext4_drop_inode(struct ext4node *ep)
+{
+	int error;
+
+	/*
+	 * POSIX "delete while open": if something still has this vnode
+	 * open (e.g. Xorg holds a Popen fd across a child crash and retries
+	 * against the same path), we must NOT free extents/blocks/inode-
+	 * bitmap now. Doing so zeroed e_raw.i_block's extent header in
+	 * place while the still-open reference kept using this exact
+	 * ext4node, so every subsequent bmap/write through that fd hit
+	 * "bad extent magic 0x0". Instead, just drop the link (as any
+	 * unlink must) and defer the actual free to VNOP_RECLAIM/INACTIVE,
+	 * once nothing references the vnode anymore.
+	 */
+	if (ep->e_vp && vnode_isinuse(ep->e_vp, 0)) {
+		ep->e_raw.i_links_count = 0;
+		ep->e_raw.i_dtime = ep->e_raw.i_ctime;
+		error = ext4_write_inode(ep->e_mount, ep->e_ino, &ep->e_raw);
+		if (error)
+			return error;
+		ep->e_pending_free = 1;
+		return 0;
+	}
+
+	error = ext4_finish_free_inode(ep);
+	if (error)
+		return error;
+	if (ep->e_vp)
+		vnode_recycle(ep->e_vp);
 	return 0;
 }
 
@@ -1047,12 +1132,15 @@ ext4_seed_dir_block(struct ext4mount *emp, uint64_t pblk, ino_t self, ino_t pare
 
 	de = (struct ext4_dir_entry_2 *)(data + ext4_dir_rec_len(1));
 	de->inode = le32((uint32_t)parent);
-	de->rec_len = le16((uint16_t)(emp->em_blocksize - ext4_dir_rec_len(1)));
+	de->rec_len = le16((uint16_t)(emp->em_blocksize - ext4_dir_rec_len(1) -
+	    (emp->em_has_metadata_csum ? EXT4_DIR_ENTRY_TAIL_SIZE : 0)));
 	de->name_len = 2;
 	de->file_type = EXT4_FT_DIR;
 	de->name[0] = '.';
 	de->name[1] = '.';
 
+	ext4_dir_block_init_tail(emp, data);
+	ext4_dir_block_csum_set(emp, self, NULL, data);
 	return buf_bwrite(bp);
 }
 
@@ -1247,6 +1335,16 @@ ext4_vnop_rename(struct vnop_rename_args *ap)
 
 	if (ap->a_fvp == ap->a_tvp)
 		return 0;
+	/*
+	 * Different vnode pointers must never cause us to replace and then free
+	 * the same underlying inode. This can happen if stale/duplicate vnodes
+	 * survived earlier filesystem corruption.
+	 */
+	if (tep != NULL && fep->e_ino == tep->e_ino) {
+		E4LOG("rename: source and target vnodes share ino %llu",
+		    (unsigned long long)fep->e_ino);
+		return 0;
+	}
 	if (moving_dir) {
 		if (tep && !vnode_isdir(ap->a_tvp))
 			return ENOTDIR;
@@ -1783,8 +1881,22 @@ ext4_vnop_close(__unused struct vnop_close_args *ap)
 }
 
 static int
-ext4_vnop_inactive(__unused struct vnop_inactive_args *ap)
+ext4_vnop_inactive(struct vnop_inactive_args *ap)
 {
+	vnode_t vp = ap->a_vp;
+	struct ext4node *ep = VTOE(vp);
+
+	/*
+	 * Last close of a file that was unlinked while still open (see
+	 * ext4_drop_inode): now that nothing references it anymore, actually
+	 * free its extents/blocks/inode-bitmap entry, and push it toward
+	 * reclaim so the vnode doesn't linger holding a freed inode number.
+	 */
+	if (ep && ep->e_pending_free) {
+		ep->e_pending_free = 0;
+		(void)ext4_finish_free_inode(ep);
+		vnode_recycle(vp);
+	}
 	return 0;
 }
 

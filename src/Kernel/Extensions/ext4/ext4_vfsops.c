@@ -74,6 +74,12 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 		goto fail;
 	}
 
+	emp->em_alloc_lock = IOLockAlloc();
+	if (emp->em_alloc_lock == NULL) {
+		error = ENOMEM;
+		goto fail;
+	}
+
 	error = ext4_read_super(emp);
 	if (error)
 		goto fail;
@@ -110,6 +116,8 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 	return 0;
 
 fail:
+	if (emp->em_alloc_lock)
+		IOLockFree((IOLock *)emp->em_alloc_lock);
 	if (emp->em_hash_lock)
 		IOLockFree((IOLock *)emp->em_hash_lock);
 	_FREE(emp, M_TEMP);
@@ -148,8 +156,13 @@ ext4_unmount(struct mount *mp, int mntflags, vfs_context_t ctx)
 
 	if (emp) {
 		vfs_setfsprivate(mp, NULL);
+
+		if (emp->em_alloc_lock)
+			IOLockFree((IOLock *)emp->em_alloc_lock);
+
 		if (emp->em_hash_lock)
 			IOLockFree((IOLock *)emp->em_hash_lock);
+
 		_FREE(emp, M_TEMP);
 	}
 	return 0;

@@ -112,7 +112,7 @@ target_sources(libc_static PRIVATE
     gen/pd_wait.c                # _wait forwarder (__weak_reference alias not emitted)
     compat-43/FreeBSD/killpg.c   # _killpg (zsh job control)
     gen/FreeBSD/nice.c           # _nice (zsh BGNICE backgrounded-job priority)
-    gen/pd_popen.c               # popen/pclose (BusyBox awk pipe redirection; fork+pipe based)
+    gen/FreeBSD/popen.c          # popen/pclose
     gen/FreeBSD/pause.c          # _pause (init halt loop)
     string/FreeBSD/strrchr.c
     string/FreeBSD/strsep.c      # _strsep (exec.c PATH split)

@@ -153,9 +153,13 @@ ext4_read_super(struct ext4mount *emp)
 	    ((emp->em_blocks_count - emp->em_first_data_block +
 	     emp->em_blocks_per_group - 1) / emp->em_blocks_per_group);
 
-	E4LOG("mounted: bs=%u ipg=%u bpg=%u isize=%u groups=%u incompat=0x%x blocks=%llu",
+	ext4_csum_init(emp);
+
+	E4LOG("mounted: bs=%u ipg=%u bpg=%u isize=%u groups=%u incompat=0x%x "
+	    "ro_compat=0x%x csum=%d blocks=%llu",
 	    emp->em_blocksize, emp->em_inodes_per_group, emp->em_blocks_per_group,
 	    emp->em_inode_size, emp->em_groups_count, emp->em_feature_incompat,
+	    emp->em_feature_ro_compat, emp->em_has_metadata_csum,
 	    emp->em_blocks_count);
 	return 0;
 }
@@ -172,6 +176,10 @@ ext4_write_super(struct ext4mount *emp)
 	if (error)
 		return error;
 	memcpy((char *)buf_dataptr(bp) + off, &emp->em_sb, sizeof(emp->em_sb));
+	/* The on-disk superblock checksum spans the full 1024-byte block from
+	 * `off`; compute it in place on the buffer (which now holds our updated
+	 * fields plus the untouched tail read from disk). */
+	ext4_superblock_csum_set(emp, (char *)buf_dataptr(bp) + off);
 	return buf_bwrite(bp);
 }
 
@@ -236,12 +244,18 @@ ext4_write_group_desc(struct ext4mount *emp, uint32_t grp,
 	error = ext4_blkread(emp, pblk, &bp);
 	if (error)
 		return error;
-	memcpy((char *)buf_dataptr(bp) + off_in_block, gd,
-	    emp->em_desc_size < sizeof(*gd) ? emp->em_desc_size : sizeof(*gd));
+	{
+		/* recompute bg_checksum over the (updated) descriptor before write */
+		struct ext4_group_desc gcopy = *gd;
+		uint32_t n = emp->em_desc_size < sizeof(gcopy) ?
+		    emp->em_desc_size : (uint32_t)sizeof(gcopy);
+		ext4_group_desc_csum_set(emp, grp, &gcopy);
+		memcpy((char *)buf_dataptr(bp) + off_in_block, &gcopy, n);
+	}
 	return buf_bwrite(bp);
 }
 
-static uint64_t
+uint64_t
 ext4_gd_block_bitmap(struct ext4mount *emp, const struct ext4_group_desc *gd)
 {
 	uint64_t blk = le32(gd->bg_block_bitmap_lo);
@@ -250,7 +264,7 @@ ext4_gd_block_bitmap(struct ext4mount *emp, const struct ext4_group_desc *gd)
 	return blk;
 }
 
-static uint64_t
+uint64_t
 ext4_gd_inode_bitmap(struct ext4mount *emp, const struct ext4_group_desc *gd)
 {
 	uint64_t blk = le32(gd->bg_inode_bitmap_lo);
@@ -259,13 +273,13 @@ ext4_gd_inode_bitmap(struct ext4mount *emp, const struct ext4_group_desc *gd)
 	return blk;
 }
 
-static bool
+int
 ext4_bitmap_test(const uint8_t *map, uint32_t bit)
 {
 	return (map[bit >> 3] & (uint8_t)(1u << (bit & 7))) != 0;
 }
 
-static void
+void
 ext4_bitmap_set(uint8_t *map, uint32_t bit)
 {
 	map[bit >> 3] |= (uint8_t)(1u << (bit & 7));
@@ -328,8 +342,26 @@ ext4_gd_add_used_dirs(struct ext4mount *emp, struct ext4_group_desc *gd,
 		gd->bg_used_dirs_count_hi = le16((uint16_t)(used_dirs >> 16));
 }
 
-int
-ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out)
+/* Clear a bg_flags bit (e.g. after materializing an uninitialized bitmap). */
+static void
+ext4_gd_clear_flag(struct ext4_group_desc *gd, uint16_t flag)
+{
+	gd->bg_flags = le16((uint16_t)(le16(gd->bg_flags) & ~flag));
+}
+
+/* Conservatively mark the whole inode table as possibly-used (0 unused at
+ * the tail). Always safe: it only tells fsck to scan the full table. */
+static void
+ext4_gd_zero_itable_unused(struct ext4mount *emp, struct ext4_group_desc *gd)
+{
+	gd->bg_itable_unused_lo = 0;
+	if (emp->em_desc_size >= 64)
+		gd->bg_itable_unused_hi = 0;
+}
+
+static int
+ext4_alloc_inode_locked(struct ext4mount *emp, enum vtype type,
+    ino_t *ino_out)
 {
 	uint32_t first_ino = le32(emp->em_sb.s_first_ino);
 	uint32_t grp;
@@ -356,6 +388,14 @@ ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out)
 		if (error)
 			return error;
 		map = (uint8_t *)buf_dataptr(bp);
+		/* INODE_UNINIT: the on-disk inode bitmap is not maintained (may hold
+		 * stale garbage). The group has no allocated inodes, so materialize
+		 * an all-free bitmap (tail padding 0xff, per mke2fs) before scanning. */
+		if (le16(gd.bg_flags) & EXT4_BG_INODE_UNINIT) {
+			uint32_t nbytes = emp->em_inodes_per_group / 8;
+			memset(map, 0, nbytes);
+			memset(map + nbytes, 0xff, emp->em_blocksize - nbytes);
+		}
 		limit = emp->em_inodes_per_group;
 		if ((uint64_t)(grp + 1) * emp->em_inodes_per_group > emp->em_inodes_count)
 			limit = (uint32_t)(emp->em_inodes_count -
@@ -368,12 +408,15 @@ ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out)
 			if (ext4_ino_is_live(emp, ino))
 				continue;
 			ext4_bitmap_set(map, i);
+			ext4_inode_bitmap_csum_set(emp, &gd, map);
 			error = buf_bwrite(bp);
 			if (error)
 				return error;
 			ext4_gd_add_free_inodes(emp, &gd, -1);
 			if (type == VDIR)
 				ext4_gd_add_used_dirs(emp, &gd, 1);
+			ext4_gd_clear_flag(&gd, EXT4_BG_INODE_UNINIT);
+			ext4_gd_zero_itable_unused(emp, &gd);
 			error = ext4_write_group_desc(emp, grp, &gd);
 			if (error)
 				return error;
@@ -391,7 +434,27 @@ ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out)
 }
 
 int
-ext4_free_inode(struct ext4mount *emp, ino_t ino, enum vtype type)
+ext4_alloc_inode(struct ext4mount *emp, enum vtype type, ino_t *ino_out)
+{
+	IOLock *lock;
+	int error;
+
+	if (emp == NULL || ino_out == NULL)
+		return EINVAL;
+
+	lock = (IOLock *)emp->em_alloc_lock;
+	if (lock == NULL)
+		return EIO;
+
+	IOLockLock(lock);
+	error = ext4_alloc_inode_locked(emp, type, ino_out);
+	IOLockUnlock(lock);
+
+	return error;
+}
+
+static int
+ext4_free_inode_locked(struct ext4mount *emp, ino_t ino, enum vtype type)
 {
 	struct ext4_group_desc gd;
 	uint32_t grp, index;
@@ -417,6 +480,7 @@ ext4_free_inode(struct ext4mount *emp, ino_t ino, enum vtype type)
 		return 0;
 	}
 	ext4_bitmap_clear(map, index);
+	ext4_inode_bitmap_csum_set(emp, &gd, map);
 	error = buf_bwrite(bp);
 	if (error)
 		return error;
@@ -432,7 +496,69 @@ ext4_free_inode(struct ext4mount *emp, ino_t ino, enum vtype type)
 }
 
 int
-ext4_alloc_block(struct ext4mount *emp, uint64_t goal, uint64_t *pblk_out)
+ext4_free_inode(struct ext4mount *emp, ino_t ino, enum vtype type)
+{
+	IOLock *lock;
+	int error;
+
+	if (emp == NULL)
+		return EINVAL;
+
+	lock = (IOLock *)emp->em_alloc_lock;
+	if (lock == NULL)
+		return EIO;
+
+	IOLockLock(lock);
+	error = ext4_free_inode_locked(emp, ino, type);
+	IOLockUnlock(lock);
+
+	return error;
+}
+
+static int
+ext4_block_is_metadata(struct ext4mount *emp, uint64_t pblk)
+{
+	uint32_t grp;
+
+	if (pblk < emp->em_first_data_block || pblk >= emp->em_blocks_count)
+		return 1;
+
+	for (grp = 0; grp < emp->em_groups_count; grp++) {
+		struct ext4_group_desc gd;
+		uint64_t group_first = emp->em_first_data_block +
+		    (uint64_t)grp * emp->em_blocks_per_group;
+		uint64_t bbmp, ibmp, itbl;
+		uint32_t i;
+
+		if (ext4_group_has_super(emp, grp)) {
+			uint32_t n = 1 + emp->em_gdt_blocks +
+			    emp->em_reserved_gdt_blocks;
+			if (pblk >= group_first && pblk < group_first + n)
+				return 1;
+		}
+
+		if (ext4_read_group_desc(emp, grp, &gd) != 0)
+			return 1;
+		bbmp = ext4_gd_block_bitmap(emp, &gd);
+		ibmp = ext4_gd_inode_bitmap(emp, &gd);
+		itbl = le32(gd.bg_inode_table_lo);
+		if (emp->em_desc_size >= 64)
+			itbl |= ((uint64_t)le32(gd.bg_inode_table_hi)) << 32;
+
+		if (pblk == bbmp || pblk == ibmp)
+			return 1;
+		for (i = 0; i < emp->em_itable_blocks; i++) {
+			if (pblk == itbl + i)
+				return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int
+ext4_alloc_block_locked(struct ext4mount *emp, uint64_t goal,
+    uint64_t *pblk_out)
 {
 	uint32_t start_grp = 0;
 	uint32_t pass;
@@ -473,17 +599,33 @@ ext4_alloc_block(struct ext4mount *emp, uint64_t goal, uint64_t *pblk_out)
 			return error;
 		map = (uint8_t *)buf_dataptr(bp);
 
+		if (le16(gd.bg_flags) & EXT4_BG_BLOCK_UNINIT) {
+			uint32_t synth_free = 0;
+			if (ext4_init_block_bitmap(emp, grp, &gd, map, &synth_free) != 0) {
+				buf_brelse(bp);
+				continue;
+			}
+		}
+
 		for (i = 0; i < limit; i++) {
 			uint64_t pblk = group_first + i;
 			buf_t zbp = NULL;
 
 			if (pblk < emp->em_first_data_block || ext4_bitmap_test(map, i))
 				continue;
+			if (ext4_block_is_metadata(emp, pblk)) {
+				E4LOG("alloc_block: refusing metadata pblk=%llu "
+				    "grp=%u bit=%u", (unsigned long long)pblk,
+				    grp, i);
+				continue;
+			}
 			ext4_bitmap_set(map, i);
+			ext4_block_bitmap_csum_set(emp, &gd, map);
 			error = buf_bwrite(bp);
 			if (error)
 				return error;
 			ext4_gd_add_free_blocks(emp, &gd, -1);
+			ext4_gd_clear_flag(&gd, EXT4_BG_BLOCK_UNINIT);
 			error = ext4_write_group_desc(emp, grp, &gd);
 			if (error)
 				return error;
@@ -507,7 +649,27 @@ ext4_alloc_block(struct ext4mount *emp, uint64_t goal, uint64_t *pblk_out)
 }
 
 int
-ext4_free_block(struct ext4mount *emp, uint64_t pblk)
+ext4_alloc_block(struct ext4mount *emp, uint64_t goal, uint64_t *pblk_out)
+{
+	IOLock *lock;
+	int error;
+
+	if (emp == NULL || pblk_out == NULL)
+		return EINVAL;
+
+	lock = (IOLock *)emp->em_alloc_lock;
+	if (lock == NULL)
+		return EIO;
+
+	IOLockLock(lock);
+	error = ext4_alloc_block_locked(emp, goal, pblk_out);
+	IOLockUnlock(lock);
+
+	return error;
+}
+
+static int
+ext4_free_block_locked(struct ext4mount *emp, uint64_t pblk)
 {
 	struct ext4_group_desc gd;
 	uint32_t grp, index;
@@ -537,6 +699,7 @@ ext4_free_block(struct ext4mount *emp, uint64_t pblk)
 		return 0;
 	}
 	ext4_bitmap_clear(map, index);
+	ext4_block_bitmap_csum_set(emp, &gd, map);
 	error = buf_bwrite(bp);
 	if (error)
 		return error;
@@ -546,6 +709,26 @@ ext4_free_block(struct ext4mount *emp, uint64_t pblk)
 		return error;
 	ext4_sb_add_free_blocks(emp, 1);
 	return ext4_write_super(emp);
+}
+
+int
+ext4_free_block(struct ext4mount *emp, uint64_t pblk)
+{
+	IOLock *lock;
+	int error;
+
+	if (emp == NULL)
+		return EINVAL;
+
+	lock = (IOLock *)emp->em_alloc_lock;
+	if (lock == NULL)
+		return EIO;
+
+	IOLockLock(lock);
+	error = ext4_free_block_locked(emp, pblk);
+	IOLockUnlock(lock);
+
+	return error;
 }
 
 /* Entry capacity of a full-block extent node (extent and extent_idx are both
@@ -1090,6 +1273,15 @@ ext4_read_inode(struct ext4mount *emp, ino_t ino, struct ext4_inode *out)
 	if (error)
 		return error;
 
+	if (!ext4_inode_csum_verify(emp, ino,
+	    (const char *)buf_dataptr(bp) + off_in_block)) {
+		E4LOG("inode checksum mismatch ino=%llu pblk=%llu off=%u",
+		    (unsigned long long)ino, (unsigned long long)pblk,
+		    off_in_block);
+		buf_brelse(bp);
+		return EIO;
+	}
+
 	memset(out, 0, sizeof(*out));
 	memcpy(out, (char *)buf_dataptr(bp) + off_in_block,
 	    sizeof(*out) < emp->em_inode_size ? sizeof(*out) : emp->em_inode_size);
@@ -1136,6 +1328,8 @@ ext4_write_inode(struct ext4mount *emp, ino_t ino, const struct ext4_inode *in)
 
 	memcpy((char *)buf_dataptr(bp) + off_in_block, in,
 	    sizeof(*in) < emp->em_inode_size ? sizeof(*in) : emp->em_inode_size);
+	/* checksum spans the full on-disk inode (our fields + preserved tail) */
+	ext4_inode_csum_set(emp, ino, (char *)buf_dataptr(bp) + off_in_block);
 	return buf_bwrite(bp);   /* synchronous; releases bp */
 }
 
