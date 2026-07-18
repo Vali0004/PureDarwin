@@ -230,6 +230,57 @@ EFI_get_frequency(const char *prop)
 }
 
 /*
+ * QEMU TCG (software CPU emulation, no KVM acceleration) exposes neither
+ * the VMM CPUID leaf 0x40000010 frequency fields nor a real CPUID leaf
+ * 0x15 TSC/ART ratio, and there's no EFI device tree to publish a measured
+ * TSCFrequency either - every path above falls back to
+ * BASE_NHM_CLOCK_SOURCE (~133MHz, a real Nehalem FSB constant) for both
+ * busFreq and, via tscGranularity=1, tscFreq. TCG's TSC actually free-runs
+ * at whatever rate the host CPU (or -icount setting) provides, typically
+ * multiple GHz, so treating it as ~133MHz makes every mach_absolute_time()
+ * conversion off by ~20-30x - the visible symptom being wildly wrong
+ * uptime. Since there is no other source of truth here, measure it for
+ * real against the legacy 8254 PIT (channel 2, gated via port 0x61),
+ * whose 1.193182MHz tick rate is fixed in hardware and QEMU always
+ * emulates faithfully.
+ */
+#define PIT_TICK_RATE   1193182UL
+#define PIT_CAL_MS      50UL
+#define PIT_CAL_LATCH   ((PIT_TICK_RATE * PIT_CAL_MS) / 1000UL)
+
+static uint64_t
+pit_measure_tsc_freq(void)
+{
+	uint8_t  saved_61;
+	uint64_t tsc_start, tsc_end;
+	uint16_t count = (uint16_t)PIT_CAL_LATCH;
+
+	saved_61 = inb(0x61);
+	outb(0x61, (saved_61 & 0xFC) | 0x01);   /* gate on, speaker off */
+
+	outb(0x43, 0xB0);   /* channel 2, LSB/MSB, mode 0, binary */
+	outb(0x42, (uint8_t)(count & 0xFF));
+	outb(0x42, (uint8_t)(count >> 8));
+
+	tsc_start = rdtsc64();
+
+	/* Port 0x61 bit 5 (OUT2 status) goes high once the count reaches 0. */
+	while ((inb(0x61) & 0x20) == 0) {
+		continue;
+	}
+
+	tsc_end = rdtsc64();
+
+	outb(0x61, saved_61);
+
+	if (tsc_end <= tsc_start) {
+		return 0;
+	}
+
+	return (tsc_end - tsc_start) * 1000UL / PIT_CAL_MS;
+}
+
+/*
  * Initialize the various conversion factors needed by code referencing
  * the TSC.
  */
@@ -421,15 +472,18 @@ tsc_init(void)
 			/*
 			 * QEMU TCG does not emulate MSR_PLATFORM_INFO or
 			 * MSR_FLEX_RATIO — reads return 0, writes are dropped.
-			 * Derive the TSC/bus ratio entirely from DT properties
-			 * provided by the bootloader; never touch the MSRs.
+			 * Never touch the MSRs; no DT property gives the real
+			 * TSC rate either, so measure it directly against the
+			 * PIT (see pit_measure_tsc_freq() above), and set
+			 * busFreq to the same value with tscGranularity=1 so
+			 * the ratio math below is a no-op and tscFreq comes
+			 * out equal to the measured rate.
 			 */
-			if (tsc_freq != 0 && busFreq != 0) {
-				tscGranularity = (uint32_t)(tsc_freq / busFreq);
+			uint64_t measured = pit_measure_tsc_freq();
+			if (measured != 0) {
+				busFreq = measured;
 			}
-			if (tscGranularity == 0) {
-				tscGranularity = 1;
-			}
+			tscGranularity = 1;
 		} else {
 			uint64_t msr_flex_ratio;
 			uint64_t msr_platform_info;

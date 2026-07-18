@@ -102,15 +102,53 @@ target_include_directories(puredarwingop_drv PRIVATE
 
 # PDGOP (static) pulls in IOKit + the mig device_user stubs transitively.
 # The userland build has enableLibraries=OFF, so the top-level PDGOP target
-# isn't defined there - iokittest builds its own iokittest_PDGOP/_IOKit static
-# libs (with the same sources + mig stubs). Prefer the real target when present
-# (full library build), else reuse iokittest's, so both build modes work.
+# isn't defined there - build local pdgop_local_IOKit/_PDGOP static libs with
+# the same sources + mig stubs (this used to reuse targets the now-removed
+# iokittest build happened to define as a side effect; build them directly
+# here instead so this doesn't depend on an unrelated tool existing).
 if(TARGET PDGOP)
     target_link_libraries(puredarwingop_drv PRIVATE PDGOP)
-elseif(TARGET iokittest_PDGOP)
-    target_link_libraries(puredarwingop_drv PRIVATE iokittest_PDGOP iokittest_IOKit)
 else()
-    message(FATAL_ERROR "xf86-video-puredarwingop: no PDGOP target available")
+    if(NOT TARGET migcom AND DEFINED ENV{NIX_MIGCOM_PATH})
+        add_executable(migcom IMPORTED GLOBAL)
+        set_target_properties(migcom PROPERTIES IMPORTED_LOCATION "$ENV{NIX_MIGCOM_PATH}")
+    endif()
+
+    add_library(pdgop_local_IOKit STATIC)
+    mig(${CMAKE_SOURCE_DIR}/src/Kernel/xnu/osfmk/device/device.defs
+        INCLUDES_FROM_TARGET pdgop_local_IOKit
+        USER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/device_user.h
+        USER_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/device_user.c
+        NOVOUCHERS)
+    target_sources(pdgop_local_IOKit PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/Libraries/IOKit/IOKitLib.c
+        ${CMAKE_CURRENT_BINARY_DIR}/device_user.c
+    )
+    target_compile_definitions(pdgop_local_IOKit PRIVATE IOKIT=1 KERNEL=0)
+    target_include_directories(pdgop_local_IOKit
+        PUBLIC ${CMAKE_SOURCE_DIR}/src/Libraries/IOKit/include
+        PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}
+            ${CMAKE_SOURCE_DIR}/src/Libraries/libSystem/libsystem_kernel/mach
+    )
+
+    add_library(pdgop_local_PDGOP STATIC)
+    target_sources(pdgop_local_PDGOP PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/Libraries/PDGOP/PDGOP.c
+    )
+    target_include_directories(pdgop_local_PDGOP
+        PUBLIC
+            ${CMAKE_SOURCE_DIR}/src/Libraries/PDGOP/include
+            ${CMAKE_SOURCE_DIR}/src/Libraries/IOKit/include
+        PRIVATE ${CMAKE_SOURCE_DIR}/src/Libraries/libSystem/libsystem_kernel/mach
+    )
+    target_link_libraries(puredarwingop_drv PRIVATE pdgop_local_PDGOP pdgop_local_IOKit)
+    if(TARGET libsystem_kernel_static)
+        target_link_libraries(puredarwingop_drv PRIVATE libsystem_kernel_static)
+    endif()
+    if(TARGET libsyscall_traps)
+        target_link_libraries(puredarwingop_drv PRIVATE libsyscall_traps)
+    endif()
 endif()
 
 # Deliberately do NOT link libsystem_kernel_static / libsyscall_traps here.

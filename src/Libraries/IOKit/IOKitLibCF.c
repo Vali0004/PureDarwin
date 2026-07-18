@@ -73,6 +73,7 @@ typedef const struct __CFData *CFDataRef;
 #define kCFStringEncodingUTF8 0x08000100u
 #define kCFPropertyListImmutable 0
 #define kCFPropertyListMutableContainers 1
+#define kIORegistryIterateRecursively 0x00000001u
 
 extern const CFAllocatorRef kCFAllocatorDefault;
 extern const void *kCFTypeDictionaryKeyCallBacks;
@@ -541,4 +542,240 @@ IORegistryEntryGetChildEntry(io_registry_entry_t entry,
 	mach_port_deallocate(mach_task_self(), iterator);
 
 	return (*child != IO_OBJECT_NULL) ? KERN_SUCCESS : KERN_FAILURE;
+}
+
+uint32_t
+IOObjectGetKernelRetainCount(io_object_t object)
+{
+	uint32_t count;
+
+	if (io_object_get_retain_count(object, &count) != KERN_SUCCESS) {
+		count = 0;
+	}
+	return count;
+}
+
+uint32_t
+IOObjectGetRetainCount(io_object_t object)
+{
+	return IOObjectGetKernelRetainCount(object);
+}
+
+kern_return_t
+IORegistryEntryGetPath(io_registry_entry_t entry, const io_name_t plane,
+    io_string_t path)
+{
+	return io_registry_entry_get_path(entry, (char *)plane, path);
+}
+
+kern_return_t
+IORegistryEntryGetNameInPlane(io_registry_entry_t entry,
+    const io_name_t plane, io_name_t name)
+{
+	if (plane == NULL) {
+		plane = "";
+	}
+	return io_registry_entry_get_name_in_plane(entry, (char *)plane, name);
+}
+
+kern_return_t
+IORegistryEntryGetLocationInPlane(io_registry_entry_t entry,
+    const io_name_t plane, io_name_t location)
+{
+	if (plane == NULL) {
+		plane = "";
+	}
+	return io_registry_entry_get_location_in_plane(entry, (char *)plane, location);
+}
+
+kern_return_t
+IOServiceGetBusyStateAndTime(io_service_t service, uint64_t *state,
+    uint32_t *busy_state, uint64_t *accumulated_busy_time)
+{
+	kern_return_t kr = io_service_get_state(service, state, busy_state,
+	    accumulated_busy_time);
+
+	if (kr != KERN_SUCCESS) {
+		*state = 0;
+		*busy_state = 0;
+		*accumulated_busy_time = 0;
+	}
+	return kr;
+}
+
+/*
+ * Only the two plain (non-recursive-binary, non-buf) branches of the real
+ * IOKitUser IORegistryEntrySearchCFProperty are implemented here - this
+ * project's property pipeline always goes through the OSSerialize XML path
+ * (pd_parse_property_xml above), never the binary-plist fast path real
+ * macOS also supports.
+ */
+CFTypeRef
+IORegistryEntrySearchCFProperty(io_registry_entry_t entry,
+    const io_name_t plane, CFStringRef key, CFAllocatorRef allocator,
+    uint32_t options)
+{
+	io_name_t name;
+	char *bytes = NULL;
+	mach_msg_type_number_t bytesCnt = 0;
+	kern_return_t kr;
+	CFTypeRef result;
+
+	(void)allocator;
+
+	if (!CFStringGetCString(key, name, sizeof(name), kCFStringEncodingUTF8)) {
+		return NULL;
+	}
+
+	if (options & kIORegistryIterateRecursively) {
+		kr = io_registry_entry_get_property_recursively(entry,
+		    (char *)plane, name, options, &bytes, &bytesCnt);
+	} else {
+		kr = io_registry_entry_get_property(entry, name, &bytes, &bytesCnt);
+	}
+
+	if (kr != KERN_SUCCESS || bytes == NULL || bytesCnt == 0) {
+		return NULL;
+	}
+
+	result = pd_parse_property_xml(bytes, bytesCnt, kCFPropertyListImmutable);
+	vm_deallocate(mach_task_self(), (vm_address_t)bytes, bytesCnt);
+	return result;
+}
+
+kern_return_t
+IOObjectGetClass(io_object_t object, io_name_t className)
+{
+	return io_object_get_class(object, className);
+}
+
+kern_return_t
+IOObjectConformsTo(io_object_t object, const char *className,
+    boolean_t *conforms)
+{
+	io_name_t name;
+	size_t i;
+
+	if (className == NULL || conforms == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	for (i = 0; i < sizeof(name) - 1 && className[i] != '\0'; i++) {
+		name[i] = className[i];
+	}
+	name[i] = '\0';
+
+	return io_object_conforms_to(object, name, conforms);
+}
+
+/*
+ * The real _IOObjectGetClass/_IOObjectConformsTo take a class-name-override
+ * "options" bitmask (kIOClassNameOverrideNone and friends) that negotiates
+ * a newer kernel protocol for translating renamed IOKit classes back to
+ * their historical names. Our device.defs only has the plain
+ * io_object_get_class/io_object_conforms_to routines - the ones a kernel
+ * with no override-negotiation support would use - so these just forward
+ * to them and ignore options; that IS the real "no override" behavior,
+ * not a stand-in for missing functionality.
+ */
+kern_return_t
+_IOObjectGetClass(io_object_t object, uint64_t options, io_name_t className)
+{
+	(void)options;
+	return io_object_get_class(object, className);
+}
+
+boolean_t
+_IOObjectConformsTo(io_object_t object, const io_name_t className,
+    uint64_t options)
+{
+	boolean_t conforms = FALSE;
+
+	(void)options;
+	io_object_conforms_to(object, (char *)className, &conforms);
+	return conforms;
+}
+
+static mach_port_t
+pd_default_master_port(void)
+{
+	mach_port_t masterPort;
+
+	if (IOMasterPort(MACH_PORT_NULL, &masterPort) != KERN_SUCCESS) {
+		masterPort = MACH_PORT_NULL;
+	}
+	return masterPort;
+}
+
+io_registry_entry_t
+IORegistryGetRootEntry(mach_port_t masterPort)
+{
+	kern_return_t kr;
+	mach_port_t usePort;
+	io_registry_entry_t entry = IO_OBJECT_NULL;
+
+	usePort = (masterPort == MACH_PORT_NULL) ? pd_default_master_port() : masterPort;
+
+	kr = io_registry_get_root_entry(usePort, &entry);
+	if (kr != KERN_SUCCESS) {
+		entry = IO_OBJECT_NULL;
+	}
+
+	if (usePort != MACH_PORT_NULL && usePort != masterPort) {
+		mach_port_deallocate(mach_task_self(), usePort);
+	}
+	return entry;
+}
+
+kern_return_t
+IORegistryEntryGetChildIterator(io_registry_entry_t entry,
+    const io_name_t plane, io_iterator_t *iterator)
+{
+	return io_registry_entry_get_child_iterator(entry, (char *)plane, iterator);
+}
+
+CFStringRef
+_IOObjectCopyClass(io_object_t object, uint64_t options)
+{
+	io_name_t name;
+	CFStringRef str = NULL;
+
+	if (!object) {
+		return NULL;
+	}
+	_IOObjectGetClass(object, options, name);
+	str = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
+	return str;
+}
+
+CFStringRef
+IOObjectCopyClass(io_object_t object)
+{
+	return _IOObjectCopyClass(object, 0);
+}
+
+CFStringRef
+IOObjectCopySuperclassForClass(CFStringRef classname)
+{
+	io_name_t origName, superName;
+	CFStringRef str = NULL;
+	mach_port_t masterPort;
+	kern_return_t kr;
+
+	if (classname == NULL) {
+		return NULL;
+	}
+	if (!CFStringGetCString(classname, origName, sizeof(origName), kCFStringEncodingUTF8)) {
+		return NULL;
+	}
+
+	masterPort = pd_default_master_port();
+	kr = io_object_get_superclass(masterPort, origName, superName);
+	if (masterPort != MACH_PORT_NULL) {
+		mach_port_deallocate(mach_task_self(), masterPort);
+	}
+
+	if (kr == KERN_SUCCESS) {
+		str = CFStringCreateWithCString(kCFAllocatorDefault, superName, kCFStringEncodingUTF8);
+	}
+	return str;
 }

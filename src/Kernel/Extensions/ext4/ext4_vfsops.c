@@ -124,7 +124,7 @@ ext4_start(__unused struct mount *mp, __unused int flags,
 }
 
 static int
-ext4_unmount(struct mount *mp, int mntflags, __unused vfs_context_t ctx)
+ext4_unmount(struct mount *mp, int mntflags, vfs_context_t ctx)
 {
 	struct ext4mount *emp = VFSTOEXT4(mp);
 	int flags = 0;
@@ -136,6 +136,15 @@ ext4_unmount(struct mount *mp, int mntflags, __unused vfs_context_t ctx)
 	error = vflush(mp, NULLVP, flags);
 	if (error)
 		return error;
+
+	/* Metadata/data writes go through buf_bwrite() synchronously, but
+	 * that only guarantees the block reaches the device's own write-back
+	 * cache, not stable storage. Without an explicit cache flush here,
+	 * a VM power-off/reboot right after unmount can lose those blocks -
+	 * seen as freshly-allocated extents reading back as all-zero
+	 * ("bad extent magic 0x0") on the next boot. */
+	if (emp && emp->em_devvp)
+		(void)VNOP_IOCTL(emp->em_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, ctx);
 
 	if (emp) {
 		vfs_setfsprivate(mp, NULL);
@@ -199,13 +208,17 @@ ext4_vfs_getattr(struct mount *mp, struct vfs_attr *fsap,
 }
 
 static int
-ext4_sync(__unused struct mount *mp, __unused int waitfor,
-    __unused vfs_context_t ctx)
+ext4_sync(struct mount *mp, __unused int waitfor, vfs_context_t ctx)
 {
-	return 0;   /* read-only */
+	struct ext4mount *emp = VFSTOEXT4(mp);
+
+	if (emp && emp->em_devvp)
+		(void)VNOP_IOCTL(emp->em_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, ctx);
+
+	return 0;
 }
 
-/* ---- filesystem (de)registration ----
+/* filesystem (de)registration
  *
  * Called from the ext4 IOService's start()/stop() (ext4_iokit.cpp) rather
  * than a bare kmod MAIN_FUNCTION: in the fileset kernel collection a pure-C

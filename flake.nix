@@ -118,7 +118,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "netsetup" "ping" "pcmplay" "startx" "iokittest" "ioreg" "mousemon" "mount" "umount" ]
+            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
             enableProjects = false;
             enableKernel = false;
@@ -556,6 +556,13 @@
               inherit darwinCrossToolchain nativeLd;
               libSystem = libSystemBuild;
             };
+          ioregBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/ioreg.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              corefoundation = coreFoundationBuild;
+              iokit = iokitBuild;
+            };
           xkbcommonBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xkbcommon.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -727,6 +734,7 @@
             curl = curlBuild;
             git = gitBuild;
             migcomDarwin = migcomDarwinBuild;
+            ioreg = ioregBuild;
             #xkbcommon = xkbcommonBuild;
             fastfetch = fastfetchBuild;
             corefoundation = coreFoundationBuild;

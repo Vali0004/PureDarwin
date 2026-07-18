@@ -49,3 +49,11 @@ mach_thread_self(void)
 {
 	return thread_self_trap();
 }
+
+extern kern_return_t task_dyld_process_info_notify_get_trap(mach_port_t *names, uint32_t *namesCnt);
+
+kern_return_t
+task_dyld_process_info_notify_get(mach_port_t *names, uint32_t *namesCnt)
+{
+	return task_dyld_process_info_notify_get_trap(names, namesCnt);
+}
