@@ -16,6 +16,28 @@
 
 static vfstable_t ext4_vfsconf;
 
+/*
+ * Mount-wide metadata lock. See the em_fs_lock comment in ext4.h for the
+ * recursion/deadlock rules. Unlocking the outermost hold commits the open
+ * journal transaction, so a whole vnop's metadata writes become one atomic
+ * journal record.
+ */
+void
+ext4_fs_lock(struct ext4mount *emp)
+{
+	IORecursiveLockLock((IORecursiveLock *)emp->em_fs_lock);
+	emp->em_lock_depth++;
+}
+
+void
+ext4_fs_unlock(struct ext4mount *emp)
+{
+	if (emp->em_lock_depth == 1 && ext4_jnl_should_commit(emp))
+		(void)ext4_jnl_commit(emp);
+	emp->em_lock_depth--;
+	IORecursiveLockUnlock((IORecursiveLock *)emp->em_fs_lock);
+}
+
 /* forward decls of the vfsops */
 static int ext4_mount(struct mount *mp, vnode_t devvp, user_addr_t data,
     vfs_context_t ctx);
@@ -52,7 +74,6 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 {
 	struct ext4mount *emp;
 	struct vfsstatfs *sfs;
-	uint32_t bsize;
 	int error;
 
 	if (vfs_isupdate(mp)) {
@@ -80,17 +101,43 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 		goto fail;
 	}
 
+	emp->em_fs_lock = IORecursiveLockAlloc();
+	if (emp->em_fs_lock == NULL) {
+		error = ENOMEM;
+		goto fail;
+	}
+
 	error = ext4_read_super(emp);
 	if (error)
 		goto fail;
 
 	/*
-	 * Point the device vnode's block size at the fs block size so that
-	 * buf_meta_bread(devvp, fs_block, em_blocksize) addresses whole fs
-	 * blocks directly.
+	 * Query the device's native sector size so ext4_blkread() can convert
+	 * fs-block numbers into it explicitly, rather than trying to retag the
+	 * vnode's block size via DKIOCSETBLOCKSIZE and hoping every future
+	 * buf_meta_bread(devvp, fs_block, em_blocksize, ...) call gets
+	 * interpreted in fs-block units as a result. That retag approach
+	 * silently produced wrong byte offsets for every block read/write
+	 * (misdirected inode/bitmap/data reads -> spurious checksum mismatches
+	 * on perfectly intact data, e.g. "inode checksum mismatch ino=2488")
+	 * whenever the ioctl's effect didn't propagate the way spec_strategy's
+	 * DKR_GET_BYTE_START expected. Default to 512 (the near-universal disk
+	 * sector size) if the query fails.
 	 */
-	bsize = emp->em_blocksize;
-	(void)VNOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&bsize, FWRITE, ctx);
+	emp->em_dev_bsize = 512;
+	(void)VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&emp->em_dev_bsize, FREAD, ctx);
+	if (emp->em_dev_bsize == 0)
+		emp->em_dev_bsize = 512;
+
+	/* Locate the journal and replay it if the fs needs recovery. Must run
+	 * before any other metadata is trusted (a needs-recovery fs has stale
+	 * metadata on disk until the journal is applied). Non-fatal if the fs
+	 * simply has no journal. */
+	error = ext4_jnl_mount(emp);
+	if (error) {
+		E4LOG("journal mount/replay failed: %d", error);
+		goto fail;
+	}
 
 	vfs_setfsprivate(mp, emp);
 	/* The generic root mount object is born MNT_RDONLY|MNT_ROOTFS before
@@ -116,6 +163,8 @@ ext4_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data,
 	return 0;
 
 fail:
+	if (emp->em_fs_lock)
+		IORecursiveLockFree((IORecursiveLock *)emp->em_fs_lock);
 	if (emp->em_alloc_lock)
 		IOLockFree((IOLock *)emp->em_alloc_lock);
 	if (emp->em_hash_lock)
@@ -155,7 +204,26 @@ ext4_unmount(struct mount *mp, int mntflags, vfs_context_t ctx)
 		(void)VNOP_IOCTL(emp->em_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, ctx);
 
 	if (emp) {
+		E4LOG("unmount stats: reads=%llu writes=%llu pagein=%llu "
+		    "pageout=%llu dir+=%llu dir-=%llu ablk=%llu fblk=%llu "
+		    "aino=%llu fino=%llu csumfail=%llu dircheckfail=%llu "
+		    "eio=%llu jcommit=%llu jreplay=%llu",
+		    emp->em_stats.reads, emp->em_stats.writes,
+		    emp->em_stats.pageins, emp->em_stats.pageouts,
+		    emp->em_stats.dir_adds, emp->em_stats.dir_removes,
+		    emp->em_stats.alloc_blocks, emp->em_stats.free_blocks,
+		    emp->em_stats.alloc_inodes, emp->em_stats.free_inodes,
+		    emp->em_stats.csum_fails, emp->em_stats.dir_check_fails,
+		    emp->em_stats.eio_returns, emp->em_stats.jnl_commits,
+		    emp->em_stats.jnl_replays);
+
+		ext4_jnl_unmount(emp);
+		if (emp->em_group_meta)
+			_FREE(emp->em_group_meta, M_TEMP);
 		vfs_setfsprivate(mp, NULL);
+
+		if (emp->em_fs_lock)
+			IORecursiveLockFree((IORecursiveLock *)emp->em_fs_lock);
 
 		if (emp->em_alloc_lock)
 			IOLockFree((IOLock *)emp->em_alloc_lock);
@@ -225,6 +293,13 @@ ext4_sync(struct mount *mp, __unused int waitfor, vfs_context_t ctx)
 {
 	struct ext4mount *emp = VFSTOEXT4(mp);
 
+	if (emp) {
+		/* periodic syncer: flush the batched journal txn too */
+		ext4_fs_lock(emp);
+		(void)ext4_jnl_commit(emp);
+		emp->em_lock_depth--;
+		IORecursiveLockUnlock((IORecursiveLock *)emp->em_fs_lock);
+	}
 	if (emp && emp->em_devvp)
 		(void)VNOP_IOCTL(emp->em_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, ctx);
 

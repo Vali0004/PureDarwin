@@ -130,9 +130,37 @@ void _ZSt10unexpectedv()
 	_ZN4dyld4haltEPKc("dyld std::unexpected()\n");
 }
 
+// __cxa_current_exception_type() from libcxxabi - returns the std::type_info*
+// of the exception currently being handled, or NULL if none. Declared here
+// instead of including <cxxabi.h> so this file can stay plain C.
+extern void *__cxa_current_exception_type(void);
+
+// Print the mangled name of whatever exception is in flight before we halt,
+// so an uncaught-exception crash (e.g. dyld's internal try/catch blocks only
+// catch `const char*`, per dyld's own throwf()/throw "..." convention - see
+// dyld2.cpp/ImageLoaderMachO.cpp) says WHAT type slipped through instead of
+// just "dyld std::__terminate()" with no further information.
+static void dyld_log_current_exception_type(void)
+{
+	void *ti = __cxa_current_exception_type();
+	if (ti) {
+		// std::type_info layout (Itanium C++ ABI, libcxxabi): vtable ptr
+		// followed immediately by `const char *__type_name` (the mangled
+		// name). Reading it directly avoids a virtual call into name(),
+		// which would need real vtable/RTTI resolution we can't assume
+		// works correctly here (that may be exactly what's broken).
+		const char *mangled = *(const char **)((char *)ti + sizeof(void *));
+		_ZN4dyld3logEPKcz("dyld: uncaught exception in flight, typeinfo name = %s\n",
+		    mangled ? mangled : "(null)");
+	} else {
+		_ZN4dyld3logEPKcz("dyld: __terminate called but no exception is currently in flight\n");
+	}
+}
+
 // __cxxabiv1::__terminate(void (*)()) called to terminate process
 void _ZN10__cxxabiv111__terminateEPFvvE()
 {
+	dyld_log_current_exception_type();
 	_ZN4dyld4haltEPKc("dyld std::__terminate()\n");
 }
 
@@ -145,6 +173,7 @@ void _ZN10__cxxabiv112__unexpectedEPFvvE()
 // std::__terminate() called by C++ unwinding code
 void _ZSt11__terminatePFvvE(void (*func)(void))
 {
+	dyld_log_current_exception_type();
 	_ZN4dyld4haltEPKc("dyld std::__terminate()\n");
 }
 

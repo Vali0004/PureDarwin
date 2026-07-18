@@ -7,10 +7,22 @@
 #include <unistd.h>
 
 static const char *
+default_client(void)
+{
+    if (access("/bin/i3", X_OK) == 0) {
+        return "/bin/i3";
+    }
+    return "/bin/xeyes";
+}
+
+static const char *
 map_client(const char *client)
 {
     if (client == NULL || client[0] == '\0') {
-        return "/bin/xeyes";
+        return default_client();
+    }
+    if (strcmp(client, "i3") == 0) {
+        return "/bin/i3";
     }
     if (strcmp(client, "xeyes") == 0) {
         return "/bin/xeyes";
@@ -112,7 +124,7 @@ poll_xorg_startup(pid_t xpid)
 int
 main(int argc, char **argv)
 {
-    const char *client = "/bin/xeyes";
+    const char *client = default_client();
     int argi = 1;
     pid_t xpid;
     pid_t cpid;
@@ -154,6 +166,8 @@ main(int argc, char **argv)
         return rc;
     }
     setenv("DISPLAY", "127.0.0.1:0", 1);
+    setenv("XDG_CONFIG_DIRS", "/etc", 0);
+    setenv("XDG_DATA_DIRS", "/usr/share:/share", 0);
 
     fprintf(stderr, "startx: launching %s on 127.0.0.1:0\n", client);
     cpid = fork();

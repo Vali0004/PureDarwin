@@ -6,6 +6,7 @@ set_property(TARGET ext4.kext PROPERTY OUTPUT_NAME ext4)
 target_sources(ext4.kext PRIVATE
     ext4_subr.c
     ext4_csum.c
+    ext4_jbd.c
     ext4_vfsops.c
     ext4_vnops.c
     ext4_iokit.cpp

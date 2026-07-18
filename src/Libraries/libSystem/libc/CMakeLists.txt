@@ -190,9 +190,11 @@ target_sources(libc_static PRIVATE
     gen/FreeBSD/sysctl.c         # _sysctl (public wrapper over __sysctl)
     gen/FreeBSD/sysctlbyname.c   # _sysctlbyname
     gen/FreeBSD/sysctlnametomib.c # _sysctlnametomib
+    gen/FreeBSD/clock.c          # _clock
     gen/FreeBSD/getlogin.c       # _getlogin / _getlogin_r
     gen/pd_getpwent.c            # getpwnam/getpwuid (/etc/passwd reader; no libinfo)
     string/FreeBSD/wcscmp.c      # _wcscmp (wcscoll)
+    stdlib/FreeBSD/imaxabs.c     # _imaxabs (inttypes)
     stdlib/FreeBSD/strtoimax.c   # _strtoimax / _strtoimax_l (scanf)
     stdlib/FreeBSD/strtoumax.c   # _strtoumax / _strtoumax_l (scanf)
     stdio/FreeBSD/mktemp.c       # _mkstemp / _mkdtemp

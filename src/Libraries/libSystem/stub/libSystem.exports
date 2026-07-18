@@ -203,6 +203,7 @@ _bzero
 ___bzero
 _chdir
 _chmod
+_clock
 _chown
 _chroot
 _clearerr
@@ -269,6 +270,10 @@ __dispatch_source_type_mach_recv
 _issetugid
 _pthread_atfork
 _malloc_zone_memalign
+_malloc_zone_valloc
+_posix_memalign
+_aligned_alloc
+_valloc
 _sysdir_start_search_path_enumeration
 _sysdir_get_next_search_path_enumeration
 __NSConcreteStackBlock
@@ -847,6 +852,7 @@ _tzset
 _unlinkat
 _uselocale
 _setbuf
+_imaxabs
 _strtoimax
 _strtoumax
 _posix_spawnp

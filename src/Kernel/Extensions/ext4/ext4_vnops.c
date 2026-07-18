@@ -57,27 +57,13 @@ restart:
 			uint32_t vid = vnode_vid(vp);
 			IOLockUnlock(hlock);
 			if (vnode_getwithvid(vp, vid) == 0) {
-				struct ext4_inode fresh;
-				enum vtype fresh_type;
-				uint64_t fresh_size;
-
-				/*
-				 * Keep hot cached vnodes honest. Metadata corruption in the
-				 * in-core inode image is far more damaging than the extra
-				 * inode-table read here: one bad cached mode made
-				 * /usr/bin/xkbcomp intermittently look like a character
-				 * device even though the on-disk inode was still sane.
-				 */
-				if (ext4_read_inode(emp, ino, &fresh) == 0) {
-					fresh_type = ext4_mode_to_vtype(le16(fresh.i_mode));
-					if (fresh_type != VNON) {
-						fresh_size = le32(fresh.i_size_lo) |
-						    ((uint64_t)le32(fresh.i_size_high) << 32);
-						ep->e_raw = fresh;
-						ep->e_size = fresh_size;
-						ep->e_vtype = fresh_type;
-					}
-				}
+				/* The in-core e_raw is authoritative: every
+				 * mutation happens under em_fs_lock and is
+				 * written back through the journal. (This used
+				 * to re-read the inode table on every cache
+				 * hit as a defensive hack against the
+				 * pre-locking races - one inode-table read per
+				 * path-component lookup.) */
 				*vpp = vp;
 				return 0;
 			}
@@ -91,6 +77,12 @@ restart:
 	ep = (struct ext4node *)_MALLOC(sizeof(*ep), M_TEMP, M_WAITOK | M_ZERO);
 	if (ep == NULL) {
 		IOLockUnlock(hlock);
+		return ENOMEM;
+	}
+	ep->e_lock = IOLockAlloc();
+	if (ep->e_lock == NULL) {
+		IOLockUnlock(hlock);
+		_FREE(ep, M_TEMP);
 		return ENOMEM;
 	}
 	ep->e_mount     = emp;
@@ -151,6 +143,7 @@ fail:
 	ep->e_alloc_wip = 0;
 	IOLockWakeup(hlock, &ep->e_vp, false);
 	IOLockUnlock(hlock);
+	IOLockFree((IOLock *)ep->e_lock);
 	_FREE(ep, M_TEMP);
 	return error;
 }
@@ -211,7 +204,7 @@ out:
 }
 
 static int
-ext4_vnop_lookup(struct vnop_lookup_args *ap)
+ext4_vnop_lookup_impl(struct vnop_lookup_args *ap)
 {
 	vnode_t dvp = ap->a_dvp;
 	vnode_t *vpp = ap->a_vpp;
@@ -242,7 +235,7 @@ ext4_vnop_lookup(struct vnop_lookup_args *ap)
 }
 
 static int
-ext4_vnop_getattr(struct vnop_getattr_args *ap)
+ext4_vnop_getattr_impl(struct vnop_getattr_args *ap)
 {
 	struct ext4node *ep = VTOE(ap->a_vp);
 	struct vnode_attr *vap = ap->a_vap;
@@ -292,11 +285,25 @@ ext4_read_range(struct ext4node *ep, uint64_t foff, void *dst, size_t len)
 	uint64_t pblk = 0;
 	buf_t bp = NULL;
 	int error;
+	struct ext4_inode raw_snapshot;
 
 	if (boff + len > bs)
 		len = bs - boff;
 
-	error = ext4_bmap(emp, ep->e_ino, &ep->e_raw, lblk, &pblk);
+	/*
+	 * Snapshot e_raw under the node lock before walking the extent tree:
+	 * ext4_vget()'s cache-hit path can refresh e_raw from a concurrent
+	 * thread (e.g. another exec of the same hot file) at any time, and
+	 * ext4_bmap() otherwise reads it live, field-by-field, with no
+	 * synchronization - a torn read of the extent header/entries here
+	 * produced exactly this bug's symptoms (intermittent garbage reads of
+	 * /usr/bin/xkbcomp depending on timing).
+	 */
+	IOLockLock((IOLock *)ep->e_lock);
+	raw_snapshot = ep->e_raw;
+	IOLockUnlock((IOLock *)ep->e_lock);
+
+	error = ext4_bmap(emp, ep->e_ino, &raw_snapshot, lblk, &pblk);
 	if (error)
 		return error;
 	if (pblk == 0) {
@@ -312,7 +319,7 @@ ext4_read_range(struct ext4node *ep, uint64_t foff, void *dst, size_t len)
 }
 
 static int
-ext4_vnop_read(struct vnop_read_args *ap)
+ext4_vnop_read_impl(struct vnop_read_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct uio *uio = ap->a_uio;
@@ -325,6 +332,15 @@ ext4_vnop_read(struct vnop_read_args *ap)
 		return EISDIR;
 	if (uio_offset(uio) < 0)
 		return EINVAL;
+
+	/* read(2) goes straight to the block layer below; any dirty mmap'd
+	 * pages of this range must be pushed first or the read returns stale
+	 * disk contents. Skip entirely when no pages are resident (the
+	 * common case for plain open/read consumers). */
+	if (vnode_isreg(vp) && ubc_pages_resident(vp))
+		(void)ubc_msync(vp, uio_offset(uio),
+		    uio_offset(uio) + uio_resid(uio), NULL,
+		    UBC_PUSHDIRTY | UBC_SYNC);
 
 	buf = (char *)_MALLOC(bs, M_TEMP, M_WAITOK);
 	if (buf == NULL)
@@ -438,9 +454,16 @@ ext4_dir_add(struct ext4node *dep, const char *name, size_t namelen,
 				nde->name_len = (uint8_t)namelen;
 				nde->file_type = ext4_vtype_to_ft(type);
 				memcpy(nde->name, name, namelen);
+				if (ext4_dir_block_check(emp,
+				    (const void *)buf_dataptr(bp),
+				    "dir_add", dep->e_ino)) {
+					buf_brelse(bp);
+					return EIO;
+				}
 				ext4_dir_block_csum_set(emp, dep->e_ino,
 				    &dep->e_raw, (void *)buf_dataptr(bp));
-				return buf_bwrite(bp);
+				emp->em_stats.dir_adds++;
+				return ext4_meta_bwrite(emp, bp);
 			}
 			p += reclen;
 		}
@@ -471,7 +494,8 @@ ext4_dir_add(struct ext4node *dep, const char *name, size_t namelen,
 		ext4_dir_block_init_tail(emp, (void *)buf_dataptr(bp));
 		ext4_dir_block_csum_set(emp, dep->e_ino, &dep->e_raw,
 		    (void *)buf_dataptr(bp));
-		error = buf_bwrite(bp);
+		emp->em_stats.dir_adds++;
+		error = ext4_meta_bwrite(emp, bp);
 		if (error)
 			return error;
 
@@ -526,9 +550,16 @@ ext4_dir_remove(struct ext4node *dep, const char *name, size_t namelen,
 				if (ft_out)
 					*ft_out = de->file_type;
 				de->inode = 0;
+				if (ext4_dir_block_check(emp,
+				    (const void *)buf_dataptr(bp),
+				    "dir_remove", dep->e_ino)) {
+					buf_brelse(bp);
+					return EIO;
+				}
 				ext4_dir_block_csum_set(emp, dep->e_ino,
 				    &dep->e_raw, (void *)buf_dataptr(bp));
-				return buf_bwrite(bp);
+				emp->em_stats.dir_removes++;
+				return ext4_meta_bwrite(emp, bp);
 			}
 			p += reclen;
 		}
@@ -578,9 +609,15 @@ ext4_dir_replace(struct ext4node *dep, const char *name, size_t namelen,
 					*old_ft = de->file_type;
 				de->inode = le32((uint32_t)ino);
 				de->file_type = ext4_vtype_to_ft(type);
+				if (ext4_dir_block_check(emp,
+				    (const void *)buf_dataptr(bp),
+				    "dir_replace", dep->e_ino)) {
+					buf_brelse(bp);
+					return EIO;
+				}
 				ext4_dir_block_csum_set(emp, dep->e_ino,
 				    &dep->e_raw, (void *)buf_dataptr(bp));
-				return buf_bwrite(bp);
+				return ext4_meta_bwrite(emp, bp);
 			}
 			p += reclen;
 		}
@@ -621,7 +658,7 @@ ext4_dir_update_dotdot(struct ext4node *dep, ino_t parent)
 			de->inode = le32((uint32_t)parent);
 			ext4_dir_block_csum_set(emp, dep->e_ino, &dep->e_raw,
 			    (void *)buf_dataptr(bp));
-			return buf_bwrite(bp);
+			return ext4_meta_bwrite(emp, bp);
 		}
 		p += reclen;
 	}
@@ -834,11 +871,11 @@ ext4_write_range(struct ext4node *ep, uint64_t foff, const void *src, size_t len
 	if (error)
 		return error;
 	memcpy((char *)buf_dataptr(bp) + boff, src, len);
-	return buf_bwrite(bp);
+	return buf_bawrite(bp);   /* async: file data, not journaled metadata */
 }
 
 static int
-ext4_vnop_write(struct vnop_write_args *ap)
+ext4_vnop_write_impl(struct vnop_write_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct uio *uio = ap->a_uio;
@@ -847,6 +884,7 @@ ext4_vnop_write(struct vnop_write_args *ap)
 	uint32_t bs = emp->em_blocksize;
 	int error = 0;
 	bool dirty = false;
+	off_t write_start;
 
 	if (vnode_isdir(vp))
 		return EISDIR;
@@ -854,6 +892,7 @@ ext4_vnop_write(struct vnop_write_args *ap)
 		uio_setoffset(uio, (off_t)ep->e_size);
 	if (uio_offset(uio) < 0)
 		return EINVAL;
+	write_start = uio_offset(uio);
 
 	while (uio_resid(uio) > 0) {
 		off_t foff = uio_offset(uio);
@@ -881,7 +920,7 @@ ext4_vnop_write(struct vnop_write_args *ap)
 			buf_brelse(bp);
 			break;
 		}
-		error = buf_bwrite(bp);   /* synchronous; releases bp */
+		error = buf_bawrite(bp);   /* async: data block; releases bp */
 		if (error)
 			break;
 		if (uio_offset(uio) > (off_t)ep->e_size)
@@ -898,6 +937,11 @@ ext4_vnop_write(struct vnop_write_args *ap)
 		ep->e_raw.i_mtime = le32((uint32_t)tv.tv_sec);
 		ubc_setsize(vp, ep->e_size);
 		(void)ext4_write_inode(emp, ep->e_ino, &ep->e_raw);
+		/* write(2) went through the block layer below the UBC; any
+		 * already-resident pages of this range are now stale and would
+		 * be served to a later mmap/exec as-is. */
+		(void)ubc_msync(vp, write_start, uio_offset(uio), NULL,
+		    UBC_INVALIDATE);
 	}
 	return error;
 }
@@ -927,7 +971,7 @@ ext4_zero_range(struct ext4node *ep, uint64_t start, uint64_t end)
 		if (error)
 			return error;
 		memset((char *)buf_dataptr(bp) + boff, 0, chunk);
-		error = buf_bwrite(bp);
+		error = buf_bawrite(bp);
 		if (error)
 			return error;
 		off += chunk;
@@ -962,7 +1006,7 @@ ext4_resize_file(struct ext4node *ep, uint64_t new_size)
 				if (error)
 					return error;
 				memset((char *)buf_dataptr(bp) + tail, 0, bs - tail);
-				error = buf_bwrite(bp);
+				error = buf_bawrite(bp);
 				if (error)
 					return error;
 			}
@@ -990,7 +1034,7 @@ ext4_resize_file(struct ext4node *ep, uint64_t new_size)
 }
 
 static int
-ext4_vnop_setattr(struct vnop_setattr_args *ap)
+ext4_vnop_setattr_impl(struct vnop_setattr_args *ap)
 {
 	struct ext4node *ep = VTOE(ap->a_vp);
 	struct vnode_attr *vap = ap->a_vap;
@@ -1028,7 +1072,7 @@ ext4_vnop_setattr(struct vnop_setattr_args *ap)
 }
 
 static int
-ext4_vnop_create(struct vnop_create_args *ap)
+ext4_vnop_create_impl(struct vnop_create_args *ap)
 {
 	vnode_t dvp = ap->a_dvp;
 	vnode_t *vpp = ap->a_vpp;
@@ -1141,11 +1185,11 @@ ext4_seed_dir_block(struct ext4mount *emp, uint64_t pblk, ino_t self, ino_t pare
 
 	ext4_dir_block_init_tail(emp, data);
 	ext4_dir_block_csum_set(emp, self, NULL, data);
-	return buf_bwrite(bp);
+	return ext4_meta_bwrite(emp, bp);
 }
 
 static int
-ext4_vnop_mkdir(struct vnop_mkdir_args *ap)
+ext4_vnop_mkdir_impl(struct vnop_mkdir_args *ap)
 {
 	vnode_t dvp = ap->a_dvp;
 	vnode_t *vpp = ap->a_vpp;
@@ -1244,7 +1288,7 @@ ext4_vnop_mkdir(struct vnop_mkdir_args *ap)
 }
 
 static int
-ext4_vnop_remove(struct vnop_remove_args *ap)
+ext4_vnop_remove_impl(struct vnop_remove_args *ap)
 {
 	struct ext4node *dep = VTOE(ap->a_dvp);
 	struct ext4node *ep = VTOE(ap->a_vp);
@@ -1284,7 +1328,7 @@ ext4_vnop_remove(struct vnop_remove_args *ap)
 }
 
 static int
-ext4_vnop_rmdir(struct vnop_rmdir_args *ap)
+ext4_vnop_rmdir_impl(struct vnop_rmdir_args *ap)
 {
 	struct ext4node *dep = VTOE(ap->a_dvp);
 	struct ext4node *ep = VTOE(ap->a_vp);
@@ -1323,7 +1367,7 @@ ext4_vnop_rmdir(struct vnop_rmdir_args *ap)
 }
 
 static int
-ext4_vnop_rename(struct vnop_rename_args *ap)
+ext4_vnop_rename_impl(struct vnop_rename_args *ap)
 {
 	struct ext4node *fdep = VTOE(ap->a_fdvp);
 	struct ext4node *fep = VTOE(ap->a_fvp);
@@ -1413,7 +1457,7 @@ ext4_vnop_rename(struct vnop_rename_args *ap)
 }
 
 static int
-ext4_vnop_symlink(struct vnop_symlink_args *ap)
+ext4_vnop_symlink_impl(struct vnop_symlink_args *ap)
 {
 	vnode_t dvp = ap->a_dvp;
 	vnode_t *vpp = ap->a_vpp;
@@ -1490,7 +1534,7 @@ ext4_vnop_symlink(struct vnop_symlink_args *ap)
 			goto fail_extents;
 		memset((void *)buf_dataptr(bp), 0, emp->em_blocksize);
 		memcpy((void *)buf_dataptr(bp), ap->a_target, len);
-		error = buf_bwrite(bp);
+		error = buf_bawrite(bp);
 		if (error)
 			goto fail_extents;
 	}
@@ -1514,7 +1558,7 @@ fail_inode:
 }
 
 static int
-ext4_vnop_link(struct vnop_link_args *ap)
+ext4_vnop_link_impl(struct vnop_link_args *ap)
 {
 	struct ext4node *ep = VTOE(ap->a_vp);
 	struct ext4node *tdp = VTOE(ap->a_tdvp);
@@ -1562,7 +1606,7 @@ ext4_vnop_link(struct vnop_link_args *ap)
 }
 
 static int
-ext4_vnop_readdir(struct vnop_readdir_args *ap)
+ext4_vnop_readdir_impl(struct vnop_readdir_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct uio *uio = ap->a_uio;
@@ -1645,7 +1689,7 @@ done:
 }
 
 static int
-ext4_vnop_readlink(struct vnop_readlink_args *ap)
+ext4_vnop_readlink_impl(struct vnop_readlink_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct uio *uio = ap->a_uio;
@@ -1682,7 +1726,7 @@ ext4_vnop_readlink(struct vnop_readlink_args *ap)
 }
 
 static int
-ext4_vnop_pagein(struct vnop_pagein_args *ap)
+ext4_vnop_pagein_impl(struct vnop_pagein_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct ext4node *ep = VTOE(vp);
@@ -1693,6 +1737,13 @@ ext4_vnop_pagein(struct vnop_pagein_args *ap)
 	kern_return_t kr;
 	int error = 0;
 	size_t done;
+	uint64_t file_size;
+
+	/* Snapshot e_size once, under the lock - see ext4_read_range for why
+	 * (ext4_vget()'s cache-hit refresh can rewrite it concurrently). */
+	IOLockLock((IOLock *)ep->e_lock);
+	file_size = ep->e_size;
+	IOLockUnlock((IOLock *)ep->e_lock);
 
 	kr = ubc_upl_map(pl, &ioaddr);
 	if (kr != KERN_SUCCESS)
@@ -1708,12 +1759,12 @@ ext4_vnop_pagein(struct vnop_pagein_args *ap)
 		if (chunk > size - done)
 			chunk = size - done;
 
-		if (foff >= (off_t)ep->e_size) {
+		if (foff >= (off_t)file_size) {
 			memset(dst, 0, size - done);   /* beyond EOF */
 			break;
 		}
-		if (foff + (off_t)chunk > (off_t)ep->e_size)
-			chunk = (size_t)(ep->e_size - foff);
+		if (foff + (off_t)chunk > (off_t)file_size)
+			chunk = (size_t)(file_size - foff);
 
 		error = ext4_read_range(ep, foff, dst, chunk);
 		if (error)
@@ -1743,7 +1794,7 @@ ext4_vnop_pagein(struct vnop_pagein_args *ap)
  * I/O here instead, mirroring how ext4_vnop_pagein bypasses cluster_io.
  */
 static int
-ext4_vnop_pageout(struct vnop_pageout_args *ap)
+ext4_vnop_pageout_impl(struct vnop_pageout_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct ext4node *ep = VTOE(vp);
@@ -1797,7 +1848,7 @@ ext4_vnop_pageout(struct vnop_pageout_args *ap)
 }
 
 static int
-ext4_vnop_blockmap(struct vnop_blockmap_args *ap)
+ext4_vnop_blockmap_impl(struct vnop_blockmap_args *ap)
 {
 	struct ext4node *ep = VTOE(ap->a_vp);
 	struct ext4mount *emp = ep->e_mount;
@@ -1863,8 +1914,11 @@ ext4_vnop_reclaim(struct vnop_reclaim_args *ap)
 	}
 	vnode_removefsref(vp);
 	vnode_clearfsnode(vp);
-	if (ep)
+	if (ep) {
+		if (ep->e_lock)
+			IOLockFree((IOLock *)ep->e_lock);
 		_FREE(ep, M_TEMP);
+	}
 	return 0;
 }
 
@@ -1881,7 +1935,7 @@ ext4_vnop_close(__unused struct vnop_close_args *ap)
 }
 
 static int
-ext4_vnop_inactive(struct vnop_inactive_args *ap)
+ext4_vnop_inactive_impl(struct vnop_inactive_args *ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct ext4node *ep = VTOE(vp);
@@ -1908,8 +1962,23 @@ ext4_vnop_inactive(struct vnop_inactive_args *ap)
  * userland with no /dev/console and launchd unable to start.
  */
 static int
-ext4_vnop_fsync(__unused struct vnop_fsync_args *ap)
+ext4_vnop_fsync(struct vnop_fsync_args *ap)
 {
+	vnode_t vp = ap->a_vp;
+	struct ext4node *ep = VTOE(vp);
+
+	/* Must exist (not vnop_default/ENOTSUP): mount_common() fsyncs a
+	 * mountpoint's covered vnode, and ENOTSUP there broke devfs at /dev.
+	 * With batched journal commits this is also the force-commit point. */
+	if (ep == NULL)
+		return 0;
+	if (vnode_isreg(vp) && ubc_pages_resident(vp))
+		(void)ubc_msync(vp, 0, ubc_getsize(vp), NULL,
+		    UBC_PUSHDIRTY | UBC_SYNC);
+	ext4_fs_lock(ep->e_mount);
+	(void)ext4_jnl_commit(ep->e_mount);
+	ep->e_mount->em_lock_depth--;
+	IORecursiveLockUnlock((IORecursiveLock *)ep->e_mount->em_fs_lock);
 	return 0;
 }
 
@@ -1932,6 +2001,232 @@ static int
 ext4_vnop_default(__unused struct vnop_generic_args *ap)
 {
 	return ENOTSUP;
+}
+
+/*
+ * Locked vnop wrappers: every metadata-touching vnop runs under the
+ * mount-wide recursive em_fs_lock; releasing the outermost hold commits
+ * the vnop's journal transaction. VNOP_RECLAIM intentionally stays
+ * unwrapped (see the em_fs_lock comment in ext4.h).
+ */
+static int
+ext4_vnop_lookup(struct vnop_lookup_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_lookup_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_create(struct vnop_create_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_create_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_mkdir(struct vnop_mkdir_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_mkdir_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_symlink(struct vnop_symlink_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_symlink_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_getattr(struct vnop_getattr_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_getattr_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_setattr(struct vnop_setattr_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_setattr_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_read(struct vnop_read_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	emp->em_stats.reads++;
+	error = ext4_vnop_read_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_write(struct vnop_write_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	emp->em_stats.writes++;
+	error = ext4_vnop_write_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_remove(struct vnop_remove_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_remove_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_rename(struct vnop_rename_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_fdvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_rename_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_link(struct vnop_link_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_link_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_readdir(struct vnop_readdir_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_readdir_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_readlink(struct vnop_readlink_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_readlink_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_pagein(struct vnop_pagein_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	emp->em_stats.pageins++;
+	error = ext4_vnop_pagein_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_pageout(struct vnop_pageout_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	emp->em_stats.pageouts++;
+	error = ext4_vnop_pageout_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_blockmap(struct vnop_blockmap_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_blockmap_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_rmdir(struct vnop_rmdir_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_rmdir_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
+ext4_vnop_inactive(struct vnop_inactive_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_vp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_inactive_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
 }
 
 #define VOPFUNC int (*)(void *)

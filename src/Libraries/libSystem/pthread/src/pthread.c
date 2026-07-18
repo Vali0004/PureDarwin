@@ -51,6 +51,10 @@
 
 #include "internal.h"
 
+/* PD-DIAG: minimal, dependency-free diagnostic print (from _simple.h in
+ * libc) - dprintf() isn't available in this link context. */
+extern void _simple_dprintf(int __fd, const char *__fmt, ...);
+
 #include <stdlib.h>
 #include <errno.h>
 #include <signal.h>
@@ -591,8 +595,20 @@ _pthread_allocate(const pthread_attr_t *attrs, void **stack,
 			 0, FALSE, VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 
 	if (kr != KERN_SUCCESS) {
+		kern_return_t map_kr = kr;
 		kr = mach_vm_allocate(mach_task_self(), &allocaddr, allocsize,
 				 VM_MAKE_TAG(VM_MEMORY_STACK)| VM_FLAGS_ANYWHERE);
+		if (kr != KERN_SUCCESS) {
+			/* PD-DIAG: pthread_create() flattens this to a generic
+			 * EAGAIN ("Resource temporarily unavailable") with no
+			 * indication of what actually failed - log the real
+			 * kern_return_t values so a real cause
+			 * (KERN_RESOURCE_SHORTAGE vs KERN_NO_SPACE etc) is
+			 * visible instead of guessing from the flattened errno. */
+			_simple_dprintf(2, "PD-DIAG: _pthread_allocate: stack alloc failed "
+			    "mach_vm_map kr=%d mach_vm_allocate kr=%d allocsize=%llu\n",
+			    (int)map_kr, (int)kr, (unsigned long long)allocsize);
+		}
 	} else if (__syscall_logger && !from_mach_thread) {
 		// libsyscall will not output malloc stack logging events when
 		// VM_MEMORY_STACK is passed in to facilitate mach thread promotion.
@@ -1273,6 +1289,11 @@ _pthread_create(pthread_t *thread, const pthread_attr_t *attrs,
 			PTHREAD_CLIENT_CRASH(0,
 					"Unable to allocate thread port, possible port leak");
 		}
+		/* PD-DIAG: see the matching note in _pthread_allocate() above -
+		 * this flattens whatever __bsdthread_create/_bsdthread_create
+		 * actually returned (ENOMEM, EINVAL, ...) down to EAGAIN. */
+		_simple_dprintf(2, "PD-DIAG: pthread_create: __bsdthread_create failed errno=%d\n",
+		    errno);
 		__pthread_undo_add_thread(t, self_kport);
 		_pthread_deallocate(t, from_mach_thread);
 		t = NULL;
@@ -1986,6 +2007,22 @@ pthread_stack_frame_decode_np(uintptr_t frame_addr, uintptr_t *return_addr)
 
 #pragma mark pthread workqueue support routines
 
+/*
+ * PureDarwin: real Darwin's libSystem_initializer() runs __pthread_init(),
+ * which performs the one-per-process __bsdthread_register handshake. Our
+ * pthread copy is built VARIANT_DYLD, which compiles __pthread_init out -
+ * so NO process ever registered, and the kernel (correctly) failed every
+ * bsdthread_create with EINVAL ("proc not bsdthread_register'd"), surfacing
+ * as pthread_create -> EAGAIN in the only threaded app (i3 via pango).
+ * pd_libSystem_init.c calls this thin wrapper during process init.
+ */
+void
+_pd_pthread_register(void)
+{
+	struct _pthread_registration_data data;
+	_pthread_bsdthread_init(&data);
+}
+
 void
 _pthread_bsdthread_init(struct _pthread_registration_data *data)
 {
@@ -2000,6 +2037,11 @@ _pthread_bsdthread_init(struct _pthread_registration_data *data)
 	int rv = __bsdthread_register(thread_start, start_wqthread, (int)PTHREAD_SIZE,
 			(void*)data, (uintptr_t)sizeof(*data), data->dispatch_queue_offset);
 
+	/* Unconditional: pid 8 (i3) hit "proc not bsdthread_register'd" in the
+	 * kernel while userland reported no failure - print BOTH outcomes so
+	 * the two sides can be compared per process. */
+	_simple_dprintf(2, "PD-DIAG: __bsdthread_register rv=%d errno=%d pid=%d\n",
+	    rv, rv < 0 ? errno : 0, getpid());
 	if (rv > 0) {
 		int required_features =
 				PTHREAD_FEATURE_FINEPRIO |

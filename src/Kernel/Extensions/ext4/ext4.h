@@ -8,8 +8,10 @@
  * `mkfs.ext4` (all features default-on except the journal) can be mounted
  * read-write without leaving the on-disk metadata inconsistent.
  *
- * The one hard requirement is no journal (^has_journal): there is no journal
- * replay, so the fs must not need recovery.
+ * Journaling (ext4_jbd.c): metadata writes are collected per-vnop under the
+ * mount-wide em_fs_lock and committed as JBD2 transactions (write-ahead:
+ * journal durable before in-place writes), with replay on mount - so a
+ * journaled fs (stock mkfs.ext4) survives hard power-off mid-operation.
  */
 #ifndef _EXT4_H_
 #define _EXT4_H_
@@ -46,6 +48,7 @@
 
 /* s_feature_incompat bits we care about */
 #define EXT4_FEATURE_INCOMPAT_FILETYPE  0x0002
+#define EXT4_FEATURE_INCOMPAT_RECOVER   0x0004  /* journal needs recovery */
 #define EXT4_FEATURE_INCOMPAT_64BIT     0x0080
 #define EXT4_FEATURE_INCOMPAT_EXTENTS   0x0040
 #define EXT4_FEATURE_INCOMPAT_CSUM_SEED 0x2000  /* seed stored in s_checksum_seed */
@@ -251,6 +254,12 @@ struct ext4mount {
 	vnode_t          em_devvp;      /* underlying block device vnode */
 	dev_t            em_dev;
 	uint32_t         em_blocksize;  /* fs block size (1024 << s_log_block_size) */
+	uint32_t         em_dev_bsize;  /* underlying device's native sector size,
+	                                   queried via DKIOCGETBLOCKSIZE; ext4_blkread()
+	                                   converts fs-block numbers into this unit
+	                                   itself rather than trusting a prior
+	                                   DKIOCSETBLOCKSIZE to have re-tagged the
+	                                   vnode - see ext4_blkread() for why. */
 	uint32_t         em_log_blocksize;
 	uint32_t         em_inodes_per_group;
 	uint32_t         em_blocks_per_group;
@@ -271,7 +280,43 @@ struct ext4mount {
 	struct ext4_super_block em_sb;  /* cached copy */
 	void            *em_hash_lock;  /* IOLock* guarding the ext4node hash */
 	void            *em_alloc_lock;
+	/*
+	 * em_fs_lock (IORecursiveLock*): the mount-wide metadata lock. Every
+	 * vnop that reads or mutates fs metadata (directory blocks, e_raw,
+	 * extent trees, sizes) runs under it. Recursive because a vnop holding
+	 * it can synchronously re-enter the driver on the same thread (a
+	 * uiomove page fault paging in from this same fs, vnode_create
+	 * draining into vnop_inactive, ubc_msync triggering pageout).
+	 * VNOP_RECLAIM deliberately does NOT take it: a thread holding
+	 * em_fs_lock can block in vnode_getwithvid() waiting for another
+	 * thread's reclaim to finish, so reclaim taking this lock would
+	 * deadlock. Lock order: em_fs_lock -> e_lock -> em_alloc_lock;
+	 * em_hash_lock is a leaf.
+	 */
+	void            *em_fs_lock;
+	/* op counters, logged at unmount (and by the PD-DIAG sysctl-less
+	 * "stats" log in ext4_vfs_sync every ~64 syncs) */
+	struct {
+		uint64_t reads, writes, pageins, pageouts;
+		uint64_t dir_adds, dir_removes;
+		uint64_t alloc_blocks, free_blocks, alloc_inodes, free_inodes;
+		uint64_t csum_fails, dir_check_fails, eio_returns;
+		uint64_t jnl_commits, jnl_replays;
+	} em_stats;
 	LIST_HEAD(ext4_node_bucket, ext4node) em_node_hash[EXT4_NODE_HASH_SIZE];
+	/* journaling state (ext4_jbd.c); NULL when the fs has no journal */
+	void            *em_jnl;
+	/* per-group metadata locations (block bitmap, inode bitmap, inode
+	 * table start), cached on first use: ext4_block_is_metadata() used to
+	 * re-read every group descriptor from disk for EVERY allocated block */
+	struct e4_group_meta {
+		uint64_t bbmp, ibmp, itbl;
+	}               *em_group_meta;
+	/* em_fs_lock recursion depth; only ever touched by the lock holder.
+	 * ext4_fs_unlock commits the open journal transaction when the
+	 * outermost hold is released, so a whole (possibly re-entrant) vnop
+	 * is one atomic journal transaction. */
+	int              em_lock_depth;
 };
 
 /* in-core inode (attached to vnode fsnode) */
@@ -287,6 +332,13 @@ struct ext4node {
 	int               e_unhashed;   /* already LIST_REMOVE'd from em_node_hash */
 	int               e_pending_free; /* unlinked while still open; free at reclaim */
 	uint32_t          e_dbg_last_lblk; /* diagnostic: last logical block logged */
+	void             *e_lock;       /* IOLock*: guards e_raw/e_size/e_vtype against
+	                                    the cache-hit refresh in ext4_vget() racing
+	                                    concurrent pagein/read/bmap on the same
+	                                    vnode (multiple execs/opens of one file in
+	                                    close succession - e.g. Xorg+i3+xkbcomp -
+	                                    could otherwise observe a torn read of a
+	                                    multi-field, unlocked update). */
 };
 
 #define VTOE(vp)  ((struct ext4node *)vnode_fsnode(vp))
@@ -350,6 +402,33 @@ int  ext4_group_has_super(struct ext4mount *emp, uint32_t grp);
 int  ext4_init_block_bitmap(struct ext4mount *emp, uint32_t grp,
                const struct ext4_group_desc *gd, uint8_t *map,
                uint32_t *free_out);
+
+/* mount-wide metadata lock (ext4_vfsops.c) */
+void ext4_fs_lock(struct ext4mount *emp);
+void ext4_fs_unlock(struct ext4mount *emp);
+
+/* Validate a directory block's rec_len chain. Returns 0 if walkable. */
+int  ext4_dir_block_check(struct ext4mount *emp, const void *block,
+               const char *tag, uint64_t ino);
+
+/* ext4_jbd.c - JBD2 journal (replay on mount, write-ahead commit per vnop) */
+int  ext4_jnl_mount(struct ext4mount *emp);   /* locate + replay if needed */
+void ext4_jnl_unmount(struct ext4mount *emp);
+/* Record a metadata block write in the currently open transaction (no-op
+ * without a journal). Called by ext4_meta_bwrite. */
+int  ext4_jnl_log_block(struct ext4mount *emp, uint64_t pblk, const void *data);
+/* Commit the open transaction: journal writes hit disk before the in-place
+ * writes they describe are allowed to (WAL ordering). */
+int  ext4_jnl_commit(struct ext4mount *emp);
+/* 1 if the open transaction is due for commit (size/age policy). */
+int  ext4_jnl_should_commit(struct ext4mount *emp);
+/* Overlay pending (logged, not yet checkpointed) contents of pblk into out.
+ * Returns 1 if an overlay was applied. */
+int  ext4_jnl_read_overlay(struct ext4mount *emp, uint64_t pblk, void *out);
+
+/* Journaled metadata write: logs the block, then writes it in place.
+ * Falls back to plain buf_bwrite when the fs has no journal. */
+int  ext4_meta_bwrite(struct ext4mount *emp, buf_t bp);
 
 /* ext4_vnops.c */
 extern int (**ext4_vnodeop_p)(void *);

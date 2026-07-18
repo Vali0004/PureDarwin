@@ -160,6 +160,14 @@ static void pd_libSystem_initializer(int argc, const char *argv[], const char *e
 	_program_vars_init(vars);
 	mach_init();
 	_pthread_set_self(NULL);
+	/* One-per-process __bsdthread_register handshake with the pthread kext.
+	 * Without it the kernel refuses every bsdthread_create (EINVAL) and
+	 * pthread_create() can never succeed. Real Darwin does this inside
+	 * __pthread_init(), which our VARIANT_DYLD pthread build compiles out. */
+	{
+		extern void _pd_pthread_register(void);
+		_pd_pthread_register();
+	}
 	__atexit_init();
 	_init_clock_port();
 	__chk_init();

@@ -71,16 +71,25 @@ ext4_mode_to_vtype(uint16_t mode)
 
 /*
  * Read one fs block (em_blocksize bytes) at physical block pblk from the
- * underlying device.  The device vnode's block size is set to the fs block
- * size at mount time, so fs block numbers map directly.
+ * underlying device.  buf_meta_bread()'s blkno argument is interpreted in
+ * units of the device vnode's tagged block size (bdevBlockSize, set only by
+ * a prior DKIOCSETBLOCKSIZE), NOT in bytes and NOT implicitly in em_blocksize
+ * units just because that's what we pass as the size argument. Rather than
+ * depend on a DKIOCSETBLOCKSIZE retag having actually taken effect on this
+ * vnode (unverifiable from here, and silently wrong if it didn't - see
+ * ext4_mount() in ext4_vfsops.c), convert pblk into the device's real native
+ * sector units ourselves using em_dev_bsize queried at mount time.
  */
 int
 ext4_blkread(struct ext4mount *emp, uint64_t pblk, buf_t *bpp)
 {
 	buf_t bp = NULL;
 	int error;
+	daddr64_t devblk;
 
-	error = buf_meta_bread(emp->em_devvp, (daddr64_t)pblk,
+	devblk = (daddr64_t)(pblk * ((uint64_t)emp->em_blocksize / emp->em_dev_bsize));
+
+	error = buf_meta_bread(emp->em_devvp, devblk,
 	    (int)emp->em_blocksize, NOCRED, &bp);
 	if (error) {
 		if (bp)
@@ -88,7 +97,80 @@ ext4_blkread(struct ext4mount *emp, uint64_t pblk, buf_t *bpp)
 		*bpp = NULL;
 		return error;
 	}
+	/* A block sitting in the open journal transaction is newer than
+	 * whatever the buf cache (or disk) just returned - the in-place write
+	 * is deferred until commit. Overlay it so reads inside a transaction
+	 * always see their own writes even if the clean buffer got recycled. */
+	(void)ext4_jnl_read_overlay(emp, pblk, (void *)buf_dataptr(bp));
 	*bpp = bp;
+	return 0;
+}
+
+/*
+ * Journaled metadata write. With a journal: log the buffer's contents into
+ * the open transaction and release the buffer CLEAN - the in-place write
+ * happens at commit (WAL ordering: journal blocks must be durable first).
+ * The buf cache keeps the new contents for subsequent reads; if it drops
+ * them, ext4_blkread()'s overlay (above) restores them from the txn.
+ * Without a journal: plain synchronous write-through.
+ */
+int
+ext4_meta_bwrite(struct ext4mount *emp, buf_t bp)
+{
+	uint64_t scale = (uint64_t)emp->em_blocksize / emp->em_dev_bsize;
+	uint64_t pblk = (uint64_t)buf_blkno(bp) / (scale ? scale : 1);
+	int error;
+
+	if (emp->em_jnl != NULL) {
+		error = ext4_jnl_log_block(emp, pblk, (void *)buf_dataptr(bp));
+		if (error == 0) {
+			buf_brelse(bp);
+			return 0;
+		}
+		/* txn overflow / no-journal race: fall through to direct write */
+	}
+	return buf_bwrite(bp);
+}
+
+/*
+ * Validate a directory block's rec_len chain before writing it back: every
+ * entry must be >= 8 bytes, 4-aligned, contain its name, and the chain must
+ * land exactly on the block's data limit (ext2 dir blocks are fully covered
+ * by design). A block failing this was corrupted in memory - writing it out
+ * would destroy the directory, so callers must refuse.
+ */
+int
+ext4_dir_block_check(struct ext4mount *emp, const void *block,
+    const char *tag, uint64_t ino)
+{
+	uint32_t limit = emp->em_blocksize;
+	uint32_t p = 0;
+
+	if (ext4_dir_block_has_tail(emp, block))
+		limit -= EXT4_DIR_ENTRY_TAIL_SIZE;
+
+	while (p < limit) {
+		const struct ext4_dir_entry_2 *de =
+		    (const struct ext4_dir_entry_2 *)((const char *)block + p);
+		uint16_t reclen = le16(de->rec_len);
+
+		if (reclen < 8 || (reclen & 3) != 0 || p + reclen > limit ||
+		    (uint32_t)(8 + de->name_len) > reclen) {
+			E4LOG("%s: corrupt dir block (dir ino=%llu off=%u "
+			    "reclen=%u namelen=%u inode=%u)", tag,
+			    (unsigned long long)ino, p, reclen, de->name_len,
+			    le32(de->inode));
+			emp->em_stats.dir_check_fails++;
+			return EIO;
+		}
+		p += reclen;
+	}
+	if (p != limit) {
+		E4LOG("%s: dir block chain ends at %u != %u (dir ino=%llu)",
+		    tag, p, limit, (unsigned long long)ino);
+		emp->em_stats.dir_check_fails++;
+		return EIO;
+	}
 	return 0;
 }
 
@@ -180,7 +262,7 @@ ext4_write_super(struct ext4mount *emp)
 	 * `off`; compute it in place on the buffer (which now holds our updated
 	 * fields plus the untouched tail read from disk). */
 	ext4_superblock_csum_set(emp, (char *)buf_dataptr(bp) + off);
-	return buf_bwrite(bp);
+	return ext4_meta_bwrite(emp, bp);
 }
 
 uint64_t
@@ -252,7 +334,7 @@ ext4_write_group_desc(struct ext4mount *emp, uint32_t grp,
 		ext4_group_desc_csum_set(emp, grp, &gcopy);
 		memcpy((char *)buf_dataptr(bp) + off_in_block, &gcopy, n);
 	}
-	return buf_bwrite(bp);
+	return ext4_meta_bwrite(emp, bp);
 }
 
 uint64_t
@@ -388,18 +470,32 @@ ext4_alloc_inode_locked(struct ext4mount *emp, enum vtype type,
 		if (error)
 			return error;
 		map = (uint8_t *)buf_dataptr(bp);
-		/* INODE_UNINIT: the on-disk inode bitmap is not maintained (may hold
-		 * stale garbage). The group has no allocated inodes, so materialize
-		 * an all-free bitmap (tail padding 0xff, per mke2fs) before scanning. */
-		if (le16(gd.bg_flags) & EXT4_BG_INODE_UNINIT) {
-			uint32_t nbytes = emp->em_inodes_per_group / 8;
-			memset(map, 0, nbytes);
-			memset(map + nbytes, 0xff, emp->em_blocksize - nbytes);
-		}
 		limit = emp->em_inodes_per_group;
 		if ((uint64_t)(grp + 1) * emp->em_inodes_per_group > emp->em_inodes_count)
 			limit = (uint32_t)(emp->em_inodes_count -
 			    (uint64_t)grp * emp->em_inodes_per_group);
+
+		/* INODE_UNINIT is supposed to mean "this group has never had any
+		 * inode allocated, on-disk bitmap bytes are stale/undefined" - by
+		 * construction that means bg_free_inodes_count must equal the
+		 * group's full inode capacity (limit). If a group is flagged
+		 * INODE_UNINIT but its free-inode count says otherwise (some
+		 * inodes ARE accounted used - e.g. mke2fs -d populated real files
+		 * into this group at image-build time), synthesizing an all-free
+		 * bitmap here would hand out inode numbers that are genuinely
+		 * still in use, letting a brand new file's ext4_write_inode()
+		 * silently overwrite - byte for byte - an existing file's inode
+		 * (observed in practice: xkbcomp's inode got clobbered by a fresh
+		 * ~35-byte temp file this way). In that inconsistent case, trust
+		 * the on-disk bitmap bytes as-is instead of synthesizing - mke2fs
+		 * writes real bitmaps for any group it actually populates, so this
+		 * is the safe fallback, not a guess. */
+		if ((le16(gd.bg_flags) & EXT4_BG_INODE_UNINIT) &&
+		    le16(gd.bg_free_inodes_count_lo) == limit) {
+			uint32_t nbytes = emp->em_inodes_per_group / 8;
+			memset(map, 0, nbytes);
+			memset(map + nbytes, 0xff, emp->em_blocksize - nbytes);
+		}
 
 		for (i = 0; i < limit; i++) {
 			ino_t ino = (ino_t)((uint64_t)grp * emp->em_inodes_per_group + i + 1);
@@ -409,7 +505,7 @@ ext4_alloc_inode_locked(struct ext4mount *emp, enum vtype type,
 				continue;
 			ext4_bitmap_set(map, i);
 			ext4_inode_bitmap_csum_set(emp, &gd, map);
-			error = buf_bwrite(bp);
+			error = ext4_meta_bwrite(emp, bp);
 			if (error)
 				return error;
 			ext4_gd_add_free_inodes(emp, &gd, -1);
@@ -425,6 +521,7 @@ ext4_alloc_inode_locked(struct ext4mount *emp, enum vtype type,
 			error = ext4_write_super(emp);
 			if (error)
 				return error;
+			emp->em_stats.alloc_inodes++;
 			*ino_out = ino;
 			return 0;
 		}
@@ -481,7 +578,7 @@ ext4_free_inode_locked(struct ext4mount *emp, ino_t ino, enum vtype type)
 	}
 	ext4_bitmap_clear(map, index);
 	ext4_inode_bitmap_csum_set(emp, &gd, map);
-	error = buf_bwrite(bp);
+	error = ext4_meta_bwrite(emp, bp);
 	if (error)
 		return error;
 	ext4_gd_add_free_inodes(emp, &gd, 1);
@@ -492,6 +589,7 @@ ext4_free_inode_locked(struct ext4mount *emp, ino_t ino, enum vtype type)
 		return error;
 	emp->em_sb.s_free_inodes_count =
 	    le32(le32(emp->em_sb.s_free_inodes_count) + 1);
+	emp->em_stats.free_inodes++;
 	return ext4_write_super(emp);
 }
 
@@ -516,19 +614,48 @@ ext4_free_inode(struct ext4mount *emp, ino_t ino, enum vtype type)
 }
 
 static int
+ext4_group_meta_init(struct ext4mount *emp)
+{
+	struct e4_group_meta *gm;
+	uint32_t grp;
+
+	if (emp->em_group_meta != NULL)
+		return 0;
+	gm = (struct e4_group_meta *)_MALLOC(
+	    sizeof(*gm) * emp->em_groups_count, M_TEMP, M_WAITOK | M_ZERO);
+	if (gm == NULL)
+		return ENOMEM;
+	for (grp = 0; grp < emp->em_groups_count; grp++) {
+		struct ext4_group_desc gd;
+		if (ext4_read_group_desc(emp, grp, &gd) != 0) {
+			_FREE(gm, M_TEMP);
+			return EIO;
+		}
+		gm[grp].bbmp = ext4_gd_block_bitmap(emp, &gd);
+		gm[grp].ibmp = ext4_gd_inode_bitmap(emp, &gd);
+		gm[grp].itbl = le32(gd.bg_inode_table_lo);
+		if (emp->em_desc_size >= 64)
+			gm[grp].itbl |=
+			    ((uint64_t)le32(gd.bg_inode_table_hi)) << 32;
+	}
+	emp->em_group_meta = gm;
+	return 0;
+}
+
+static int
 ext4_block_is_metadata(struct ext4mount *emp, uint64_t pblk)
 {
 	uint32_t grp;
 
 	if (pblk < emp->em_first_data_block || pblk >= emp->em_blocks_count)
 		return 1;
+	if (ext4_group_meta_init(emp) != 0)
+		return 1;   /* can't tell: refuse, caller skips the block */
 
 	for (grp = 0; grp < emp->em_groups_count; grp++) {
-		struct ext4_group_desc gd;
+		const struct e4_group_meta *gm = &emp->em_group_meta[grp];
 		uint64_t group_first = emp->em_first_data_block +
 		    (uint64_t)grp * emp->em_blocks_per_group;
-		uint64_t bbmp, ibmp, itbl;
-		uint32_t i;
 
 		if (ext4_group_has_super(emp, grp)) {
 			uint32_t n = 1 + emp->em_gdt_blocks +
@@ -536,23 +663,11 @@ ext4_block_is_metadata(struct ext4mount *emp, uint64_t pblk)
 			if (pblk >= group_first && pblk < group_first + n)
 				return 1;
 		}
-
-		if (ext4_read_group_desc(emp, grp, &gd) != 0)
+		if (pblk == gm->bbmp || pblk == gm->ibmp)
 			return 1;
-		bbmp = ext4_gd_block_bitmap(emp, &gd);
-		ibmp = ext4_gd_inode_bitmap(emp, &gd);
-		itbl = le32(gd.bg_inode_table_lo);
-		if (emp->em_desc_size >= 64)
-			itbl |= ((uint64_t)le32(gd.bg_inode_table_hi)) << 32;
-
-		if (pblk == bbmp || pblk == ibmp)
+		if (pblk >= gm->itbl && pblk < gm->itbl + emp->em_itable_blocks)
 			return 1;
-		for (i = 0; i < emp->em_itable_blocks; i++) {
-			if (pblk == itbl + i)
-				return 1;
-		}
 	}
-
 	return 0;
 }
 
@@ -621,7 +736,7 @@ ext4_alloc_block_locked(struct ext4mount *emp, uint64_t goal,
 			}
 			ext4_bitmap_set(map, i);
 			ext4_block_bitmap_csum_set(emp, &gd, map);
-			error = buf_bwrite(bp);
+			error = ext4_meta_bwrite(emp, bp);
 			if (error)
 				return error;
 			ext4_gd_add_free_blocks(emp, &gd, -1);
@@ -637,9 +752,18 @@ ext4_alloc_block_locked(struct ext4mount *emp, uint64_t goal,
 			if (error)
 				return error;
 			memset((void *)buf_dataptr(zbp), 0, emp->em_blocksize);
+			/* MUST be write-through, not journaled: freshly allocated
+			 * blocks are often filled with file DATA right after via
+			 * plain (unjournaled) writes. If this zero-fill sat in
+			 * the open transaction, commit's checkpoint would replay
+			 * the stale zeroed copy over the just-written data -
+			 * observed as /tmp/server-0.xkm reading back as zeros.
+			 * A block that becomes metadata gets its real contents
+			 * journaled by its own later ext4_meta_bwrite. */
 			error = buf_bwrite(zbp);
 			if (error)
 				return error;
+			emp->em_stats.alloc_blocks++;
 			*pblk_out = pblk;
 			return 0;
 		}
@@ -700,7 +824,7 @@ ext4_free_block_locked(struct ext4mount *emp, uint64_t pblk)
 	}
 	ext4_bitmap_clear(map, index);
 	ext4_block_bitmap_csum_set(emp, &gd, map);
-	error = buf_bwrite(bp);
+	error = ext4_meta_bwrite(emp, bp);
 	if (error)
 		return error;
 	ext4_gd_add_free_blocks(emp, &gd, 1);
@@ -708,6 +832,7 @@ ext4_free_block_locked(struct ext4mount *emp, uint64_t pblk)
 	if (error)
 		return error;
 	ext4_sb_add_free_blocks(emp, 1);
+	emp->em_stats.free_blocks++;
 	return ext4_write_super(emp);
 }
 
@@ -776,7 +901,7 @@ ext4_ext_write_block(struct ext4mount *emp, uint64_t blk, const char *data)
 	if (error)
 		return error;
 	memcpy((char *)buf_dataptr(bp), data, emp->em_blocksize);
-	return buf_bwrite(bp);
+	return ext4_meta_bwrite(emp, bp);
 }
 
 /* Allocate a fresh right-sibling leaf holding the single extent lblk->pblk. */
@@ -1248,6 +1373,7 @@ ext4_read_inode(struct ext4mount *emp, ino_t ino, struct ext4_inode *out)
 	uint32_t off_in_block;
 	buf_t bp = NULL;
 	int error;
+	IOLock *lock;
 
 	if (ino == 0 || ino > emp->em_inodes_count) {
 		E4LOG("inode %llu out of range", (uint64_t)ino);
@@ -1257,9 +1383,16 @@ ext4_read_inode(struct ext4mount *emp, ino_t ino, struct ext4_inode *out)
 	grp   = (uint32_t)((ino - 1) / emp->em_inodes_per_group);
 	index = (uint32_t)((ino - 1) % emp->em_inodes_per_group);
 
+	lock = (IOLock *)emp->em_alloc_lock;
+	if (lock == NULL)
+		return EIO;
+	IOLockLock(lock);
+
 	error = ext4_read_group_desc(emp, grp, &gd);
-	if (error)
+	if (error) {
+		IOLockUnlock(lock);
 		return error;
+	}
 
 	itable_block = le32(gd.bg_inode_table_lo);
 	if (emp->em_desc_size >= 64)
@@ -1270,15 +1403,27 @@ ext4_read_inode(struct ext4mount *emp, ino_t ino, struct ext4_inode *out)
 	off_in_block = (uint32_t)(byteoff % emp->em_blocksize);
 
 	error = ext4_blkread(emp, pblk, &bp);
-	if (error)
+	if (error) {
+		IOLockUnlock(lock);
 		return error;
+	}
 
 	if (!ext4_inode_csum_verify(emp, ino,
 	    (const char *)buf_dataptr(bp) + off_in_block)) {
-		E4LOG("inode checksum mismatch ino=%llu pblk=%llu off=%u",
+		const uint8_t *raw = (const uint8_t *)buf_dataptr(bp) + off_in_block;
+		E4LOG("inode checksum mismatch ino=%llu pblk=%llu off=%u "
+		    "dev_bsize=%u blocksize=%u seed=0x%x isize=%u mode=0x%x "
+		    "gen=0x%08x first16=%02x%02x%02x%02x%02x%02x%02x%02x"
+		    "%02x%02x%02x%02x%02x%02x%02x%02x",
 		    (unsigned long long)ino, (unsigned long long)pblk,
-		    off_in_block);
+		    off_in_block, emp->em_dev_bsize, emp->em_blocksize,
+		    emp->em_csum_seed, emp->em_inode_size,
+		    *(const uint16_t *)raw, *(const uint32_t *)(raw + 0x64),
+		    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+		    raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15]);
+		emp->em_stats.csum_fails++;
 		buf_brelse(bp);
+		IOLockUnlock(lock);
 		return EIO;
 	}
 
@@ -1286,6 +1431,7 @@ ext4_read_inode(struct ext4mount *emp, ino_t ino, struct ext4_inode *out)
 	memcpy(out, (char *)buf_dataptr(bp) + off_in_block,
 	    sizeof(*out) < emp->em_inode_size ? sizeof(*out) : emp->em_inode_size);
 	buf_brelse(bp);
+	IOLockUnlock(lock);
 	return 0;
 }
 
@@ -1303,6 +1449,7 @@ ext4_write_inode(struct ext4mount *emp, ino_t ino, const struct ext4_inode *in)
 	uint32_t off_in_block;
 	buf_t bp = NULL;
 	int error;
+	IOLock *lock;
 
 	if (ino == 0 || ino > emp->em_inodes_count)
 		return EINVAL;
@@ -1310,9 +1457,16 @@ ext4_write_inode(struct ext4mount *emp, ino_t ino, const struct ext4_inode *in)
 	grp   = (uint32_t)((ino - 1) / emp->em_inodes_per_group);
 	index = (uint32_t)((ino - 1) % emp->em_inodes_per_group);
 
+	lock = (IOLock *)emp->em_alloc_lock;
+	if (lock == NULL)
+		return EIO;
+	IOLockLock(lock);
+
 	error = ext4_read_group_desc(emp, grp, &gd);
-	if (error)
+	if (error) {
+		IOLockUnlock(lock);
 		return error;
+	}
 
 	itable_block = le32(gd.bg_inode_table_lo);
 	if (emp->em_desc_size >= 64)
@@ -1323,14 +1477,18 @@ ext4_write_inode(struct ext4mount *emp, ino_t ino, const struct ext4_inode *in)
 	off_in_block = (uint32_t)(byteoff % emp->em_blocksize);
 
 	error = ext4_blkread(emp, pblk, &bp);
-	if (error)
+	if (error) {
+		IOLockUnlock(lock);
 		return error;
+	}
 
 	memcpy((char *)buf_dataptr(bp) + off_in_block, in,
 	    sizeof(*in) < emp->em_inode_size ? sizeof(*in) : emp->em_inode_size);
 	/* checksum spans the full on-disk inode (our fields + preserved tail) */
 	ext4_inode_csum_set(emp, ino, (char *)buf_dataptr(bp) + off_in_block);
-	return buf_bwrite(bp);   /* synchronous; releases bp */
+	error = ext4_meta_bwrite(emp, bp);   /* journaled; releases bp */
+	IOLockUnlock(lock);
+	return error;
 }
 
 /* Walk an extent tree node to resolve a logical block. buf holds the node. */

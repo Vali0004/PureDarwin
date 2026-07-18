@@ -10,10 +10,17 @@
 , mtools
 , e2fsprogs
 , apfsprogs
+, hfsprogs ? null
+, libdmg-hfsplus ? null
 , cacert
 , espMB ? 64
 , rootMB ? 640
 , apfsMB ? 128
+  # "ext4": ext4 root + APFS test partition (default, historical layout).
+  # "hfs":  EFI + HFS+ root ONLY - no ext4, no APFS. Root is mounted by the
+  #         stock hfs.kext instead of our ext4.kext; xnu-loader already
+  #         prefers an Apple_HFS partition when deriving boot-uuid.
+, rootFsType ? "ext4"
 , testAudioFile ? null
 , imageFileName ? "puredarwin.img"
   # xnu-loader reads this off the ESP at \EFI\BOOT\boot-args.txt
@@ -24,6 +31,8 @@
 
 assert lib.isDerivation baseSystem;
 assert lib.all lib.isDerivation extraPackages;
+assert rootFsType == "ext4" || rootFsType == "hfs";
+assert rootFsType == "hfs" -> (hfsprogs != null && libdmg-hfsplus != null);
 
 stdenv.mkDerivation {
   pname = "puredarwin-image";
@@ -31,31 +40,45 @@ stdenv.mkDerivation {
 
   dontUnpack = true;
 
-  nativeBuildInputs = [ gptfdisk util-linux dosfstools mtools e2fsprogs apfsprogs ];
+  nativeBuildInputs = [ gptfdisk util-linux dosfstools mtools e2fsprogs apfsprogs ]
+    ++ lib.optionals (rootFsType == "hfs") [ hfsprogs libdmg-hfsplus ];
 
   buildPhase = ''
     runHook preBuild
     export MTOOLS_SKIP_CHECK=1
     LINUX_FS_GUID=0FC63DAF-8483-4772-8E79-3D69D8477DE4
     APFS_GUID=7C3457EF-0000-11AA-AA11-00306543ECAC
+    # Apple_HFS: xnu-loader scans GPT for this type GUID and derives boot-uuid
+    # from the volume header's FinderInfo UUID (see xnu-loader devtree.c
+    # read_hfs_uuid_from_blockio); AppleFileSystemDriver then publishes
+    # boot-uuid-media for the matching volume.
+    HFS_GUID=48465300-0000-11AA-AA11-00306543ECAC
 
     img=puredarwin.img
     esp_sectors=$((${toString espMB} * 2048))
     root_sectors=$((${toString rootMB} * 2048))
-    apfs_sectors=$((${toString apfsMB} * 2048))
-    img_sectors=$((2048 + esp_sectors + root_sectors + apfs_sectors + 2048))
+${if rootFsType == "hfs" then ''
+    img_sectors=$((2048 + esp_sectors + root_sectors + 2048))
+    truncate -s $((img_sectors * 512)) $img
+    sgdisk \
+      -n 1:2048:+${toString espMB}M -t 1:EF00       -c 1:"EFI System Partition" \
+      -n 2:0:+${toString rootMB}M   -t 2:$HFS_GUID  -c 2:"Darwin HFS Root" \
+      $img >/dev/null
+
+    read -r root_start root_size <<<"$(sfdisk -d $img | grep -i type=$HFS_GUID \
+      | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
+'' else ''
+    img_sectors=$((2048 + esp_sectors + root_sectors + 2048))
     truncate -s $((img_sectors * 512)) $img
     sgdisk \
       -n 1:2048:+${toString espMB}M -t 1:EF00            -c 1:"EFI System Partition" \
       -n 2:0:+${toString rootMB}M   -t 2:$LINUX_FS_GUID  -c 2:"Darwin ext4 Root" \
-      -n 3:0:+${toString apfsMB}M   -t 3:$APFS_GUID      -c 3:"Darwin APFS Test" \
       $img >/dev/null
 
-    read -r esp_start esp_size <<<"$(sfdisk -d $img | grep -i type=C12A7328 \
-      | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
     read -r root_start root_size <<<"$(sfdisk -d $img | grep -i type=$LINUX_FS_GUID \
       | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
-    read -r apfs_start apfs_size <<<"$(sfdisk -d $img | grep -i type=$APFS_GUID \
+''}
+    read -r esp_start esp_size <<<"$(sfdisk -d $img | grep -i type=C12A7328 \
       | sed -E 's/.*start= *([0-9]+), *size= *([0-9]+),.*/\1 \2/')"
 
     truncate -s $((esp_size * 512)) esp.img
@@ -186,6 +209,21 @@ EOF
     cat > $staging/etc/init/rc.boot <<'EOF'
 #!/bin/sh
 
+${lib.optionalString (rootFsType == "hfs") ''
+# The kernel mounts the root volume read-only and hfs.kext honors that
+# (ext4.kext force-clears MNT_RDONLY instead, which is why the ext4 image
+# never needed this). Classic Darwin does mount -uw / from /etc/rc.
+# IOMediaBSDClient may not have published /dev/disk0s2 yet when rc.boot
+# runs, so retry until the node shows up.
+if test -x /bin/mount; then
+    n=0
+    while test ! -c /dev/disk0s2 -a ! -b /dev/disk0s2 -a $n -lt 50; do
+        /bin/sleep 0.2
+        n=$((n+1))
+    done
+    /bin/mount -t hfs -o update,rw /dev/disk0s2 /
+fi
+''}
 if test -x /bin/hostname; then
     /bin/hostname puredarwin
 fi
@@ -363,7 +401,7 @@ EOF
     chmod 700  $staging/var/root
 
     echo "Image X11 executables:"
-    for executable in Xvfb Xorg xeyes xterm startx; do
+    for executable in Xvfb Xorg xeyes xterm i3 i3bar i3-msg startx; do
       found=
       for candidate in \
         "$staging/bin/$executable" \
@@ -383,27 +421,63 @@ EOF
 
     truncate -s $((root_size * 512)) root.img
 
-    # ext4.kext now maintains metadata_csum checksums and initializes
-    # uninitialized (uninit_bg) block/inode groups on demand, and handles
-    # 64-bit descriptors (see src/Kernel/Extensions/ext4/ext4_csum.c), so we
-    # format with the stock mke2fs feature defaults. The one feature the
-    # driver still can't do is journal replay, so keep ^has_journal; also
-    # keep ^orphan_file (no orphan-file recovery support).
+${lib.optionalString (rootFsType == "hfs") ''
+    # HFS+ root, built without mounting anything: mkfs.hfsplus (hfsprogs)
+    # formats the flat file, then libdmg-hfsplus's hfsplus tool unpacks a
+    # ustar archive of the staging tree into it (files, dirs, symlinks,
+    # mode/uid/gid all come from the tar headers).
+    #
+    # HFS+ here is case-INSENSITIVE (hfsplus/libdmg only speak the
+    # case-insensitive catalog order), so fail loudly on any staged paths
+    # that would collide.
+    collisions=$( (cd "$staging" && find . | tr 'A-Z' 'a-z' | sort | uniq -d) || true)
+    if [ -n "$collisions" ]; then
+      echo "error: case-colliding paths in staging tree (HFS+ is case-insensitive):" >&2
+      echo "$collisions" >&2
+      exit 1
+    fi
+
+    mkfs.hfsplus -v PureDarwin root.img >/dev/null
+
+    printf 'PDHFSRT1' | dd of=root.img bs=1 seek=$((1024 + 104)) conv=notrunc status=none
+    printf 'PDHFSRT1' | dd of=root.img bs=1 seek=$((root_size * 512 - 1024 + 104)) conv=notrunc status=none
+
+    tar --format=ustar --owner=0 --group=0 --hard-dereference \
+      -cf staging.tar -C "$staging" .
+    # hfsplus is chatty (one line per file) and its ASSERTs print to stdout,
+    # so capture everything and only show it on failure.
+    if ! hfsplus root.img untar staging.tar > untar.log 2>&1; then
+      echo "hfsplus untar failed; last lines:" >&2
+      tail -40 untar.log >&2
+      exit 1
+    fi
+
+    # Sanity check the populated catalog (fsck.hfsplus refuses plain files:
+    # "Can't get device block size"): key paths must be listable so a populate
+    # bug fails the build instead of surfacing as mystery corruption at boot.
+    for path in /bin /usr/bin /usr/lib /etc; do
+      hfsplus root.img ls "$path" >/dev/null
+    done
+    hfsplus root.img ls /usr/lib | grep -q libSystem.B.dylib
+    hfsplus root.img ls /bin | grep -q zsh
+
+    dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
+''}
+${lib.optionalString (rootFsType == "ext4") ''
+    # ext4.kext now maintains metadata_csum checksums, initializes
+    # uninitialized (uninit_bg) block/inode groups on demand, handles 64-bit
+    # descriptors (ext4_csum.c), and journals metadata with replay-on-mount
+    # (ext4_jbd.c), so format with a journal. Keep ^orphan_file (no
+    # orphan-file recovery support).
     mke2fs -q -F -t ext4 \
       -b 4096 \
-      -O ^has_journal,^orphan_file \
+      -O ^orphan_file \
       -L darwin-ext4 \
       -d $staging \
       root.img >/dev/null
 
     dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
-
-    truncate -s $((apfs_size * 512)) apfs.img
-    mkapfs -L apfs-test apfs.img >/dev/null
-    $CC -std=c99 -Wall -Wextra -O2 ${./tools/apfs_fixture.c} -o apfs-fixture
-    ./apfs-fixture apfs.img
-    dd if=apfs.img of=$img bs=512 seek=$apfs_start count=$apfs_size conv=notrunc status=none
-
+''}
     runHook postBuild
   '';
 
