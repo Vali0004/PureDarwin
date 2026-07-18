@@ -118,7 +118,7 @@
           userlandBuild = mkPureDarwinBuild {
             pname = "puredarwin-userland";
             src = userlandSource;
-            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "netsetup" "ping" "pcmplay" "startx" "iokittest" "ioreg" "mousemon" "mount" "umount" ]
+            buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "netsetup" "ping" "pcmplay" "startx" "iokittest" "ioreg" "mousemon" "mount" "umount" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
             enableProjects = false;
             enableKernel = false;
@@ -542,6 +542,29 @@
               openssl = opensslBuild;
               zlib = xvfbZlibBuild;
             };
+          gitBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/git.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              git = pkgs.git;
+              zlib = xvfbZlibBuild;
+              curl = curlBuild;
+              openssl = opensslBuild;
+            };
+          migcomDarwinBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/migcom-darwin.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+            };
+          xkbcommonBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/xkbcommon.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              libxcb = xcbBuild;
+              libXau = xvfbLibXauBuild;
+              libXdmcp = xvfbLibXdmcpBuild;
+              xkeyboard-config = xkeyboardConfigBuild;
+            };
           fastfetchBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/fastfetch.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -702,6 +725,9 @@
             file = fileBuild;
             openssl = opensslBuild;
             curl = curlBuild;
+            git = gitBuild;
+            migcomDarwin = migcomDarwinBuild;
+            #xkbcommon = xkbcommonBuild;
             fastfetch = fastfetchBuild;
             corefoundation = coreFoundationBuild;
             icucore = icuCoreBuild;

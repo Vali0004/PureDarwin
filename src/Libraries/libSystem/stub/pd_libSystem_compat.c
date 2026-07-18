@@ -2102,3 +2102,41 @@ __cxa_demangle(const char *mangled_name, char *output_buffer, size_t *length, in
     if (status) *status = -2; /* invalid mangled name / demangling not supported */
     return NULL;
 }
+
+/*
+ * slot_name (mach/mach_init.h): hostinfo(1)'s only non-MIG dependency.
+ * Real Darwin has a large historical table covering every CPU type/subtype
+ * combination it ever ran on (68k, PowerPC, ARM, ...); PureDarwin only ever
+ * targets CPU_TYPE_X86_64, so give real names for that family and a generic
+ * fallback for anything else rather than porting the whole table.
+ */
+#include <mach/machine.h>
+
+void
+slot_name(cpu_type_t cpu_type, cpu_subtype_t cpu_subtype, char **cpu_name, char **cpu_subname)
+{
+    static char subname_buf[32];
+
+    if (cpu_type == CPU_TYPE_X86_64) {
+        *cpu_name = "x86_64";
+        switch (cpu_subtype & ~CPU_SUBTYPE_MASK) {
+        case CPU_SUBTYPE_X86_64_ALL:
+            *cpu_subname = "all";
+            return;
+        case CPU_SUBTYPE_X86_64_H:
+            *cpu_subname = "Haswell";
+            return;
+        default:
+            break;
+        }
+    } else if (cpu_type == CPU_TYPE_I386) {
+        *cpu_name = "i386";
+        *cpu_subname = "all";
+        return;
+    } else {
+        *cpu_name = "unknown";
+    }
+
+    snprintf(subname_buf, sizeof(subname_buf), "subtype %d", cpu_subtype);
+    *cpu_subname = subname_buf;
+}

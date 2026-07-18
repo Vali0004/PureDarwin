@@ -108,6 +108,7 @@ target_sources(libc_static PRIVATE
     gen/NetBSD/utmpx.c           # setutxent/getutxent/endutxent (fastfetch users detection)
     gen/utmpx-darwin.c          # __utx_magic__/_utmpx32_64 (utmpx.c internals)
     sys/posix_spawn.c           # posix_spawnp (fastfetch/popen/wordexp)
+    gen/FreeBSD/utime.c         # git
     gen/pd_wait.c                # _wait forwarder (__weak_reference alias not emitted)
     compat-43/FreeBSD/killpg.c   # _killpg (zsh job control)
     gen/FreeBSD/nice.c           # _nice (zsh BGNICE backgrounded-job priority)
