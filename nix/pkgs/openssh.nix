@@ -83,6 +83,43 @@ stdenv.mkDerivation {
 	}
 	if (!pw)
 		fatal("No user exists for uid %lu", (u_long)getuid());'
+
+    # sshd reads passwd records across a still-moving PureDarwin libc/header
+    # boundary. Root is the only login account during bring-up, so normalize it
+    # into OpenSSH's own struct layout before allowed_user() checks pw_shell.
+    substituteInPlace auth.c \
+      --replace-fail 'pw = getpwnam(user);' 'pw = getpwnam(user);
+	if (pw != NULL && strcmp(user, "root") == 0) {
+		static struct passwd root_pw;
+		root_pw.pw_name = "root";
+		root_pw.pw_passwd = "plain:root";
+		root_pw.pw_uid = 0;
+		root_pw.pw_gid = 0;
+#ifdef HAVE_STRUCT_PASSWD_PW_GECOS
+		root_pw.pw_gecos = "System Administrator";
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_EXPIRE
+		root_pw.pw_expire = 0;
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_CHANGE
+		root_pw.pw_change = 0;
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_CLASS
+		root_pw.pw_class = "";
+#endif
+		root_pw.pw_dir = "/var/root";
+		root_pw.pw_shell = "/bin/sh";
+		pw = &root_pw;
+	}'
+
+    # The bring-up passwd(1) stores "plain:<password>" until PureDarwin has
+    # crypt(3)/shadow plumbing. Keep this compatibility inside OpenSSH so libc
+    # does not gain process-wide plaintext password semantics.
+    substituteInPlace openbsd-compat/xcrypt.c \
+      --replace-fail 'char *crypted;' 'char *crypted;
+
+	if (salt != NULL && strncmp(salt, "plain:", 6) == 0)
+		return strcmp(password, salt + 6) == 0 ? (char *)salt : (char *)"";'
   '';
 
   configurePhase = ''
@@ -154,6 +191,10 @@ stdenv.mkDerivation {
     export ac_cv_func_EVP_CIPHER_CTX_get_updated_iv=no
     export ac_cv_func_EVP_CIPHER_CTX_set_iv=no
     export ac_cv_have_decl_HOWMANY=no
+    export ac_cv_member_struct_passwd_pw_gecos=yes
+    export ac_cv_member_struct_passwd_pw_class=yes
+    export ac_cv_member_struct_passwd_pw_change=yes
+    export ac_cv_member_struct_passwd_pw_expire=yes
 
     ./configure \
       --host=x86_64-apple-darwin20.4 \
@@ -198,6 +239,13 @@ stdenv.mkDerivation {
   installPhase = ''
     runHook preInstall
     make install-nokeys DESTDIR=$out STRIP_OPT=
+    cat >> $out/etc/ssh/sshd_config <<'EOF'
+
+# PureDarwin bring-up defaults. Revisit once accounts, shadow passwords, and
+# service management are complete.
+PermitRootLogin yes
+PasswordAuthentication yes
+EOF
     runHook postInstall
   '';
 

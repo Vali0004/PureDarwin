@@ -498,11 +498,12 @@ ${lib.optionalString (rootFsType == "ext4") ''
       -L darwin-ext4 \
       -d $staging \
       root.img >/dev/null
-    debugfs -w \
-      -R "set_inode_field /var/empty uid 0" \
-      -R "set_inode_field /var/empty gid 0" \
-      -R "set_inode_field /var/empty mode 040755" \
-      root.img >/dev/null
+    cat > root-debugfs.cmds <<'EOF'
+set_inode_field /var/empty uid 0
+set_inode_field /var/empty gid 0
+set_inode_field /var/empty mode 040755
+EOF
+    debugfs -w -f root-debugfs.cmds root.img >/dev/null
 
     dd if=root.img of=$img bs=512 seek=$root_start count=$root_size conv=notrunc status=none
 ''}

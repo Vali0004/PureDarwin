@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
@@ -566,35 +567,6 @@ alarm(unsigned int seconds)
         + (old_it.it_value.tv_usec != 0 ? 1u : 0u);
 }
 
-void
-arc4random_buf(void *buf, size_t nbytes)
-{
-    /*
-     * Not a cryptographic source - PureDarwin has no arc4random engine yet.
-     * A splitmix64-seeded xorshift keeps xterm's callers (temp-name salting,
-     * not security-critical here) fed with non-degenerate bytes.
-     */
-    static uint64_t state;
-    unsigned char *out = buf;
-    size_t i;
-
-    if (state == 0) {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        state = ((uint64_t)tv.tv_sec << 20) ^ (uint64_t)tv.tv_usec
-            ^ ((uint64_t)(uintptr_t)&state);
-        if (state == 0) {
-            state = 0x9e3779b97f4a7c15ULL;
-        }
-    }
-
-    for (i = 0; i < nbytes; i++) {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        out[i] = (unsigned char)(state >> 24);
-    }
-}
 
 int
 wcwidth(wchar_t wc)
@@ -1094,24 +1066,6 @@ wctob(wint_t c)
 }
 
 /*
- * getpwent/endpwent: nano only calls these while iterating the passwd
- * database for username tab-completion. PureDarwin exposes no such
- * enumerable database (getpwnam_r/getpwuid_r above answer single lookups
- * from a fixed table), so report "no more entries" immediately - nano
- * treats that as an empty completion list, not an error.
- */
-struct passwd *
-getpwent(void)
-{
-    return NULL;
-}
-
-void
-endpwent(void)
-{
-}
-
-/*
  * rewinddir$INODE64: opendir$INODE64/readdir$INODE64 (from libc_static) read
  * directory entries directly off the fd with no additional userspace
  * buffering layer here, so resetting the fd's file offset is equivalent to
@@ -1314,64 +1268,6 @@ system(const char *command)
     if (waitpid(pid, &status, 0) < 0)
         return -1;
     return status;
-}
-
-static uint64_t pd_random_state = 0x2545F4914F6CDD1DULL;
-
-void
-srandom(unsigned int seed)
-{
-    pd_random_state = seed ? seed : 1;
-}
-
-long
-random(void)
-{
-    pd_random_state ^= pd_random_state << 13;
-    pd_random_state ^= pd_random_state >> 7;
-    pd_random_state ^= pd_random_state << 17;
-    return (long)(pd_random_state & 0x7fffffff);
-}
-
-/*
- * initstate/setstate/srandomdev: BSD random(3) companions (i3 calls
- * initstate at startup). Our generator keeps its state in
- * pd_random_state rather than the caller's buffer; callers only ever
- * hand these pointers back to setstate(), so tracking which buffer is
- * "current" preserves the visible contract without porting the full
- * FreeBSD trinomial generator.
- */
-static char *pd_random_statebuf;
-
-char *
-initstate(unsigned int seed, char *state, size_t n)
-{
-    char *old = pd_random_statebuf;
-    if (n < 8)
-        return NULL;   /* matches random(3): too little state */
-    pd_random_statebuf = state;
-    srandom(seed);
-    return old ? old : (char *)&pd_random_state;
-}
-
-char *
-setstate(const char *state)
-{
-    char *old = pd_random_statebuf;
-    if (state == NULL)
-        return NULL;
-    pd_random_statebuf = (char *)(uintptr_t)state;
-    return old ? old : (char *)&pd_random_state;
-}
-
-void
-srandomdev(void)
-{
-    extern int getentropy(void *, size_t);
-    uint64_t e = 0;
-    if (getentropy(&e, sizeof(e)) != 0)
-        e = ((uint64_t)getpid() << 32) ^ (uint64_t)time(NULL);
-    pd_random_state = e ? e : 1;
 }
 
 ssize_t
@@ -2123,26 +2019,6 @@ __udivti3(unsigned __int128 a, unsigned __int128 b)
     return quotient;
 }
 
-/*
- * __cxa_demangle: only reachable from libcxxabi's own
- * demangling_terminate_handler (cxa_default_handlers.cpp), which prints a
- * prettified type name for an uncaught-exception diagnostic before
- * aborting - not on any real functional path. A full Itanium demangler is
- * a large, self-contained component on its own (thousands of lines in
- * llvm's demangle/); __cxa_demangle's contract explicitly allows returning
- * NULL with a negative *status for "demangling failed", which is what
- * every caller (including that terminate handler) already falls back
- * correctly from by printing the raw mangled name instead.
- */
-char *
-__cxa_demangle(const char *mangled_name, char *output_buffer, size_t *length, int *status)
-{
-    (void)mangled_name;
-    (void)output_buffer;
-    (void)length;
-    if (status) *status = -2; /* invalid mangled name / demangling not supported */
-    return NULL;
-}
 
 /*
  * slot_name (mach/mach_init.h): hostinfo(1)'s only non-MIG dependency.
@@ -2180,4 +2056,206 @@ slot_name(cpu_type_t cpu_type, cpu_subtype_t cpu_subtype, char **cpu_name, char 
 
     snprintf(subname_buf, sizeof(subname_buf), "subtype %d", cpu_subtype);
     *cpu_subname = subname_buf;
+}
+
+/*
+ * Batch from the full-image import sweep (2026-07-18): every symbol below is
+ * a lazy bind somewhere in the shipped image (i3/glib family, ICU, CF,
+ * fastfetch) that would abort the process the first time it's called.
+ */
+
+/* creat(2): historical alias for open(O_WRONLY|O_CREAT|O_TRUNC). */
+int
+creat(const char *path, mode_t mode)
+{
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+}
+
+/*
+ * close$NOCANCEL: the non-cancelable variant glib picks up from the SDK
+ * headers. PD's close is not a pthread cancellation point anyway, so the
+ * plain syscall wrapper is exactly the right behavior.
+ */
+int __pd_close_nocancel(int fd) __asm("_close$NOCANCEL");
+int
+__pd_close_nocancel(int fd)
+{
+    return close(fd);
+}
+
+/*
+ * realpath: stdlib.h decorates the definition in stdlib/FreeBSD/realpath.c
+ * as _realpath$DARWIN_EXTSN, but ICU (built against a plain-POSIX profile)
+ * imports the undecorated _realpath. Forward one to the other.
+ */
+extern char *__pd_realpath_extsn(const char * __restrict, char * __restrict)
+    __asm("_realpath$DARWIN_EXTSN");
+char *__pd_realpath_plain(const char * __restrict, char * __restrict)
+    __asm("_realpath");
+char *
+__pd_realpath_plain(const char * __restrict path, char * __restrict resolved)
+{
+    return __pd_realpath_extsn(path, resolved);
+}
+
+/*
+ * dlopen_preflight(3): forwarded to dyld the same way as dlopen/dlsym above.
+ * CF uses it to probe bundles before loading them.
+ */
+bool
+dlopen_preflight(const char *path)
+{
+    typedef bool (*preflight_fn)(const char *, void *);
+    static preflight_fn fn;
+
+    if (fn == NULL &&
+        !_dyld_func_lookup("__dyld_dlopen_preflight_internal", (void **)&fn)) {
+        return false;
+    }
+
+    return fn(path, __builtin_return_address(0));
+}
+
+/*
+ * fmtcheck(3): validate that `fmt` has the same conversion specifiers as
+ * `fmt_default`; return fmt if compatible, fmt_default otherwise. Used by
+ * file(1) for magic-supplied format strings. This is a conservative
+ * implementation: it compares the ordered list of conversion characters
+ * (skipping flags/width/precision, honoring %% and length modifiers only to
+ * find the conversion char) and rejects on any mismatch.
+ */
+static const char *
+__pd_fmt_next_conv(const char *p, char *out)
+{
+    while ((p = strchr(p, '%')) != NULL) {
+        p++;
+        if (*p == '%') { p++; continue; }
+        while (*p != '\0' && strchr("#0- +'123456789.*hljtzq", *p) != NULL)
+            p++;
+        if (*p == '\0')
+            return NULL;
+        *out = *p;
+        return p + 1;
+    }
+    return NULL;
+}
+
+const char *
+fmtcheck(const char *fmt, const char *fmt_default)
+{
+    const char *a = fmt, *b = fmt_default;
+    char ca, cb;
+
+    if (fmt == NULL)
+        return fmt_default;
+
+    for (;;) {
+        a = __pd_fmt_next_conv(a, &ca);
+        b = __pd_fmt_next_conv(b, &cb);
+        if (a == NULL && b == NULL)
+            return fmt;
+        if (a == NULL || b == NULL || ca != cb)
+            return fmt_default;
+    }
+}
+
+/*
+ * swap_fat_header/swap_fat_arch/swap_fat_arch_64 (libmacho): fat headers are
+ * stored big-endian; these unconditionally byte-swap every field (the real
+ * ones take a target byte order argument, but the only sensible use on a
+ * little-endian host is a full swap, which is also an involution).
+ * fastfetch uses them to inspect fat binaries.
+ */
+struct __pd_fat_header { uint32_t magic, nfat_arch; };
+struct __pd_fat_arch { uint32_t cputype, cpusubtype, offset, size, align; };
+struct __pd_fat_arch_64 {
+    uint32_t cputype, cpusubtype;
+    uint64_t offset, size;
+    uint32_t align, reserved;
+};
+
+void
+swap_fat_header(struct __pd_fat_header *h, int target_byte_order)
+{
+    (void)target_byte_order;
+    h->magic = __builtin_bswap32(h->magic);
+    h->nfat_arch = __builtin_bswap32(h->nfat_arch);
+}
+
+void
+swap_fat_arch(struct __pd_fat_arch *a, uint32_t n, int target_byte_order)
+{
+    (void)target_byte_order;
+    for (uint32_t i = 0; i < n; i++) {
+        a[i].cputype = __builtin_bswap32(a[i].cputype);
+        a[i].cpusubtype = __builtin_bswap32(a[i].cpusubtype);
+        a[i].offset = __builtin_bswap32(a[i].offset);
+        a[i].size = __builtin_bswap32(a[i].size);
+        a[i].align = __builtin_bswap32(a[i].align);
+    }
+}
+
+void
+swap_fat_arch_64(struct __pd_fat_arch_64 *a, uint32_t n, int target_byte_order)
+{
+    (void)target_byte_order;
+    for (uint32_t i = 0; i < n; i++) {
+        a[i].cputype = __builtin_bswap32(a[i].cputype);
+        a[i].cpusubtype = __builtin_bswap32(a[i].cpusubtype);
+        a[i].offset = __builtin_bswap64(a[i].offset);
+        a[i].size = __builtin_bswap64(a[i].size);
+        a[i].align = __builtin_bswap32(a[i].align);
+        a[i].reserved = __builtin_bswap32(a[i].reserved);
+    }
+}
+
+/*
+ * strxfrm: the FreeBSD source needs the __collate_* locale machinery, which
+ * PD doesn't build (C locale only). In the C locale strxfrm is defined to be
+ * a plain copy whose result compares like strcmp - i.e. strlcpy semantics.
+ */
+size_t
+strxfrm(char * __restrict dst, const char * __restrict src, size_t n)
+{
+    size_t len = strlen(src);
+
+    if (n != 0) {
+        size_t copy = (len >= n) ? n - 1 : len;
+        memcpy(dst, src, copy);
+        dst[copy] = '\0';
+    }
+    return len;
+}
+
+
+/*
+ * qsort_b: referenced by gen/fts.c for the fts_open_b (block comparator)
+ * path. Implemented on top of the real FreeBSD qsort_r with a trampoline
+ * that invokes the block. Blocks-ABI note: a block pointer is a struct whose
+ * 4th word is the invoke function taking the block itself as the hidden
+ * first argument; calling it directly avoids needing the BlocksRuntime.
+ */
+struct __pd_block_layout {
+    void *isa;
+    int flags;
+    int reserved;
+    int (*invoke)(void *block, const void *a, const void *b);
+};
+
+extern void qsort_r(void *, size_t, size_t, void *,
+    int (*)(void *, const void *, const void *));
+
+static int
+__pd_qsort_b_thunk(void *block, const void *a, const void *b)
+{
+    struct __pd_block_layout *bl = block;
+    return bl->invoke(bl, a, b);
+}
+
+void __pd_qsort_b(void *base, size_t nel, size_t width, void *block)
+    __asm("_qsort_b");
+void
+__pd_qsort_b(void *base, size_t nel, size_t width, void *block)
+{
+    qsort_r(base, nel, width, block, __pd_qsort_b_thunk);
 }

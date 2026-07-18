@@ -151,6 +151,14 @@ setpwent(void)
 	pw_iter = fopen("/etc/passwd", "r");
 }
 
+int
+setpassent(int stayopen)
+{
+	(void)stayopen;
+	setpwent();
+	return pw_iter != NULL;
+}
+
 void
 endpwent(void)
 {

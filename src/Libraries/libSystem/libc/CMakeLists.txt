@@ -120,6 +120,12 @@ target_sources(libc_static PRIVATE
     string/stpncpy.c             # _stpncpy
     secure/stpcpy_chk.c          # ___stpcpy_chk
     secure/stpncpy_chk.c         # ___stpncpy_chk
+    stdlib/FreeBSD/div.c         # _div (ICU)
+    stdlib/FreeBSD/random.c      # real random(3) family (replaces xorshift stubs)
+    stdio/FreeBSD/tmpfile.c      # _tmpfile (i3/pango)
+    stdio/FreeBSD/open_memstream.c # _open_memstream (zsh)
+    gen/fts.c                    # _fts_*$INODE64 (nftw dependency)
+    gen/nftw.c                   # _nftw$INODE64 (glib/i3)
     gen/FreeBSD/glob.c           # _glob$INODE64 / _globfree
     gen/FreeBSD/siglist.c        # _sys_siglist / _sys_signame
     gen/confstr.c                # _confstr (shell_cmds getopt et al)
@@ -237,6 +243,8 @@ target_sources(libc_static PRIVATE
     regex/TRE/lib/tre-parse.c
     regex/TRE/lib/tre-stack.c
     stdlib/FreeBSD/qsort.c
+    stdlib/FreeBSD/qsort_r.c     # _qsort_r (also backs qsort_b for fts)
+    stdlib/FreeBSD/heapsort_r.c  # ___heapsort_r (qsort_r deep-recursion fallback)
     stdlib/FreeBSD/realpath.c
     emulated/statvfs.c           # _statvfs/_fstatvfs
     secure/memcpy_chk.c
@@ -380,6 +388,8 @@ set_source_files_properties(stdlib/FreeBSD/exit.c stdlib/FreeBSD/atexit.c
     db/recno/FreeBSD/rec_put.c db/recno/FreeBSD/rec_search.c
     db/recno/FreeBSD/rec_seq.c db/recno/FreeBSD/rec_utils.c
     db/mpool/FreeBSD/mpool.c
+    stdlib/FreeBSD/random.c
+    stdio/FreeBSD/tmpfile.c
     PROPERTIES COMPILE_FLAGS "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/_fbsd_compat_.h -D__DBINTERFACE_PRIVATE=1")
 # wcscoll needs the collate internals (__collate_lookup_which etc.), gated
 # behind __LIBC__ in collate.h - same as fnmatch.c above.

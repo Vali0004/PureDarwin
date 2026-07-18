@@ -82,9 +82,10 @@ else()
     list(APPEND _abi_flags -idirafter ${_libcxx}/include)
 endif()
 
-# The subset dyld actually needs. cxa_demangle/cxa_thread_atexit/cxa_vector/
+# The subset dyld actually needs. cxa_thread_atexit/cxa_vector/
 # aix/noexception are deliberately excluded (not referenced by dyld).
 set(_abi_srcs
+    cxa_demangle
     stdlib_new_delete
     cxa_aux_runtime
     cxa_handlers

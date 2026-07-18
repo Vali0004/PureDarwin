@@ -40,3 +40,33 @@ arc4random_uniform(uint32_t upper_bound)
 	} while (r < min);
 	return r % upper_bound;
 }
+
+uint32_t
+arc4random(void)
+{
+	return pd_random_u32();
+}
+
+/*
+ * Every call draws from getentropy() (the kernel RNG) rather than a
+ * userspace stream cipher: correct output distribution and fork-safety for
+ * free, at the cost of a syscall per chunk. getentropy() caps requests at
+ * 256 bytes, so larger buffers are filled in chunks.
+ */
+void
+arc4random_buf(void *buf, size_t nbytes)
+{
+	unsigned char *p = buf;
+
+	while (nbytes > 0) {
+		size_t chunk = nbytes > 256 ? 256 : nbytes;
+
+		if (getentropy(p, chunk) != 0) {
+			/* only fails for buflen>256; keep output moving */
+			for (size_t i = 0; i < chunk; i++)
+				p[i] = (unsigned char)pd_random_u32();
+		}
+		p += chunk;
+		nbytes -= chunk;
+	}
+}
