@@ -754,6 +754,23 @@ static int
 ext4_drop_inode(struct ext4node *ep)
 {
 	int error;
+	uint16_t links = le16(ep->e_raw.i_links_count);
+
+	/*
+	 * Multi-link files (hardlinks) must only be torn down once the
+	 * last dirent referencing them is gone. This is what makes
+	 * git's finalize-via-link()+unlink() sequence safe: link() adds a
+	 * second dirent to the same inode and bumps this count to 2, so
+	 * the unlink() of the temp name must merely drop it back to 1,
+	 * not free the inode's extents out from under the surviving name.
+	 */
+	if (links > 0)
+		links--;
+	ep->e_raw.i_links_count = le16(links);
+	if (links > 0) {
+		ext4_touch_inode(&ep->e_raw);
+		return ext4_write_inode(ep->e_mount, ep->e_ino, &ep->e_raw);
+	}
 
 	/*
 	 * POSIX "delete while open": if something still has this vnode
@@ -767,7 +784,6 @@ ext4_drop_inode(struct ext4node *ep)
 	 * once nothing references the vnode anymore.
 	 */
 	if (ep->e_vp && vnode_isinuse(ep->e_vp, 0)) {
-		ep->e_raw.i_links_count = 0;
 		ep->e_raw.i_dtime = ep->e_raw.i_ctime;
 		error = ext4_write_inode(ep->e_mount, ep->e_ino, &ep->e_raw);
 		if (error)
@@ -790,17 +806,29 @@ ext4_drop_inode_ino(struct ext4mount *emp, ino_t ino)
 	struct ext4_inode raw;
 	enum vtype vtype;
 	struct timeval tv;
+	uint16_t links;
 	int error;
 
 	error = ext4_read_inode(emp, ino, &raw);
 	if (error)
 		return error;
+
+	/* Same last-link-only teardown as ext4_drop_inode(); see its comment. */
+	links = le16(raw.i_links_count);
+	if (links > 0)
+		links--;
+	raw.i_links_count = le16(links);
+	if (links > 0) {
+		microtime(&tv);
+		raw.i_ctime = le32((uint32_t)tv.tv_sec);
+		return ext4_write_inode(emp, ino, &raw);
+	}
+
 	vtype = ext4_mode_to_vtype(le16(raw.i_mode));
 	error = ext4_inode_free_extents(emp, &raw);
 	if (error)
 		return error;
 	microtime(&tv);
-	raw.i_links_count = 0;
 	raw.i_dtime = le32((uint32_t)tv.tv_sec);
 	raw.i_ctime = le32((uint32_t)tv.tv_sec);
 	error = ext4_write_inode(emp, ino, &raw);

@@ -312,7 +312,7 @@ bool IOMediaBSDClient::init(OSDictionary * properties)
     _minors  = gIOMediaBSDClientGlobals.getMinors();
     _retryCall = 0;
     _retryCount = 0;
-    _readyRetryCount = 0;
+    _bsdNotifier = 0;
     _nodesCreated = false;
     _devNodesPublished = false;
 
@@ -324,6 +324,12 @@ void IOMediaBSDClient::free()
     //
     // Free all of this object's outstanding resources.
     //
+
+    if ( _bsdNotifier )
+    {
+        _bsdNotifier->remove();
+        _bsdNotifier = 0;
+    }
 
     if ( _retryCall )
     {
@@ -339,7 +345,22 @@ void IOMediaBSDClient::scheduleCreateNodesRetry()
 {
     AbsoluteTime deadline;
 
-    if ( _devNodesPublished || _retryCount >= 300 ) return;
+    if ( _devNodesPublished ) return;
+
+    // Ticks spent waiting for devfs to come up are unbounded: under TCG the
+    // wall-clock gap between media probe and devfs_sinit() can be arbitrarily
+    // large, and the IOBSD notification is only a backstop.  Only genuine
+    // publish failures after devfs is ready count against the retry budget.
+    if ( devfs_is_ready() )
+    {
+        if ( _retryCount >= 300 )
+        {
+            IOLog("IOMediaBSDClient: giving up on devfs node publish "
+                  "after %u retries\n", (unsigned) _retryCount);
+            return;
+        }
+        _retryCount++;
+    }
 
     if ( _retryCall == 0 )
     {
@@ -351,7 +372,6 @@ void IOMediaBSDClient::scheduleCreateNodesRetry()
         }
     }
 
-    _retryCount++;
     clock_interval_to_deadline(1, kSecondScale, &deadline);
     thread_call_enter_delayed(_retryCall, deadline);
 }
@@ -370,12 +390,6 @@ void IOMediaBSDClient::createNodesRetry(thread_call_param_t param0,
 
     if ( devfs_is_ready() == 0 )
     {
-        client->scheduleCreateNodesRetry();
-        return;
-    }
-    if ( client->_readyRetryCount < 5 )
-    {
-        client->_readyRetryCount++;
         client->scheduleCreateNodesRetry();
         return;
     }
@@ -398,6 +412,34 @@ void IOMediaBSDClient::createNodesRetry(thread_call_param_t param0,
               media->getName() ? media->getName() : "(null)");
         client->scheduleCreateNodesRetry();
     }
+}
+
+bool IOMediaBSDClient::bsdResourcePublished(void * target,
+                                            __unused void * refCon,
+                                            __unused IOService * newService,
+                                            IONotifier * notifier)
+{
+    //
+    // The "IOBSD" resource is published from bsd_autoconf(), after vfsinit()
+    // has brought devfs up.  This event-driven path guarantees the dev nodes
+    // get published even if the timed retry chain was exhausted while devfs
+    // was still down (which routinely happens under TCG, where bsd_init can
+    // lag device probing by minutes of wall-clock time).
+    //
+
+    IOMediaBSDClient * client = (IOMediaBSDClient *) target;
+
+    if ( client == 0 ) return true;
+
+    createNodesRetry(client, 0);
+
+    if ( client->_devNodesPublished && notifier )
+    {
+        notifier->remove();
+        if ( client->_bsdNotifier == notifier )  client->_bsdNotifier = 0;
+    }
+
+    return true;
 }
 
 bool IOMediaBSDClient::start(IOService * provider)
@@ -444,6 +486,19 @@ bool IOMediaBSDClient::start(IOService * provider)
     {
         IOLog("IOMediaBSDClient: devfs not ready, scheduling node retry for media=%s\n",
               media->getName() ? media->getName() : "(null)");
+
+        if ( _bsdNotifier == 0 )
+        {
+            OSDictionary * matching = IOService::resourceMatching("IOBSD");
+            if ( matching )
+            {
+                _bsdNotifier = IOService::addMatchingNotification(
+                                   gIOPublishNotification, matching,
+                                   bsdResourcePublished, this, 0);
+                matching->release();
+            }
+        }
+
         scheduleCreateNodesRetry();
     }
 

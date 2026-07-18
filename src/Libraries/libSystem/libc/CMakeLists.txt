@@ -122,6 +122,7 @@ target_sources(libc_static PRIVATE
     secure/stpncpy_chk.c         # ___stpncpy_chk
     stdlib/FreeBSD/div.c         # _div (ICU)
     stdlib/FreeBSD/random.c      # real random(3) family (replaces xorshift stubs)
+    gen/FreeBSD/getmntinfo.c     # real getmntinfo over getfsstat (df)
     stdio/FreeBSD/tmpfile.c      # _tmpfile (i3/pango)
     stdio/FreeBSD/open_memstream.c # _open_memstream (zsh)
     gen/fts.c                    # _fts_*$INODE64 (nftw dependency)

@@ -1429,15 +1429,6 @@ statvfs(const char *path, struct statvfs *buf)
     return 0;
 }
 
-int __pd_getmntinfo_inode64(struct statfs **mntbufp, int flags) __asm("_getmntinfo$INODE64");
-
-int
-__pd_getmntinfo_inode64(struct statfs **mntbufp, int flags)
-{
-    (void)flags;
-    *mntbufp = NULL;
-    return 0;
-}
 
 static const char *
 pd_strptime_num(const char *s, int mindigits, int maxdigits, int *out)

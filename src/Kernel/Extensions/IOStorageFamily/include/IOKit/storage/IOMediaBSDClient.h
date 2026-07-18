@@ -61,7 +61,7 @@ private:
     AnchorTable * _anchors;
     thread_call_t _retryCall;
     UInt32        _retryCount;
-    UInt32        _readyRetryCount;
+    IONotifier *  _bsdNotifier;
     MinorTable *  _minors;
     bool          _nodesCreated;
     bool          _devNodesPublished;
@@ -86,6 +86,11 @@ protected:
 
     static void createNodesRetry(thread_call_param_t param0,
                                  thread_call_param_t param1);
+
+    static bool bsdResourcePublished(void *      target,
+                                     void *      refCon,
+                                     IOService * newService,
+                                     IONotifier * notifier);
 
     /*
      * Free all of this object's outstanding resources.
