@@ -265,8 +265,6 @@ _bsdthread_create(struct proc *p,
 	bool start_suspended = (flags & PTHREAD_START_SUSPENDED);
 
 	if (pthread_kern->proc_get_register(p) == 0) {
-		printf("PD-DIAG: _bsdthread_create: proc not bsdthread_register'd (pid=%d)\n",
-		    proc_pid(p));
 		return EINVAL;
 	}
 
@@ -274,13 +272,6 @@ _bsdthread_create(struct proc *p,
 
 	kret = pthread_kern->thread_create(ctask, &th);
 	if (kret != KERN_SUCCESS) {
-		/* PD-DIAG: userland flattens this ENOMEM to a generic EAGAIN
-		 * ("Resource temporarily unavailable") with no indication of
-		 * what actually failed - log the real kern_return_t here so a
-		 * real cause (KERN_RESOURCE_SHORTAGE vs KERN_NO_SPACE etc) is
-		 * visible instead of guessing from userland's flattened error. */
-		printf("PD-DIAG: _bsdthread_create: thread_create() failed kr=%d (pid=%d)\n",
-		    (int)kret, proc_pid(p));
 		return(ENOMEM);
 	}
 	thread_reference(th);
@@ -295,8 +286,6 @@ _bsdthread_create(struct proc *p,
 	}
 
 	if ((flags & PTHREAD_START_CUSTOM) == 0) {
-		printf("PD-DIAG: _bsdthread_create: no PTHREAD_START_CUSTOM, flags=0x%x (pid=%d)\n",
-		    flags, proc_pid(p));
 		error = EINVAL;
 		goto out;
 	}
@@ -411,8 +400,6 @@ _bsdthread_create(struct proc *p,
 		thread_qos_policy_data_t qos;
 
 		if (!_pthread_priority_to_policy(flags & PTHREAD_START_QOSCLASS_MASK, &qos)) {
-			printf("PD-DIAG: _bsdthread_create: bad QoS in flags=0x%x (pid=%d)\n",
-			    flags, proc_pid(p));
 			error = EINVAL;
 			goto out;
 		}
@@ -443,8 +430,6 @@ _bsdthread_create(struct proc *p,
 	if (!start_suspended) {
 		kret = pthread_kern->thread_resume(th);
 		if (kret != KERN_SUCCESS) {
-			printf("PD-DIAG: _bsdthread_create: thread_resume failed kr=%d (pid=%d)\n",
-			    (int)kret, proc_pid(p));
 			error = EINVAL;
 			goto out;
 		}
@@ -547,13 +532,8 @@ _bsdthread_register(struct proc *p,
 	kern_return_t kr;
 	size_t pthread_init_sz = 0;
 
-	printf("PD-DIAG: _bsdthread_register: pid=%d pthsize=%d data=%d dsize=%d\n",
-	    proc_pid(p), pthsize, (int)(pthread_init_data != 0),
-	    (int)pthread_init_data_size);
 	/* syscall randomizer test can pass bogus values */
 	if (pthsize < 0 || pthsize > MAX_PTHREAD_SIZE) {
-		printf("PD-DIAG: _bsdthread_register: EINVAL bad pthsize (pid=%d)\n",
-		    proc_pid(p));
 		return(EINVAL);
 	}
 	/*
@@ -562,21 +542,14 @@ _bsdthread_register(struct proc *p,
 	 */
 	if (pthread_init_data != 0) {
 		if (pthread_init_data_size < sizeof(data.version)) {
-			printf("PD-DIAG: _bsdthread_register: EINVAL tiny data_size (pid=%d)\n",
-			    proc_pid(p));
 			return EINVAL;
 		}
 		pthread_init_sz = MIN(sizeof(data), (size_t)pthread_init_data_size);
 		int ret = copyin(pthread_init_data, &data, pthread_init_sz);
 		if (ret) {
-			printf("PD-DIAG: _bsdthread_register: copyin=%d (pid=%d)\n",
-			    ret, proc_pid(p));
 			return ret;
 		}
 		if (data.version != (size_t)pthread_init_data_size) {
-			printf("PD-DIAG: _bsdthread_register: EINVAL version %lu != %lu (pid=%d)\n",
-			    (unsigned long)data.version,
-			    (unsigned long)pthread_init_data_size, proc_pid(p));
 			return EINVAL;
 		}
 	} else {
@@ -589,8 +562,6 @@ _bsdthread_register(struct proc *p,
 
 	/* prevent multiple registrations */
 	if (pthread_kern->proc_get_register(p) != 0) {
-		printf("PD-DIAG: _bsdthread_register: EINVAL already registered (pid=%d)\n",
-		    proc_pid(p));
 		return(EINVAL);
 	}
 
@@ -666,16 +637,12 @@ _bsdthread_register(struct proc *p,
 
 		kr = copyout(&data, pthread_init_data, pthread_init_sz);
 		if (kr != KERN_SUCCESS) {
-			printf("PD-DIAG: _bsdthread_register: EINVAL copyout kr=%d (pid=%d)\n",
-			    (int)kr, proc_pid(p));
 			return EINVAL;
 		}
 	}
 
 	/* return the supported feature set as the return value. */
 	*retval = PTHREAD_FEATURE_SUPPORTED;
-
-	printf("PD-DIAG: _bsdthread_register: OK (pid=%d)\n", proc_pid(p));
 	return(0);
 }
 

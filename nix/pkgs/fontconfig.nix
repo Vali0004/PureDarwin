@@ -6,6 +6,7 @@
 , pkg-config
 , python3
 , gperf
+, perl
 , darwinCrossToolchain
 , nativeLd
 , libSystem
@@ -33,7 +34,7 @@ stdenv.mkDerivation {
 
   src = fontconfig.src;
 
-  nativeBuildInputs = [ meson ninja pkg-config python3 gperf ];
+  nativeBuildInputs = [ meson ninja pkg-config python3 gperf perl ];
   buildInputs = deps;
 
   postPatch = ''
@@ -102,6 +103,30 @@ EOF
   installPhase = ''
     runHook preInstall
     ninja -C build install
+
+    perl -0pi -e 's#<cachedir>.*?</cachedir>#<cachedir>/var/cache/fontconfig</cachedir>#' \
+      "$out/etc/fonts/fonts.conf"
+    perl -0pi -e 's#(<description>Default configuration file</description>\n\n)#\1\t<dir>/usr/share/fonts</dir>\n#' \
+      "$out/etc/fonts/fonts.conf"
+
+    patch_string() {
+      local file="$1"
+      local old="$2"
+      local new="$3"
+      OLD="$old" NEW="$new" perl -0pi -e '
+        my $old = $ENV{OLD};
+        my $new = $ENV{NEW};
+        die "replacement is longer than original\n" if length($new) > length($old);
+        my $padded = $new . ("\0" x (length($old) - length($new)));
+        s/\Q$old\E/$padded/g;
+      ' "$file"
+    }
+
+    patch_string "$out/lib/libfontconfig.a" "$out/etc/fonts/conf.d" "/etc/fonts/conf.d"
+    patch_string "$out/lib/libfontconfig.a" "$out/etc/fonts" "/etc/fonts"
+    patch_string "$out/lib/libfontconfig.a" "$out/share/fontconfig/conf.avail" "/usr/share/fontconfig/conf.avail"
+    patch_string "$out/lib/libfontconfig.a" "$out/var/cache/fontconfig" "/var/cache/fontconfig"
+
     runHook postInstall
   '';
 

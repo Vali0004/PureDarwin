@@ -166,6 +166,7 @@ main(int argc, char **argv)
         return rc;
     }
     setenv("DISPLAY", "127.0.0.1:0", 1);
+    setenv("FONTCONFIG_FILE", "/etc/fonts/fonts.conf", 0);
     setenv("XDG_CONFIG_DIRS", "/etc", 0);
     setenv("XDG_DATA_DIRS", "/usr/share:/share", 0);
 

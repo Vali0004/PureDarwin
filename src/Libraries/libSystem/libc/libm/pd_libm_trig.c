@@ -191,3 +191,47 @@ cos(double x)
 	default: return kernel_sin(y);
 	}
 }
+
+/*
+ * __sincos_stret / __sincosf_stret: clang emits calls to these when it can
+ * fuse a sin(x)+cos(x) pair (i3's rendering code does). The "stret" ABI on
+ * x86_64 is just a small-struct return - two doubles come back in
+ * xmm0/xmm1, two floats packed in xmm0 - which plain C struct returns
+ * already produce. Struct types come from math.h (struct __float2 /
+ * __double2). The __sincospi* variants compute sin/cos of pi*x.
+ */
+struct __double2
+__sincos_stret(double x)
+{
+	struct __double2 r;
+	r.__sinval = sin(x);
+	r.__cosval = cos(x);
+	return r;
+}
+
+struct __float2
+__sincosf_stret(float x)
+{
+	struct __float2 r;
+	r.__sinval = (float)sin((double)x);
+	r.__cosval = (float)cos((double)x);
+	return r;
+}
+
+struct __double2
+__sincospi_stret(double x)
+{
+	struct __double2 r;
+	r.__sinval = sin(x * M_PI);
+	r.__cosval = cos(x * M_PI);
+	return r;
+}
+
+struct __float2
+__sincospif_stret(float x)
+{
+	struct __float2 r;
+	r.__sinval = (float)sin((double)x * M_PI);
+	r.__cosval = (float)cos((double)x * M_PI);
+	return r;
+}

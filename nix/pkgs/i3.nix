@@ -156,11 +156,44 @@ EOF
   installPhase = ''
     runHook preInstall
     ninja -C build install
+    for config in "$out/etc/i3/config" "$out/etc/i3/config.keycodes"; do
+      if [ -f "$config" ]; then
+        sed -i \
+          -e 's#exec i3-sensible-terminal#exec /bin/xterm#g' \
+          -e 's#exec --no-startup-id i3-sensible-terminal#exec --no-startup-id /bin/xterm#g' \
+          -e 's#^set \$mod Mod1#set $mod Mod4#' \
+          -e 's#bindsym Mod1#bindsym Mod4#g' \
+          -e '/exec --no-startup-id dex /d' \
+          -e '/exec --no-startup-id xss-lock /d' \
+          -e '/exec --no-startup-id nm-applet/d' \
+          "$config"
+      fi
+    done
     for script in i3-sensible-editor i3-sensible-pager i3-sensible-terminal; do
       if [ -f "$out/bin/$script" ]; then
         sed -i '1s|^#!.*|#!/bin/sh|' "$out/bin/$script"
       fi
     done
+
+    patch_string() {
+      local file="$1"
+      local old="$2"
+      local new="$3"
+      OLD="$old" NEW="$new" perl -0pi -e '
+        my $old = $ENV{OLD};
+        my $new = $ENV{NEW};
+        die "replacement is longer than original\n" if length($new) > length($old);
+        my $padded = $new . ("\0" x (length($old) - length($new)));
+        s/\Q$old\E/$padded/g;
+      ' "$file"
+    }
+
+    patch_string "$out/bin/i3" "$out/etc/i3/config" "/etc/i3/config"
+    patch_string "$out/bin/i3" "$out/etc/xdg" "/etc/xdg"
+    patch_string "$out/bin/i3-config-wizard" "$out/etc/i3/config.keycodes" "/etc/i3/config.keycodes"
+    patch_string "$out/bin/i3-config-wizard" "$out/etc/i3/config" "/etc/i3/config"
+    patch_string "$out/bin/i3-config-wizard" "$out/etc/xdg" "/etc/xdg"
+
     runHook postInstall
   '';
 

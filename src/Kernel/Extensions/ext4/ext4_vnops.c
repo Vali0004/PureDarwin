@@ -816,14 +816,20 @@ ext4_ensure_block(struct ext4node *ep, uint32_t lblk, uint64_t *pblk_out)
 	uint64_t pblk = 0;
 	int error;
 
-	if (lblk != ep->e_dbg_last_lblk) {
+	/* Only log when the in-core extent root looks wrong - the previous
+	 * unconditional per-block trace flooded the console during ordinary
+	 * file growth (e.g. i3's log writes). */
+	{
 		struct ext4_extent_header *dbg_eh =
 		    (struct ext4_extent_header *)ep->e_raw.i_block;
-		E4LOG("ensure_block ino=%llu lblk=%u (was %u) size=%llu "
-		    "magic=0x%x entries=%u",
-		    (unsigned long long)ep->e_ino, lblk, ep->e_dbg_last_lblk,
-		    (unsigned long long)ep->e_size, le16(dbg_eh->eh_magic),
-		    le16(dbg_eh->eh_entries));
+		if ((le32(ep->e_raw.i_flags) & EXT4_EXTENTS_FL) &&
+		    le16(dbg_eh->eh_magic) != EXT4_EXT_MAGIC) {
+			E4LOG("ensure_block ino=%llu lblk=%u size=%llu "
+			    "BAD magic=0x%x entries=%u",
+			    (unsigned long long)ep->e_ino, lblk,
+			    (unsigned long long)ep->e_size,
+			    le16(dbg_eh->eh_magic), le16(dbg_eh->eh_entries));
+		}
 		ep->e_dbg_last_lblk = lblk;
 	}
 
@@ -1088,10 +1094,14 @@ ext4_vnop_create_impl(struct vnop_create_args *ap)
 	gid_t gid = 0;
 	int error;
 
+	enum vtype vtype = VREG;
+
 	*vpp = NULLVP;
 	if (!vnode_isdir(dvp))
 		return ENOTDIR;
-	if (VATTR_IS_ACTIVE(vap, va_type) && vap->va_type != VREG)
+	if (VATTR_IS_ACTIVE(vap, va_type))
+		vtype = vap->va_type;
+	if (vtype != VREG && vtype != VSOCK)
 		return ENOTSUP;
 	if (cnp->cn_namelen == 0 || cnp->cn_namelen > 255)
 		return ENAMETOOLONG;
@@ -1102,7 +1112,7 @@ ext4_vnop_create_impl(struct vnop_create_args *ap)
 	if (error != ENOENT)
 		return error;
 
-	error = ext4_alloc_inode(emp, VREG, &ino);
+	error = ext4_alloc_inode(emp, vtype, &ino);
 	if (error)
 		return error;
 
@@ -1115,7 +1125,10 @@ ext4_vnop_create_impl(struct vnop_create_args *ap)
 
 	memset(&raw, 0, sizeof(raw));
 	microtime(&tv);
-	raw.i_mode = le16((uint16_t)(EXT4_S_IFREG | mode));
+	{
+		uint16_t fmt = (vtype == VSOCK) ? EXT4_S_IFSOCK : EXT4_S_IFREG;
+		raw.i_mode = le16((uint16_t)(fmt | mode));
+	}
 	raw.i_uid = le16((uint16_t)uid);
 	raw.i_gid = le16((uint16_t)gid);
 	raw.i_atime = le32((uint32_t)tv.tv_sec);
@@ -1130,14 +1143,14 @@ ext4_vnop_create_impl(struct vnop_create_args *ap)
 
 	error = ext4_write_inode(emp, ino, &raw);
 	if (error) {
-		(void)ext4_free_inode(emp, ino, VREG);
+		(void)ext4_free_inode(emp, ino, vtype);
 		return error;
 	}
-	error = ext4_dir_add(dep, cnp->cn_nameptr, cnp->cn_namelen, ino, VREG);
+	error = ext4_dir_add(dep, cnp->cn_nameptr, cnp->cn_namelen, ino, vtype);
 	if (error) {
 		raw.i_links_count = 0;
 		(void)ext4_write_inode(emp, ino, &raw);
-		(void)ext4_free_inode(emp, ino, VREG);
+		(void)ext4_free_inode(emp, ino, vtype);
 		return error;
 	}
 	dep->e_raw.i_ctime = le32((uint32_t)tv.tv_sec);
@@ -1151,6 +1164,23 @@ ext4_vnop_create_impl(struct vnop_create_args *ap)
 	VATTR_SET_SUPPORTED(vap, va_gid);
 
 	return ext4_vget(emp, ino, dvp, vpp, cnp);
+}
+
+/*
+ * vn_create() dispatches VREG through VNOP_CREATE but VSOCK/VFIFO/VBLK/VCHR
+ * through VNOP_MKNOD (vfs_subr.c) - so AF_UNIX bind(2), which creates a
+ * VSOCK name node, lands HERE, not in create. Without this vnop the default
+ * handler returned ENOTSUP, which userland saw as bind() EOPNOTSUPP (i3's
+ * IPC socket). vnop_mknod_args and vnop_create_args are layout-identical in
+ * XNU, and our create impl already gates on VREG/VSOCK, so delegate.
+ */
+static int
+ext4_vnop_create_impl(struct vnop_create_args *ap);
+
+static int
+ext4_vnop_mknod_impl(struct vnop_mknod_args *ap)
+{
+	return ext4_vnop_create_impl((struct vnop_create_args *)ap);
 }
 
 static int
@@ -2022,6 +2052,18 @@ ext4_vnop_lookup(struct vnop_lookup_args *ap)
 }
 
 static int
+ext4_vnop_mknod(struct vnop_mknod_args *ap)
+{
+	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
+	int error;
+
+	ext4_fs_lock(emp);
+	error = ext4_vnop_mknod_impl(ap);
+	ext4_fs_unlock(emp);
+	return error;
+}
+
+static int
 ext4_vnop_create(struct vnop_create_args *ap)
 {
 	struct ext4mount *emp = VTOE(ap->a_dvp)->e_mount;
@@ -2235,6 +2277,7 @@ static const struct vnodeopv_entry_desc ext4_vnodeop_entries[] = {
 	{ &vnop_default_desc,  (VOPFUNC)ext4_vnop_default },
 	{ &vnop_lookup_desc,   (VOPFUNC)ext4_vnop_lookup },
 	{ &vnop_create_desc,   (VOPFUNC)ext4_vnop_create },
+	{ &vnop_mknod_desc,    (VOPFUNC)ext4_vnop_mknod },
 	{ &vnop_mkdir_desc,    (VOPFUNC)ext4_vnop_mkdir },
 	{ &vnop_open_desc,     (VOPFUNC)ext4_vnop_open },
 	{ &vnop_close_desc,    (VOPFUNC)ext4_vnop_close },

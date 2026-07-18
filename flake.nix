@@ -121,7 +121,7 @@
             src = userlandSource;
             buildTargets = [ "launchd" "sw_vers" "ps" "mkfile" "sync" "sysctl" "vm_stat" "hostinfo" "dmesg" "purge" "cpuctl" "mean" "reboot" "halt" "poweroff" "shutdown" "netsetup" "ping" "pcmplay" "startx" "mousemon" "mount" "umount" "ext4tool" ]
               # shell_cmds (+ tsort/uuencode/uudecode) - real BSD userland, displacing toybox applets
-              ++ [ "basename" "dirname" "echo" "false" "getopt" "hostname" "jot" "kill" "logname" "mktemp" "nice" "nohup" "printenv" "pwd" "renice" "seq" "shlock" "sleep" "tee" "test_cmd" "true" "tsort" "uname" "yes" "uuencode" "uudecode" ]
+              ++ [ "basename" "dirname" "echo" "false" "getopt" "hostname" "jot" "kill" "logname" "mktemp" "nice" "nohup" "passwd" "printenv" "pwd" "renice" "seq" "shlock" "sleep" "tee" "test_cmd" "true" "tsort" "uname" "yes" "uuencode" "uudecode" ]
               # text_cmds
               ++ [ "banner" "cat" "colrm" "comm" "cut" "expand" "fold" "head" "lam" "look" "nl" "paste" "rev" "split" "tail" "tr" "unexpand" "uniq" "wc" ]
               ++ lib.optionals (!isDarwin) [ "puredarwingop_drv" "puredarwininput_drv" ];
@@ -523,6 +523,8 @@
               libXau = xvfbLibXauBuild;
               libXdmcp = xvfbLibXdmcpBuild;
             };
+          i3statusShimBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/i3status-shim.nix { };
           xvfbLibICEBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/xorg-cross-lib.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -810,6 +812,14 @@
               openssl = opensslBuild;
               zlib = xvfbZlibBuild;
             };
+          opensshBuild =
+            if isDarwin then null else pkgs.callPackage ./nix/pkgs/openssh.nix {
+              inherit darwinCrossToolchain nativeLd;
+              libSystem = libSystemBuild;
+              openssh = pkgs.openssh;
+              openssl = opensslBuild;
+              zlib = xvfbZlibBuild;
+            };
           gitBuild =
             if isDarwin then null else pkgs.callPackage ./nix/pkgs/git.nix {
               inherit darwinCrossToolchain nativeLd;
@@ -1000,6 +1010,7 @@
             file = fileBuild;
             openssl = opensslBuild;
             curl = curlBuild;
+            openssh = opensshBuild;
             git = gitBuild;
             migcomDarwin = migcomDarwinBuild;
             ioreg = ioregBuild;
@@ -1009,6 +1020,7 @@
             icucore = icuCoreBuild;
             iokit = iokitBuild;
             i3 = i3Build;
+            i3status = i3statusShimBuild;
             startup-notification = startupNotificationBuild;
             libX11 = xlibBuild;
             libxcb = xcbBuild;
@@ -1076,6 +1088,8 @@
             fontconfig = fontconfigBuild;
             pango = pangoBuild;
             i3 = i3Build;
+            i3status = i3statusShimBuild;
+            openssh = opensshBuild;
           };
 
           linuxPackages =

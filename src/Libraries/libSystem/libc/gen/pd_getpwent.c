@@ -19,6 +19,7 @@
 
 static struct passwd pw_result;
 static char pw_linebuf[PW_LINE_MAX];
+static FILE *pw_iter;
 
 static char *
 next_field(char **cursor)
@@ -113,6 +114,50 @@ lookup(const char *want_name, uid_t want_uid, int by_name)
 	}
 	fclose(f);
 	return result;
+}
+
+struct passwd *
+getpwent(void)
+{
+	char line[PW_LINE_MAX];
+
+	if (pw_iter == NULL) {
+		pw_iter = fopen("/etc/passwd", "r");
+		if (pw_iter == NULL) {
+			return NULL;
+		}
+	}
+	while (fgets(line, sizeof(line), pw_iter) != NULL) {
+		struct passwd *pw;
+
+		if (line[0] == '#' || line[0] == '\n') {
+			continue;
+		}
+		pw = parse_line(line);
+		if (pw != NULL) {
+			return pw;
+		}
+	}
+	return NULL;
+}
+
+void
+setpwent(void)
+{
+	if (pw_iter != NULL) {
+		rewind(pw_iter);
+		return;
+	}
+	pw_iter = fopen("/etc/passwd", "r");
+}
+
+void
+endpwent(void)
+{
+	if (pw_iter != NULL) {
+		fclose(pw_iter);
+		pw_iter = NULL;
+	}
 }
 
 struct passwd *

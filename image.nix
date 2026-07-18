@@ -124,9 +124,12 @@ ${if rootFsType == "hfs" then ''
       sbin \
       dev \
       etc \
+      etc/fonts \
       etc/init \
       tmp \
       var \
+      var/cache \
+      var/cache/fontconfig \
       var/root \
       var/run \
       var/log \
@@ -174,6 +177,9 @@ export SHELL=''${SHELL:-/bin/zsh}
 export HOME=''${HOME:-/var/root}
 export USER=''${USER:-root}
 export LOGNAME=''${LOGNAME:-root}
+export FONTCONFIG_FILE=''${FONTCONFIG_FILE:-/etc/fonts/fonts.conf}
+export XDG_CONFIG_DIRS=''${XDG_CONFIG_DIRS:-/etc}
+export XDG_DATA_DIRS=''${XDG_DATA_DIRS:-/usr/share:/share}
 export PS1='# '
 EOF
     cat > $staging/etc/zshenv <<'EOF'
@@ -183,6 +189,9 @@ export SHELL=''${SHELL:-/bin/zsh}
 export HOME=''${HOME:-/var/root}
 export USER=''${USER:-root}
 export LOGNAME=''${LOGNAME:-root}
+export FONTCONFIG_FILE=''${FONTCONFIG_FILE:-/etc/fonts/fonts.conf}
+export XDG_CONFIG_DIRS=''${XDG_CONFIG_DIRS:-/etc}
+export XDG_DATA_DIRS=''${XDG_DATA_DIRS:-/usr/share:/share}
 EOF
     cat > $staging/etc/zprofile <<'EOF'
 test -r /etc/profile && . /etc/profile
@@ -241,6 +250,17 @@ EOF
     cat > $staging/var/root/.zshrc <<'EOF'
 test -r /etc/zshrc && . /etc/zshrc
 EOF
+    if [ -f "$staging/etc/i3/config.keycodes" ]; then
+      mkdir -p "$staging/var/root/.config/i3"
+      cp "$staging/etc/i3/config.keycodes" "$staging/var/root/.config/i3/config"
+      chmod 755 "$staging/var/root/.config" "$staging/var/root/.config/i3"
+      chmod 644 "$staging/var/root/.config/i3/config"
+    elif [ -f "$staging/etc/i3/config" ]; then
+      mkdir -p "$staging/var/root/.config/i3"
+      cp "$staging/etc/i3/config" "$staging/var/root/.config/i3/config"
+      chmod 755 "$staging/var/root/.config" "$staging/var/root/.config/i3"
+      chmod 644 "$staging/var/root/.config/i3/config"
+    fi
     chmod 644 \
       $staging/etc/passwd \
       $staging/etc/group \

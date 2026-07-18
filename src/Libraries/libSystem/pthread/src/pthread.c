@@ -1289,11 +1289,6 @@ _pthread_create(pthread_t *thread, const pthread_attr_t *attrs,
 			PTHREAD_CLIENT_CRASH(0,
 					"Unable to allocate thread port, possible port leak");
 		}
-		/* PD-DIAG: see the matching note in _pthread_allocate() above -
-		 * this flattens whatever __bsdthread_create/_bsdthread_create
-		 * actually returned (ENOMEM, EINVAL, ...) down to EAGAIN. */
-		_simple_dprintf(2, "PD-DIAG: pthread_create: __bsdthread_create failed errno=%d\n",
-		    errno);
 		__pthread_undo_add_thread(t, self_kport);
 		_pthread_deallocate(t, from_mach_thread);
 		t = NULL;
@@ -2036,12 +2031,6 @@ _pthread_bsdthread_init(struct _pthread_registration_data *data)
 
 	int rv = __bsdthread_register(thread_start, start_wqthread, (int)PTHREAD_SIZE,
 			(void*)data, (uintptr_t)sizeof(*data), data->dispatch_queue_offset);
-
-	/* Unconditional: pid 8 (i3) hit "proc not bsdthread_register'd" in the
-	 * kernel while userland reported no failure - print BOTH outcomes so
-	 * the two sides can be compared per process. */
-	_simple_dprintf(2, "PD-DIAG: __bsdthread_register rv=%d errno=%d pid=%d\n",
-	    rv, rv < 0 ? errno : 0, getpid());
 	if (rv > 0) {
 		int required_features =
 				PTHREAD_FEATURE_FINEPRIO |

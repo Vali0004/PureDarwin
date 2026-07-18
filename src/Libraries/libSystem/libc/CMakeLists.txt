@@ -213,6 +213,7 @@ target_sources(libc_static PRIVATE
     gen/pd_getservbyname.c       # getservbyname (/etc/services reader; no libinfo)
     libm/pd_libm_trig.c          # sin/cos/atan/atan2/asin/acos (from-scratch libm)
     libm/pd_libm_pow.c           # log/exp/pow/cbrt/hypot (from-scratch libm)
+    libm/pd_libm_misc.c
     gen/clock_gettime.c          # _clock_gettime / _clock_settime (BusyBox date -s)
     gen/FreeBSD/sethostname.c    # _sethostname (BusyBox hostname; sysctl-backed)
     net/FreeBSD/inet_ntoa.c      # _inet_ntoa
@@ -237,6 +238,7 @@ target_sources(libc_static PRIVATE
     regex/TRE/lib/tre-stack.c
     stdlib/FreeBSD/qsort.c
     stdlib/FreeBSD/realpath.c
+    emulated/statvfs.c           # _statvfs/_fstatvfs
     secure/memcpy_chk.c
     secure/memset_chk.c
     darwin/subsystem.c
