@@ -352,6 +352,9 @@ _strtod_l
 _strncasecmp_l
 _snprintf_l
 _uuid_generate_random
+_initstate
+_setstate
+_srandomdev
 _uuid_generate_time
 _getsectbynamefromheader_64
 _mk_timer_create

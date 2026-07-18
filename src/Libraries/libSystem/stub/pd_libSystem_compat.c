@@ -1333,6 +1333,47 @@ random(void)
     return (long)(pd_random_state & 0x7fffffff);
 }
 
+/*
+ * initstate/setstate/srandomdev: BSD random(3) companions (i3 calls
+ * initstate at startup). Our generator keeps its state in
+ * pd_random_state rather than the caller's buffer; callers only ever
+ * hand these pointers back to setstate(), so tracking which buffer is
+ * "current" preserves the visible contract without porting the full
+ * FreeBSD trinomial generator.
+ */
+static char *pd_random_statebuf;
+
+char *
+initstate(unsigned int seed, char *state, size_t n)
+{
+    char *old = pd_random_statebuf;
+    if (n < 8)
+        return NULL;   /* matches random(3): too little state */
+    pd_random_statebuf = state;
+    srandom(seed);
+    return old ? old : (char *)&pd_random_state;
+}
+
+char *
+setstate(const char *state)
+{
+    char *old = pd_random_statebuf;
+    if (state == NULL)
+        return NULL;
+    pd_random_statebuf = (char *)(uintptr_t)state;
+    return old ? old : (char *)&pd_random_state;
+}
+
+void
+srandomdev(void)
+{
+    extern int getentropy(void *, size_t);
+    uint64_t e = 0;
+    if (getentropy(&e, sizeof(e)) != 0)
+        e = ((uint64_t)getpid() << 32) ^ (uint64_t)time(NULL);
+    pd_random_state = e ? e : 1;
+}
+
 ssize_t
 getdelim(char **lineptr, size_t *n, int delim, FILE *stream)
 {
